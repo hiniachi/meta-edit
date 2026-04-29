@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/hiniachi/meta-edit?style=social)](https://github.com/hiniachi/meta-edit/stargazers)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/hiniachi)
 
 **言語:** [English](./README.md) · **日本語** · [简体中文](./README.zh-CN.md)
 
@@ -90,13 +90,13 @@ meta-edit install-hooks      settings.json に Claude Code フックを追加
 meta-edit uninstall-hooks    settings.json からフックを削除
 ```
 
-## スポンサー
+## サポート
 
-`meta-edit` が時間の節約や危険な編集の回避につながった場合、開発支援をご検討ください。
+`meta-edit` が時間の節約や危険な編集の回避につながった場合、コーヒー一杯のご支援をご検討ください。
 
-[![GitHub でスポンサー](https://img.shields.io/badge/Sponsor-on%20GitHub-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/hiniachi)
 
-スポンサーは以下に充てられます。
+ご支援は以下に充てられます。
 
 - 観測された AI の失敗パターンに基づく新しい `edit_*` カテゴリの追加
 - v0.2 で予定されている軽量 diff 分類器の実装（[`SPEC.md` §11](./docs/SPEC.md) 参照）

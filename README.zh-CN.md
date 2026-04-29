@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/hiniachi/meta-edit?style=social)](https://github.com/hiniachi/meta-edit/stargazers)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/hiniachi)
 
 **语言:** [English](./README.md) · [日本語](./README.ja.md) · **简体中文**
 
@@ -90,13 +90,13 @@ meta-edit install-hooks      把 Claude Code Hook 写入 settings.json
 meta-edit uninstall-hooks    从 settings.json 中移除 Hook
 ```
 
-## 赞助
+## 支持作者
 
-如果 `meta-edit` 帮你节省了时间或避免了一次糟糕的编辑，欢迎赞助开发：
+如果 `meta-edit` 帮你节省了时间或避免了一次糟糕的编辑，欢迎请作者喝杯咖啡：
 
-[![在 GitHub 赞助](https://img.shields.io/badge/Sponsor-on%20GitHub-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/hiniachi)
 
-赞助将用于：
+您的支持将用于：
 
 - 根据观察到的 AI 失败模式增加新的 `edit_*` 类型；
 - 实现 v0.2 计划中的轻量 diff 分类器（详见 [`SPEC.md` §11](./docs/SPEC.md)）；

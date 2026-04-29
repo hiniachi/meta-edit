@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/hiniachi/meta-edit?style=social)](https://github.com/hiniachi/meta-edit/stargazers)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/hiniachi)
 
 **Languages:** **English** · [日本語](./README.ja.md) · [简体中文](./README.zh-CN.md)
 
@@ -91,13 +91,13 @@ meta-edit install-hooks      Install Claude Code hooks into settings.json
 meta-edit uninstall-hooks    Remove Claude Code hooks from settings.json
 ```
 
-## Sponsor
+## Support
 
-If `meta-edit` saves you time or prevents a bad edit, please consider sponsoring development:
+If `meta-edit` saves you time or prevents a bad edit, please consider buying the author a coffee:
 
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-on%20GitHub-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/hiniachi)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/hiniachi)
 
-Sponsors help fund:
+Your support helps fund:
 
 - New `edit_*` categories based on observed AI failure modes
 - The optional v0.2 lightweight diff classifier (see [`SPEC.md` §11](./docs/SPEC.md))
