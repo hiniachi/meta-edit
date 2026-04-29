@@ -1,0 +1,50 @@
+{
+  "name": "@hiniachi/meta-edit",
+  "version": "0.1.0",
+  "description": "MCP server with seventeen kind-specific edit tools that encode test obligations in tool descriptions",
+  "license": "MIT",
+  "author": "nia <nia@yukinofurumachi.com>",
+  "type": "module",
+  "bin": {
+    "meta-edit": "./dist/cli.js"
+  },
+  "main": "./dist/server.js",
+  "files": [
+    "dist/",
+    "docs/SPEC.md",
+    "plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    "typecheck": "tsc --noEmit",
+    "start": "bun run src/cli.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "diff": "^7.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hiniachi/meta-edit.git"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+}
