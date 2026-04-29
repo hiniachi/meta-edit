@@ -173,3 +173,18 @@
   - `path.basename` uses platform separator; WSL-on-Windows scenarios with backslash settings paths are not covered. POSIX hook runtime is the realistic target.
   - Rename failure during atomic write throws; caller surfaces an exception rather than a structured error result. Acceptable for a CLI; would need refinement if used as a library.
 - Spec deviations: none.
+
+## Phase 6: Finalization (README + npm dry-run + final log)
+
+- Completed: 2026-04-30
+- Trigger: implementation plan Phase 6 (release-prep portion only — actual `npm publish` and Plugin marketplace submission remain user decisions and are out of scope for this iteration).
+- What works:
+  - **README.md / README.ja.md / README.zh-CN.md** updated with the v0.1.0 status block: every Phase 2–5 capability listed, validation/applier guarantees enumerated, distribution status ("not yet published") stated explicitly. English README also gains an "Examples" subsection demonstrating each subcommand and an "Edit log" section showing the `.meta-edit/state/edits.jsonl` JSON schema, plus a pointer to the CI sample workflow.
+  - **`npm pack --dry-run` verified**: the resulting tarball includes `dist/`, `docs/SPEC.md`, `plugin.json`, `package.json`, `LICENSE`, and `README.md`. Tarball size 58.5 KB unpacked 204.6 KB, 55 files. No accidental inclusion of `node_modules/`, test files, or `.meta-edit/state/` artifacts.
+- Tests: no new tests; this is a docs + verification phase. Existing 166 tests still green.
+- Codex review: not applicable for a docs-only change. Skipped per the saved feedback memory's "skip for trivial work (typo fixes, README wording, cosmetic refactors)" rule.
+- Self-application: not exercised in this PR. Once Phase 3 (`apply.ts` + edit log) lands on `main` and the meta-edit MCP server is installed in a Claude Code session, future edits to this repo should go through `edit_*` tools per CLAUDE.md §6. That is a session-level activity, not a PR.
+- Known issues / accepted MVP limitations:
+  - `npm publish` itself is not run; the package is `@hiniachi/meta-edit` 0.1.0 and ready for publish when the user gives explicit approval.
+  - Plugin marketplace submission requires a separate Anthropic-side process; `plugin.json` is in place but not yet submitted.
+- Spec deviations: none.
