@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { parsePatch } from "diff";
 import { z } from "zod";
@@ -45,6 +46,24 @@ export type ValidationSuccess = {
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
 
+// Defensive bound on patch size to keep parsePatch's worst-case bounded
+// and to avoid pathological inputs from a malicious MCP client.
+export const MAX_PATCH_BYTES = 1_048_576;
+
+// Git extended diff headers that imply a non-modify-only operation.
+// Even when oldFileName/newFileName look benign, we reject these so a
+// downstream applier cannot honor the extended semantics behind our back.
+const FORBIDDEN_EXTENDED_HEADERS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
+  { name: "rename from", pattern: /^rename from /m },
+  { name: "rename to", pattern: /^rename to /m },
+  { name: "copy from", pattern: /^copy from /m },
+  { name: "copy to", pattern: /^copy to /m },
+  { name: "new file mode", pattern: /^new file mode /m },
+  { name: "deleted file mode", pattern: /^deleted file mode /m },
+  { name: "similarity index", pattern: /^similarity index /m },
+  { name: "dissimilarity index", pattern: /^dissimilarity index /m },
+];
+
 export function validateRequest(
   toolName: ToolName,
   request: EditToolRequest,
@@ -81,6 +100,12 @@ export function validateRequest(
     }
   }
 
+  const patchCheck = preValidatePatchInput(request.patch);
+  if (!patchCheck.ok) {
+    warnings.push(...patchCheck.errors);
+    return { ok: false, warnings };
+  }
+
   let parsed;
   try {
     parsed = parsePatch(request.patch);
@@ -110,34 +135,35 @@ export function validateRequest(
       continue;
     }
 
-    const oldName = canonicalPathFromHeader(p.oldFileName);
-    const newName = canonicalPathFromHeader(p.newFileName);
-
-    if (oldName === null) {
+    const cls = classifyPatchFile(p.oldFileName, p.newFileName);
+    if (cls.kind === "invalid") {
+      warnings.push("patch entry has no usable file header");
+      continue;
+    }
+    if (cls.kind === "creation") {
       warnings.push(
         "patch contains a file creation (/dev/null source); modify-only patches are required",
       );
       continue;
     }
-    if (newName === null) {
+    if (cls.kind === "deletion") {
       warnings.push(
-        "patch contains a file deletion (/dev/null target); modify-only patches are required",
+        `patch contains a file deletion (${cls.filename}); modify-only patches are required`,
       );
       continue;
     }
-    if (oldName !== newName) {
+    if (cls.kind === "rename") {
       warnings.push(
-        `patch contains a rename (${oldName} -> ${newName}); modify-only patches are required`,
+        `patch contains a rename (${cls.from} -> ${cls.to}); modify-only patches are required`,
       );
       continue;
     }
 
-    const safe = checkPathSafety(oldName, ctx.repoRoot);
+    const safe = checkPathSafety(cls.filename, ctx.repoRoot);
     if (!safe.ok) {
-      warnings.push(`patch path "${oldName}": ${safe.error}`);
+      warnings.push(`patch path "${cls.filename}": ${safe.error}`);
       continue;
     }
-
     touched.push(safe.canonical);
   }
 
@@ -191,7 +217,77 @@ export function makeStubHandler(ctx: ValidationContext): ToolHandler {
   };
 }
 
-function canonicalPathFromHeader(name: string | undefined): string | null {
+function preValidatePatchInput(
+  patch: string,
+): { ok: true } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+
+  const byteLength = Buffer.byteLength(patch, "utf8");
+  if (byteLength > MAX_PATCH_BYTES) {
+    errors.push(
+      `patch is ${byteLength} bytes; exceeds the ${MAX_PATCH_BYTES}-byte limit`,
+    );
+    return { ok: false, errors };
+  }
+
+  if (patch.includes("\0")) {
+    errors.push("patch contains NUL byte; rejected");
+    return { ok: false, errors };
+  }
+
+  for (const { name, pattern } of FORBIDDEN_EXTENDED_HEADERS) {
+    if (pattern.test(patch)) {
+      errors.push(
+        `patch contains git extended header "${name}"; modify-only patches are required`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true };
+}
+
+type PatchFileClassification =
+  | { kind: "invalid" }
+  | { kind: "creation" }
+  | { kind: "deletion"; filename: string }
+  | { kind: "rename"; from: string; to: string }
+  | { kind: "modify"; filename: string };
+
+function classifyPatchFile(
+  oldName: string | undefined,
+  newName: string | undefined,
+): PatchFileClassification {
+  const oldT = trimDiffHeader(oldName);
+  const newT = trimDiffHeader(newName);
+
+  if (oldT === null && newT === null) {
+    return { kind: "invalid" };
+  }
+  if (oldT === null && newT !== null) {
+    return { kind: "creation" };
+  }
+  if (newT === null && oldT !== null) {
+    return { kind: "deletion", filename: oldT };
+  }
+  if (oldT === newT) {
+    return { kind: "modify", filename: oldT! };
+  }
+  const oldS = stripSingleCharPrefix(oldT!);
+  const newS = stripSingleCharPrefix(newT!);
+  if (oldS !== null && newS !== null && oldS === newS) {
+    return { kind: "modify", filename: oldS };
+  }
+  return {
+    kind: "rename",
+    from: oldS ?? oldT!,
+    to: newS ?? newT!,
+  };
+}
+
+function trimDiffHeader(name: string | undefined): string | null {
   if (name === undefined || name === null) {
     return null;
   }
@@ -203,15 +299,18 @@ function canonicalPathFromHeader(name: string | undefined): string | null {
   if (trimmed === "/dev/null") {
     return null;
   }
-  return trimmed.replace(/^[ab]\//, "");
+  return trimmed;
+}
+
+function stripSingleCharPrefix(p: string): string | null {
+  const m = /^[^\s/]\/(.+)$/.exec(p);
+  return m && typeof m[1] === "string" ? m[1] : null;
 }
 
 function checkPathSafety(
   p: string,
   repoRoot: string,
-):
-  | { ok: true; canonical: string }
-  | { ok: false; error: string } {
+): { ok: true; canonical: string } | { ok: false; error: string } {
   if (path.isAbsolute(p)) {
     return {
       ok: false,
@@ -222,18 +321,56 @@ function checkPathSafety(
   if (norm.length === 0) {
     return { ok: false, error: "path is empty after normalization" };
   }
-  const resolvedRoot = path.resolve(repoRoot);
-  const resolved = path.resolve(resolvedRoot, norm);
+  const lexicalRoot = path.resolve(repoRoot);
+  const lexicalResolved = path.resolve(lexicalRoot, norm);
   if (
-    resolved !== resolvedRoot &&
-    !resolved.startsWith(resolvedRoot + path.sep)
+    lexicalResolved !== lexicalRoot &&
+    !lexicalResolved.startsWith(lexicalRoot + path.sep)
   ) {
     return { ok: false, error: `path "${p}" escapes repository root` };
   }
-  // Re-derive the repo-relative path from the *resolved* absolute path so that
-  // traversal aliases (e.g. "src/../.meta-edit/state/edits.jsonl") are
-  // collapsed before the protected-path check and the scope comparison.
-  const canonical = normalizeRepoRelative(path.relative(resolvedRoot, resolved));
+
+  const realRoot = realpathOrSelf(lexicalRoot);
+  const realResolved = realpathOfDeepestExisting(lexicalResolved);
+
+  if (realResolved === null) {
+    // realpath threw a non-ENOENT/ENOTDIR error (EACCES, EPERM, ELOOP, ...).
+    // We cannot tell whether the filesystem target is inside the repo and
+    // outside protected paths, so we fail closed rather than fall back to
+    // the lexical form (which would silently accept symlinks to unreadable
+    // out-of-repo locations).
+    return {
+      ok: false,
+      error: `path "${p}" could not be canonicalized via realpath; failing closed`,
+    };
+  }
+
+  if (
+    realResolved !== realRoot &&
+    !realResolved.startsWith(realRoot + path.sep)
+  ) {
+    return {
+      ok: false,
+      error: `path "${p}" escapes repository root after symlink resolution`,
+    };
+  }
+
+  // NOTE: when the leaf does not exist on disk, realpathOfDeepestExisting
+  // re-attaches the missing tail lexically. That means a TOCTOU race exists
+  // between this validation and the eventual patch application — a symlink
+  // could appear on the missing path and redirect into a protected dir.
+  //
+  // Phase 3 (the patch applier) MUST, immediately before opening the file
+  // for write:
+  //   1. Re-run realpath on the full resolved target,
+  //   2. Compare the resulting canonical path against the canonical repo
+  //      root captured here (`realRoot`) — and reject if it is not equal
+  //      to that root or a descendant of it,
+  //   3. Re-run isProtectedPath on the freshly canonicalized form and
+  //      reject if it now matches a protected prefix.
+  // Failing any of these checks means a symlink appeared during the race
+  // window; the apply must abort with a fail-closed error.
+  const canonical = normalizeRepoRelative(path.relative(realRoot, realResolved));
   if (canonical.length === 0) {
     return { ok: false, error: `path "${p}" resolves to the repository root` };
   }
@@ -244,4 +381,41 @@ function checkPathSafety(
     };
   }
   return { ok: true, canonical };
+}
+
+function realpathOrSelf(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+function realpathOfDeepestExisting(p: string): string | null {
+  let cur = p;
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync(cur);
+      if (tail.length === 0) {
+        return real;
+      }
+      return path.join(real, ...tail.reverse());
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        const parent = path.dirname(cur);
+        if (parent === cur) {
+          return p;
+        }
+        tail.push(path.basename(cur));
+        cur = parent;
+        continue;
+      }
+      // EACCES, EPERM, ELOOP, EMFILE, etc. — fail closed. The caller will
+      // turn this into a validation rejection so we never accept a path we
+      // could not canonicalize.
+      return null;
+    }
+  }
 }

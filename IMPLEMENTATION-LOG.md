@@ -63,3 +63,31 @@
     - §3 "Argument validation": added two bullets — `test_files must be empty for edit_test_only_change` and patch must be modify-only.
     - §3 "Patch scope" `edit_test_only_change` block: now states target_file-only, test_files must be empty, and explicitly disclaims server-side test-file pattern matching.
     - §4 `edit_test_only_change`: "Required:" block rewritten to remove the `(test_*, *_test, *.test.*, ...)` pattern list and to make tool selection itself the agent's declaration.
+
+## Phase 2 hardening (post-review)
+
+- Completed: 2026-04-30
+- Trigger: 4 successive code reviews on PR #1 — Codex GitHub bot + 3 Codex-MCP rounds.
+- What changed:
+  - `dependency`: upgraded `diff` from `^7.0.0` to `^9.0.0` (and `@types/diff` to `^8.0.0`) to escape the parsePatch DoS issue on the locked v7 release.
+  - `src/tools/common.ts`:
+    - **Symlink alias defense**: `checkPathSafety` now uses `fs.realpathSync` to canonicalize. When the leaf does not exist on disk, the function walks up to the deepest existing ancestor, realpaths that, and re-attaches the missing tail. The repo root is realpathed once for comparison.
+    - **Fail-closed canonicalization**: `realpathOfDeepestExisting` now returns `string | null`. On any non-`ENOENT`/`ENOTDIR` error (`EACCES`, `EPERM`, `ELOOP`, `EMFILE`, ...), it returns `null`, and `checkPathSafety` translates that into a validation rejection (`could not be canonicalized via realpath; failing closed`). This closes a fail-open hole where unreadable symlinks would have silently fallen back to the lexical form.
+    - **Phase 3 TOCTOU contract**: a documented requirement that the patch applier (Phase 3) must re-realpath the resolved target immediately before writing, compare to the canonical repo root, and re-run `isProtectedPath` on the freshly canonicalized form.
+    - **c/d-prefix handling**: replaced `canonicalPathFromHeader` with `classifyPatchFile`, which strips any single non-whitespace, non-slash character followed by `/` (covers `a/`, `b/`, `c/`, `d/`, `i/`, `w/`, ...) from BOTH old and new headers and only declares a rename when the stripped tails differ. No-prefix and matching-prefix diffs now accepted as modify.
+    - **Git extended headers rejected**: `preValidatePatchInput` rejects any patch containing `rename from`, `rename to`, `copy from`, `copy to`, `new file mode`, `deleted file mode`, `similarity index`, or `dissimilarity index` at column 0 of any line.
+    - **Input bounds**: rejects patches > 1 MiB and patches containing a NUL byte before `parsePatch` runs.
+  - `src/state/protected-paths.ts`:
+    - **Case-insensitive protected-path check**: `isProtectedPath` now matches against both the literal form (Linux truth) and the lowercased form (macOS / Windows safety). `.META-EDIT/STATE/edits.jsonl` is now rejected.
+- Tests added (now 46 total, all green):
+  - Symlink alias bypass via `src/state-link -> .meta-edit/state` on a real tmp dir
+  - Symlink loop on tmp dir (verifies the EACCES-class fail-closed branch via ELOOP)
+  - Case-insensitive protected-path aliases (`.META-EDIT/...`, `.Meta-Edit/Tmp/...`)
+  - Per-header parameterized tests for every forbidden git extended header
+  - NUL byte rejection
+  - Patch-size cap rejection
+  - c/d-prefixed and no-prefix unified diffs accepted
+  - Path traversal via `..` (existing tests retained)
+  - Exact-set assertion on `PROTECTED_PREFIXES`
+- Known issues:
+  - The Phase 3 applier still has to land the TOCTOU re-canonicalization documented in the `checkPathSafety` comment. The validation layer alone cannot close that race.

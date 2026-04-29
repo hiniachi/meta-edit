@@ -22,6 +22,13 @@ export function normalizeRepoRelative(p: string): string {
 }
 
 export function isProtectedPath(p: string): boolean {
-  const n = normalizeRepoRelative(p);
-  return PROTECTED_PREFIXES.some((prefix) => n.startsWith(prefix));
+  const norm = normalizeRepoRelative(p);
+  // Match against both the literal form (for case-sensitive filesystems) and a
+  // lowercased form (for case-insensitive filesystems such as default macOS
+  // and Windows). The prefixes are already lowercase, so a startsWith check
+  // on the folded form covers ".META-EDIT/STATE/..." aliases.
+  const folded = norm.toLowerCase();
+  return PROTECTED_PREFIXES.some(
+    (prefix) => norm.startsWith(prefix) || folded.startsWith(prefix),
+  );
 }

@@ -46,7 +46,16 @@ describe("isProtectedPath", () => {
     expect(isProtectedPath("docs/SPEC.md")).toBe(false);
   });
 
-  it("exposes the prefixes for documentation purposes", () => {
-    expect(PROTECTED_PREFIXES.length).toBeGreaterThan(0);
+  it("exposes the exact documented protected prefix set", () => {
+    expect([...PROTECTED_PREFIXES]).toEqual([
+      ".meta-edit/state/",
+      ".meta-edit/tmp/",
+    ]);
+  });
+
+  it("rejects case-insensitive aliases of protected paths", () => {
+    expect(isProtectedPath(".META-EDIT/state/edits.jsonl")).toBe(true);
+    expect(isProtectedPath(".meta-edit/STATE/edits.jsonl")).toBe(true);
+    expect(isProtectedPath(".Meta-Edit/Tmp/scratch.txt")).toBe(true);
   });
 });
