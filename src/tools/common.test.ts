@@ -158,6 +158,45 @@ describe("validateRequest", () => {
         expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
       }
     });
+
+    it("rejects target_file aliasing into protected path via traversal", () => {
+      const aliased = "src/../.meta-edit/state/edits.jsonl";
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: aliased,
+          patch: makePatch(aliased),
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("protected") && w.includes("resolves"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects patch-internal path aliasing into protected path via traversal", () => {
+      const innerAlias = "tests/../.meta-edit/tmp/scratch.txt";
+      const aliasedPatch =
+        `--- a/${innerAlias}\n+++ b/${innerAlias}\n@@ -1,1 +1,1 @@\n-x\n+y\n`;
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({ patch: aliasedPatch }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("protected") && w.includes("resolves"),
+          ),
+        ).toBe(true);
+      }
+    });
   });
 
   describe("modify-only enforcement", () => {

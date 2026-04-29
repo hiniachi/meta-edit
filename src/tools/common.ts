@@ -71,10 +71,13 @@ export function validateRequest(
     warnings.push(`target_file: ${targetCheck.error}`);
   }
 
+  const testFileCanonicals: string[] = [];
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
     if (!c.ok) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
+    } else {
+      testFileCanonicals.push(c.canonical);
     }
   }
 
@@ -135,14 +138,16 @@ export function validateRequest(
       continue;
     }
 
-    touched.push(normalizeRepoRelative(oldName));
+    touched.push(safe.canonical);
   }
 
-  const targetNorm = normalizeRepoRelative(request.target_file);
-  const allowed = new Set<string>([targetNorm]);
+  const allowed = new Set<string>();
+  if (targetCheck.ok) {
+    allowed.add(targetCheck.canonical);
+  }
   if (toolName !== "edit_test_only_change") {
-    for (const tf of request.test_files) {
-      allowed.add(normalizeRepoRelative(tf));
+    for (const c of testFileCanonicals) {
+      allowed.add(c);
     }
   }
 
@@ -204,7 +209,9 @@ function canonicalPathFromHeader(name: string | undefined): string | null {
 function checkPathSafety(
   p: string,
   repoRoot: string,
-): { ok: true } | { ok: false; error: string } {
+):
+  | { ok: true; canonical: string }
+  | { ok: false; error: string } {
   if (path.isAbsolute(p)) {
     return {
       ok: false,
@@ -223,11 +230,18 @@ function checkPathSafety(
   ) {
     return { ok: false, error: `path "${p}" escapes repository root` };
   }
-  if (isProtectedPath(norm)) {
+  // Re-derive the repo-relative path from the *resolved* absolute path so that
+  // traversal aliases (e.g. "src/../.meta-edit/state/edits.jsonl") are
+  // collapsed before the protected-path check and the scope comparison.
+  const canonical = normalizeRepoRelative(path.relative(resolvedRoot, resolved));
+  if (canonical.length === 0) {
+    return { ok: false, error: `path "${p}" resolves to the repository root` };
+  }
+  if (isProtectedPath(canonical)) {
     return {
       ok: false,
-      error: `path "${p}" is in a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`,
+      error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`,
     };
   }
-  return { ok: true };
+  return { ok: true, canonical };
 }
