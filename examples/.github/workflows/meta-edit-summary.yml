@@ -1,0 +1,46 @@
+name: meta-edit summary
+
+# Sample workflow. Drop it into your own repo's .github/workflows/
+# directory once meta-edit has been recording edits in
+# .meta-edit/state/edits.jsonl. The job aggregates the log via
+# `meta-edit summary` and uploads the report as a build artifact so a
+# human can read it during code review.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install meta-edit
+        run: bun install --global @hiniachi/meta-edit
+
+      - name: Aggregate edit log
+        env:
+          SINCE: ${{ github.event.pull_request.created_at || github.event.head_commit.timestamp || '' }}
+        run: |
+          if [ -n "$SINCE" ]; then
+            meta-edit summary --since "$SINCE" > meta-edit-summary.txt
+          else
+            meta-edit summary > meta-edit-summary.txt
+          fi
+          cat meta-edit-summary.txt
+
+      - name: Upload summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meta-edit-summary
+          path: meta-edit-summary.txt
+          if-no-files-found: warn

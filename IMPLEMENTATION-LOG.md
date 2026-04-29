@@ -149,3 +149,27 @@
   - Backslash strip happens uniformly, including inside quoted regions; can produce false positives on commands like `python -c "print(\"write_text\")"`.
   - Unicode line separators / bare `\r` not used as segment boundaries.
 - Spec deviations: none.
+
+## Phase 5: CLI subcommands and CI sample
+
+- Completed: 2026-04-30
+- Trigger: implementation plan Phase 5.
+- What works:
+  - **`meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]`** — reads `.meta-edit/state/edits.jsonl` and prints filtered entries as JSONL on stdout. `--since` accepts `YYYY-MM-DD` (start of local day) or any ISO 8601 timestamp; rollover dates (e.g., `2026-02-31`) are rejected explicitly.
+  - **`meta-edit summary [--since DATE]`** — aggregates total / applied / failed counts, by-tool histogram (zero-counts hidden except `edit_policy_change` per SPEC §7), by-risk_level matrix, top-10 most-edited files. Output matches the SPEC §7 sample shape. `--since` may appear at most once; extra positional args are rejected; rollover dates rejected.
+  - **`meta-edit install-hooks --scope user|project`** / **`uninstall-hooks --scope ...`** — splice the two PreToolUse hooks (`meta-edit-deny-raw-edit`, `meta-edit-deny-bash-write-bypass`) into `~/.claude/settings.json` (user) or `<cwd>/.claude/settings.json` (project) idempotently. Pure helpers `installMetaEditHooks` / `uninstallMetaEditHooks` operate on parsed JSON; effectful entrypoints write atomically (temp file + fsync + rename) so a mid-write failure leaves the original settings untouched.
+  - **Strict ownership matching for uninstall**: a hook entry is treated as meta-edit-owned only when its command equals our exact bin name OR its `path.basename` equals the bin name. Substring containment is rejected so user wrappers like `meta-edit-deny-raw-edit-WRAPPER.js` are not removed.
+  - **Coverage-correct install**: `ensureMatcherEntry` requires an exact `matcher` string match (not just any matcher containing our command). If a user has narrowed the matcher to `Edit|Write`, install adds a new `Edit|Write|MultiEdit` entry alongside so `MultiEdit` is not silently unprotected.
+  - **`examples/.github/workflows/meta-edit-summary.yml`** — sample CI workflow that installs meta-edit globally and uploads `meta-edit summary` as an artifact. Uses `env:` indirection for `github.event.*` inputs (the GitHub Actions injection-safe pattern).
+- Tests (now 166, all green):
+  - `src/cli/log-cmd.test.ts`: 10 tests (filter combinations, arg parsing, rollover rejection).
+  - `src/cli/summary-cmd.test.ts`: 10 tests (zero edits, applied/failed split, aggregation, since label, duplicate-flag rejection, rollover rejection, extra-args rejection).
+  - `src/cli/hooks-cmd.test.ts`: 14 tests (idempotent install, preserves unrelated keys, merges into existing matcher, narrower matcher gets a new entry, uninstall removes only meta-edit-owned hooks, wrapper preservation, atomic write effects).
+- Codex review summary (2 rounds before commit):
+  - Round 1: HIGH (writeFileSync clobber risk, substring uninstall over-broad), MEDIUM (since-parser rollover + duplicate flag), LOW (matcher overlap).
+  - Round 2: HIGH (matcher coverage gap — narrower user matcher leaves MultiEdit unprotected), MEDIUM (rename failure left temp file with full settings JSON on disk).
+  - Round 3: ready to commit. Atomic write now cleans up temp on every failure path; ensureMatcherEntry requires exact-matcher equality before idempotent no-op.
+- Known issues / accepted MVP limitations:
+  - `path.basename` uses platform separator; WSL-on-Windows scenarios with backslash settings paths are not covered. POSIX hook runtime is the realistic target.
+  - Rename failure during atomic write throws; caller surfaces an exception rather than a structured error result. Acceptable for a CLI; would need refinement if used as a library.
+- Spec deviations: none.
