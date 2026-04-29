@@ -6,8 +6,9 @@ import {
 import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from "./descriptions.js";
 import {
   EditToolRequestSchema,
-  stubHandler,
+  makeStubHandler,
   type ToolHandler,
+  type ValidationContext,
 } from "./common.js";
 
 const inputSchema = {
@@ -41,7 +42,14 @@ const inputSchema = {
   additionalProperties: false,
 } as const;
 
-export function registerTools(server: Server, handler: ToolHandler = stubHandler): void {
+export type RegisterToolsOptions = {
+  context: ValidationContext;
+  handler?: ToolHandler;
+};
+
+export function registerTools(server: Server, options: RegisterToolsOptions): void {
+  const handler = options.handler ?? makeStubHandler(options.context);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: TOOL_NAMES.map((name) => ({

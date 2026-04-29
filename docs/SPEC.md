@@ -103,7 +103,9 @@ The MCP server enforces:
 - `target_file` must not match `.meta-edit/state/**` or other protected paths
 - `rationale` must be non-empty after trim
 - `test_files` must be non-empty for tools other than `edit_refactor_only` and `edit_test_only_change`
+- `test_files` must be empty for `edit_test_only_change` (the `target_file` is itself the declared test file)
 - `patch` must apply cleanly (using a standard unified-diff library)
+- `patch` must contain only modifications to existing files; file creations, deletions, and renames are rejected (modify-only)
 - Every file path appearing inside the patch is validated under the same rules as `target_file` (inside repo, not in protected paths)
 - Patch scope rules apply (see below)
 
@@ -121,13 +123,13 @@ For all tools other than `edit_test_only_change`:
 
 For `edit_test_only_change`:
 
-- `target_file` must itself match a test-file pattern (see `edit_test_only_change` description)
-- Every file modified by the patch must match a test-file pattern
-- `test_files` may be empty (the modified files are themselves the tests)
+- The patch may modify only `target_file`; no other file may be touched
+- `test_files` must be empty (the agent is declaring that `target_file` is itself the test edit)
+- The server does not pattern-match `target_file` against any test-file pattern. Choosing this tool is itself the agent's declaration that this is a test-only edit; tool selection is the obligation, not server-side classification
 
 A patch that violates these rules is rejected with `applied: false`.
 
-This rule lets the agent submit a production change and a colocated test addition in a single tool call when convenient, without forcing it. Splitting into a production edit followed by an `edit_test_only_change` is also valid; in that case, `test_files` lists the planned test-file paths.
+This rule lets the agent submit a production change and a colocated test addition in a single tool call when convenient (using a non-test-only tool), without forcing it. Splitting into a production edit followed by one or more `edit_test_only_change` calls is also valid; in that case, `test_files` on the production edit lists the planned test-file paths, and each test-file change is its own `edit_test_only_change` call.
 
 ### Path safety
 
@@ -236,9 +238,11 @@ Use this tool when:
 - Refactoring test fixtures or helpers
 - Removing flaky or duplicated tests
 
-Required: patch must only modify files matching test patterns
-(test_*, *_test, *.test.*, *.spec.*, tests/, __tests__/, spec/).
-test_files may be empty (the modified files themselves are the tests).
+Required: patch must only modify a single file — the `target_file` you
+declare as a test file. test_files must be empty. The server does not
+pattern-match the target path against any naming convention; choosing
+this tool is itself your declaration that the change is test-only. The
+obligation is tool selection, not server-side classification.
 
 Recommended assertion practice:
 - Each test must contain at least one explicit assert / expect
