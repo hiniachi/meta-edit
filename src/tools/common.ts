@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parsePatch } from "diff";
+import { parsePatch, type StructuredPatch } from "diff";
 import { z } from "zod";
 import {
   TOOLS_REQUIRING_TEST_FILES,
@@ -39,9 +39,15 @@ export type ValidationFailure = {
   warnings: string[];
 };
 
+export type PatchChange = {
+  canonical: string;
+  diff: StructuredPatch;
+};
+
 export type ValidationSuccess = {
   ok: true;
   touchedFiles: string[];
+  changes: PatchChange[];
 };
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
@@ -121,6 +127,7 @@ export function validateRequest(
   }
 
   const touched: string[] = [];
+  const changes: PatchChange[] = [];
   for (const p of parsed) {
     if (!p.oldFileName && !p.newFileName) {
       warnings.push(
@@ -165,6 +172,7 @@ export function validateRequest(
       continue;
     }
     touched.push(safe.canonical);
+    changes.push({ canonical: safe.canonical, diff: p });
   }
 
   const allowed = new Set<string>();
@@ -189,7 +197,7 @@ export function validateRequest(
   if (warnings.length > 0) {
     return { ok: false, warnings };
   }
-  return { ok: true, touchedFiles: touched };
+  return { ok: true, touchedFiles: touched, changes };
 }
 
 export type ToolHandler = (
@@ -215,6 +223,87 @@ export function makeStubHandler(ctx: ValidationContext): ToolHandler {
       ],
     };
   };
+}
+
+export type EditLogLike = {
+  nextEditId(now?: Date): string;
+  append(entry: import("../state/edit-log.js").EditLogEntry): void;
+};
+
+export type ApplyChangesFn = (
+  repoRoot: string,
+  changes: PatchChange[],
+) => import("./apply.js").ApplyResult;
+
+export type ApplyingHandlerDependencies = {
+  ctx: ValidationContext;
+  log: EditLogLike;
+  applyChanges: ApplyChangesFn;
+  now?: () => Date;
+};
+
+export function makeApplyingHandler(
+  deps: ApplyingHandlerDependencies,
+): ToolHandler {
+  const { ctx, log, applyChanges } = deps;
+  const now = deps.now ?? (() => new Date());
+
+  return async (toolName, args) => {
+    const ts = now();
+    const editId = log.nextEditId(ts);
+    const patchSize = Buffer.byteLength(args.patch, "utf8");
+    const baseEntry = {
+      edit_id: editId,
+      timestamp: isoTimestampForHandler(ts),
+      tool_name: toolName,
+      target_file: args.target_file,
+      rationale: args.rationale,
+      risk_level: args.risk_level,
+      test_files: args.test_files,
+      patch_size_bytes: patchSize,
+    } as const;
+
+    const validation = validateRequest(toolName, args, ctx);
+    if (!validation.ok) {
+      log.append({
+        ...baseEntry,
+        applied: false,
+        warnings: validation.warnings,
+      });
+      return {
+        applied: false,
+        edit_id: editId,
+        warnings: validation.warnings,
+      };
+    }
+
+    const result = applyChanges(ctx.repoRoot, validation.changes);
+    log.append({
+      ...baseEntry,
+      applied: result.applied,
+      warnings: result.warnings,
+    });
+    return {
+      applied: result.applied,
+      edit_id: editId,
+      warnings: result.warnings,
+    };
+  };
+}
+
+function isoTimestampForHandler(d: Date): string {
+  // Inlined to avoid a circular import between common.ts and edit-log.ts.
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const offAbs = Math.abs(offMin);
+  const offH = pad(Math.floor(offAbs / 60));
+  const offM = pad(offAbs % 60);
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+    `${sign}${offH}:${offM}`
+  );
 }
 
 function preValidatePatchInput(

@@ -1,16 +1,27 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools/registry.js";
-import type { ValidationContext } from "./tools/common.js";
+import {
+  makeApplyingHandler,
+  type ValidationContext,
+} from "./tools/common.js";
+import { applyChanges } from "./tools/apply.js";
+import { EditLog } from "./state/edit-log.js";
 
 export type CreateServerOptions = {
   repoRoot?: string;
 };
 
 export function createServer(options: CreateServerOptions = {}): Server {
-  const context: ValidationContext = {
-    repoRoot: options.repoRoot ?? process.cwd(),
-  };
+  const repoRoot = options.repoRoot ?? process.cwd();
+  const context: ValidationContext = { repoRoot };
+  const log = new EditLog(repoRoot);
+  const handler = makeApplyingHandler({
+    ctx: context,
+    log,
+    applyChanges,
+  });
+
   const server = new Server(
     {
       name: "meta-edit",
@@ -22,7 +33,7 @@ export function createServer(options: CreateServerOptions = {}): Server {
       },
     },
   );
-  registerTools(server, { context });
+  registerTools(server, { context, handler });
   return server;
 }
 
