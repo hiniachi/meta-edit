@@ -1,12 +1,19 @@
 # meta-edit
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![CI](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/hiniachi/meta-edit/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/hiniachi/meta-edit?style=social)](https://github.com/hiniachi/meta-edit/stargazers)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/hiniachi)
+
+**Languages:** **English** · [日本語](./README.ja.md) · [简体中文](./README.zh-CN.md)
+
 > An MCP server that replaces a coding agent's generic file-edit tool with **seventeen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
 
 The bet: tool design — not detection, not verification — is what changes AI editing behavior. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification.
 
 ## Status
 
-Pre-release. Phase 1 skeleton; tools register but do not yet apply patches.
+Pre-release. Phase 1 skeleton is in place; tools register but do not yet apply patches.
 
 ## The seventeen tools
 
@@ -23,6 +30,7 @@ edit_policy_change
 ```
 
 Each tool description specifies:
+
 - when to use it,
 - when not to use it,
 - which tests must accompany the edit,
@@ -34,7 +42,7 @@ Each tool description specifies:
 
 Once published:
 
-```
+```sh
 /plugin install meta-edit
 ```
 
@@ -43,7 +51,7 @@ This auto-registers the MCP server and the two safety hooks
 
 ### Option B: npm package
 
-```
+```sh
 npm install -g @hiniachi/meta-edit
 # then enable the safety hooks
 meta-edit install-hooks --scope user
@@ -51,7 +59,7 @@ meta-edit install-hooks --scope user
 
 Or per-project:
 
-```
+```sh
 npm install --save-dev @hiniachi/meta-edit
 meta-edit install-hooks --scope project
 ```
@@ -82,6 +90,18 @@ meta-edit summary            Aggregate statistics from the edit log
 meta-edit install-hooks      Install Claude Code hooks into settings.json
 meta-edit uninstall-hooks    Remove Claude Code hooks from settings.json
 ```
+
+## Sponsor
+
+If `meta-edit` saves you time or prevents a bad edit, please consider sponsoring development:
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-on%20GitHub-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/hiniachi)
+
+Sponsors help fund:
+
+- New `edit_*` categories based on observed AI failure modes
+- The optional v0.2 lightweight diff classifier (see [`SPEC.md` §11](./docs/SPEC.md))
+- Tighter Claude Code Plugin integration
 
 ## License
 
