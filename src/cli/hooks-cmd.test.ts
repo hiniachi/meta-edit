@@ -10,6 +10,7 @@ import {
   settingsPathForScope,
   parseHooksArgs,
   META_EDIT_HOOK_COMMANDS,
+  type HookMatcherEntry,
   type SettingsShape,
 } from "./hooks-cmd.js";
 
@@ -176,6 +177,69 @@ describe("uninstallMetaEditHooks (pure)", () => {
     };
     const stripped = uninstallMetaEditHooks(installed);
     expect(stripped.hooks).toBeUndefined();
+  });
+
+  it("does not crash on a non-command hook handler (defensive iteration)", () => {
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Edit|Write|MultiEdit",
+            hooks: [
+              { type: "command", command: META_EDIT_HOOK_COMMANDS.rawEdit },
+              // A future / non-command handler shape the user added by
+              // hand. We must NOT crash and MUST leave it alone.
+              { type: "script", body: "console.log('hi')" } as unknown as {
+                type: "command";
+                command: string;
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const after = uninstallMetaEditHooks(before);
+    const editEntry = after.hooks?.PreToolUse?.find(
+      (e) => e.matcher === "Edit|Write|MultiEdit",
+    );
+    expect(editEntry?.hooks.length).toBe(1);
+    expect((editEntry?.hooks[0] as { type: string }).type).toBe("script");
+  });
+
+  it("does not crash on a hook handler missing a command field", () => {
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Edit|Write|MultiEdit",
+            hooks: [
+              { type: "command" } as unknown as {
+                type: "command";
+                command: string;
+              },
+              { type: "command", command: META_EDIT_HOOK_COMMANDS.rawEdit },
+            ],
+          },
+        ],
+      },
+    };
+    const after = uninstallMetaEditHooks(before);
+    const editEntry = after.hooks?.PreToolUse?.find(
+      (e) => e.matcher === "Edit|Write|MultiEdit",
+    );
+    expect(editEntry?.hooks.length).toBe(1);
+    expect((editEntry?.hooks[0] as { command?: string }).command).toBeUndefined();
+  });
+
+  it("does not crash on a matcher entry whose hooks field is missing", () => {
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Edit|Write|MultiEdit" } as unknown as HookMatcherEntry,
+        ],
+      },
+    };
+    expect(() => uninstallMetaEditHooks(before)).not.toThrow();
   });
 
   it("does NOT remove a user wrapper that merely contains the bin name as a substring", () => {

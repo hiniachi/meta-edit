@@ -103,12 +103,29 @@ export function uninstallMetaEditHooks(
   if (!out.hooks?.PreToolUse) {
     return out;
   }
-  const stripped = out.hooks.PreToolUse.map((entry) => ({
-    ...entry,
-    hooks: entry.hooks.filter(
-      (h) => !isMetaEditHookCommand(h.command),
-    ),
-  })).filter((entry) => entry.hooks.length > 0);
+  // Defensive iteration: a hand-edited settings.json may contain hook
+  // entries that don't match our typed shape — entries with no `hooks`
+  // array, hook handlers with `type !== "command"`, or handlers missing
+  // a `command` field. We MUST NOT crash on those, and we MUST NOT
+  // remove them (they're owned by the user, not us).
+  const stripped = out.hooks.PreToolUse.filter(
+    (entry): entry is HookMatcherEntry =>
+      entry !== null && typeof entry === "object",
+  ).map((entry) => {
+    const handlers = Array.isArray(entry.hooks) ? entry.hooks : [];
+    const remaining = handlers.filter((h) => {
+      // Only consider for removal entries that are real
+      // `{type: "command", command: string}` objects whose command we
+      // own. Anything else (different shape, different type) is left
+      // untouched.
+      if (h === null || typeof h !== "object") return true;
+      const t = (h as { type?: unknown }).type;
+      const c = (h as { command?: unknown }).command;
+      if (t !== "command" || typeof c !== "string") return true;
+      return !isMetaEditHookCommand(c);
+    });
+    return { ...entry, hooks: remaining };
+  }).filter((entry) => Array.isArray(entry.hooks) && entry.hooks.length > 0);
 
   if (stripped.length === 0) {
     delete out.hooks.PreToolUse;
