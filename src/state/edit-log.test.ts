@@ -73,6 +73,34 @@ describe("EditLog.nextEditId", () => {
     expect(log2.nextEditId(new Date(2026, 3, 29))).toBe("edit_20260429_0018");
   });
 
+  it("preserves uniqueness past 9999 edits/day (5+ digit counter)", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
+    // Seed an existing log with a 5-digit counter (10001 edits today).
+    fs.writeFileSync(
+      logPath,
+      JSON.stringify(entry({ edit_id: "edit_20260430_10001" })) + "\n",
+      "utf8",
+    );
+    const log = new EditLog(tmpRoot);
+    expect(log.nextEditId(new Date(2026, 3, 30))).toBe("edit_20260430_10002");
+  });
+
+  it("emits a 5-digit counter naturally when count exceeds 9999 in process", () => {
+    const log = new EditLog(tmpRoot);
+    const d = new Date(2026, 3, 30);
+    // Fast-forward the in-process counter by appending entries.
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
+    fs.writeFileSync(
+      logPath,
+      JSON.stringify(entry({ edit_id: "edit_20260430_9999" })) + "\n",
+      "utf8",
+    );
+    expect(log.nextEditId(d)).toBe("edit_20260430_10000");
+    expect(log.nextEditId(d)).toBe("edit_20260430_10001");
+  });
+
   it("survives malformed log lines", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
     const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");

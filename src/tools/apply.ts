@@ -302,6 +302,11 @@ export function applyChanges(
           `parent directory TOCTOU detected for "${w.canonical}": ${preDrift.reason}`,
         );
         cleanupTemp(tempPath);
+        if (touchedAbsolutePaths.length > 0) {
+          warnings.push(
+            `partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,
+          );
+        }
         return { applied: false, warnings };
       }
 
@@ -312,9 +317,15 @@ export function applyChanges(
         `failed to atomically rename temp into "${w.canonical}": ${code ?? "ERR"}`,
       );
       cleanupTemp(tempPath);
-      // Note: previous staged renames that already succeeded remain on
-      // disk. Phase 3 MVP does not implement multi-file rollback; this is
-      // documented as a known limitation in IMPLEMENTATION-LOG.md.
+      // Phase 3 MVP does not implement multi-file rollback. Earlier
+      // renames in this batch already landed on disk and we surface
+      // exactly which files those are so the caller can decide how to
+      // recover (manual revert via VCS, follow-up edit_* call, etc.).
+      if (touchedAbsolutePaths.length > 0) {
+        warnings.push(
+          `partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,
+        );
+      }
       return { applied: false, warnings };
     }
 

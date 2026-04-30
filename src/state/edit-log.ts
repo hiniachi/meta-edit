@@ -25,7 +25,11 @@ export type EditLogEntry = {
   warnings: string[];
 };
 
-const EDIT_ID_RE = /^edit_(\d{8})_(\d{4})$/;
+// 4-digit minimum padding, but the counter is allowed to grow past 9999
+// in a single day (e.g. `edit_20260430_10000`). The regex matches 4 or
+// more digits so recovery works correctly across days that exceeded the
+// padding width.
+const EDIT_ID_RE = /^edit_(\d{8})_(\d{4,})$/;
 
 export class EditLog {
   private readonly statePath: string;
