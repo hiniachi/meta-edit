@@ -18338,6 +18338,9 @@ function createServer(options = {}) {
 async function runStdioServer(options = {}) {
   const server = createServer(options);
   const transport = new StdioServerTransport;
+  process.stdin.once("end", () => {
+    transport.close().catch(() => {});
+  });
   await server.connect(transport);
   await new Promise((resolve4) => {
     const previousOnClose = transport.onclose;
@@ -18874,4 +18877,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=D2ACC30474C7212564756E2164756E21
+//# debugId=06F6CFBA15EF9DBE64756E2164756E21

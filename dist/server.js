@@ -18337,6 +18337,9 @@ function createServer(options = {}) {
 async function runStdioServer(options = {}) {
   const server = createServer(options);
   const transport = new StdioServerTransport;
+  process.stdin.once("end", () => {
+    transport.close().catch(() => {});
+  });
   await server.connect(transport);
   await new Promise((resolve4) => {
     const previousOnClose = transport.onclose;
@@ -18351,4 +18354,4 @@ export {
   createServer
 };
 
-//# debugId=8CAFE48C903339F764756E2164756E21
+//# debugId=27CB221B66EA748564756E2164756E21
