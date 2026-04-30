@@ -278,6 +278,54 @@ describe("uninstallMetaEditHooks (pure)", () => {
     expect(() => uninstallMetaEditHooks(before)).not.toThrow();
   });
 
+  it("preserves non-object PreToolUse entries verbatim", () => {
+    // A user might (incorrectly) hand-edit a stray string or number into
+    // their PreToolUse array. We must NOT drop it just because it isn't
+    // a matcher object.
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          "user-typo-entry" as unknown as HookMatcherEntry,
+          {
+            matcher: "Edit|Write|MultiEdit",
+            hooks: [{ type: "command", command: META_EDIT_HOOK_COMMANDS.rawEdit }],
+          },
+          42 as unknown as HookMatcherEntry,
+        ],
+      },
+    };
+    const after = uninstallMetaEditHooks(before);
+    // Our hook removed; the matcher entry is now empty so it's dropped.
+    // BUT the two non-object entries must remain in place and in order.
+    expect(after.hooks?.PreToolUse).toEqual([
+      "user-typo-entry" as unknown as HookMatcherEntry,
+      42 as unknown as HookMatcherEntry,
+    ]);
+  });
+
+  it("preserves matcher entries whose hooks field is malformed", () => {
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Edit|Write|MultiEdit", hooks: "broken" } as unknown as HookMatcherEntry,
+        ],
+      },
+    };
+    const after = uninstallMetaEditHooks(before);
+    expect(after.hooks?.PreToolUse?.length).toBe(1);
+    expect((after.hooks?.PreToolUse?.[0] as { hooks: unknown }).hooks).toBe(
+      "broken",
+    );
+  });
+
+  it("preserves a non-array PreToolUse value verbatim", () => {
+    const before = {
+      hooks: { PreToolUse: "garbage" },
+    } as unknown as SettingsShape;
+    const after = uninstallMetaEditHooks(before);
+    expect((after.hooks as { PreToolUse: unknown }).PreToolUse).toBe("garbage");
+  });
+
   it("does NOT remove a user wrapper that merely contains the bin name as a substring", () => {
     const before: SettingsShape = {
       hooks: {

@@ -113,37 +113,57 @@ export function uninstallMetaEditHooks(
   if (!out.hooks?.PreToolUse) {
     return out;
   }
-  // Defensive iteration: a hand-edited settings.json may contain hook
-  // entries that don't match our typed shape — entries with no `hooks`
-  // array, hook handlers with `type !== "command"`, or handlers missing
-  // a `command` field. We MUST NOT crash on those, and we MUST NOT
-  // remove them (they're owned by the user, not us).
-  const stripped = out.hooks.PreToolUse.filter(
-    (entry): entry is HookMatcherEntry =>
-      entry !== null && typeof entry === "object",
-  ).map((entry) => {
-    const handlers = Array.isArray(entry.hooks) ? entry.hooks : [];
+  if (!Array.isArray(out.hooks.PreToolUse)) {
+    // Non-array PreToolUse — user-owned data we don't recognize. Leave
+    // the value exactly as we found it.
+    return out;
+  }
+
+  // Walk every entry. We only modify entries that match our typed
+  // matcher-entry shape; any entry we don't recognize (non-object,
+  // missing `hooks` array, ...) is preserved verbatim. We never drop
+  // entries we don't own. The only entries we DO drop are the ones we
+  // ourselves emptied — i.e. matcher objects whose hooks array
+  // contained only meta-edit-owned commands and is empty after we
+  // removed them.
+  const next: HookMatcherEntry[] = [];
+  for (const entry of out.hooks.PreToolUse) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      // Non-object — preserve as-is.
+      next.push(entry as HookMatcherEntry);
+      continue;
+    }
+    const handlers = (entry as { hooks?: unknown }).hooks;
+    if (!Array.isArray(handlers)) {
+      // Object missing/malformed `hooks` field — preserve as-is.
+      next.push(entry as HookMatcherEntry);
+      continue;
+    }
     const remaining = handlers.filter((h) => {
       // Only consider for removal entries that are real
-      // `{type: "command", command: string}` objects whose command we
-      // own. Anything else (different shape, different type) is left
-      // untouched.
+      // {type:"command", command:string} objects whose command we own.
+      // Anything else (different shape / type) is left untouched.
       if (h === null || typeof h !== "object") return true;
       const t = (h as { type?: unknown }).type;
       const c = (h as { command?: unknown }).command;
       if (t !== "command" || typeof c !== "string") return true;
       return !isMetaEditHookCommand(c);
     });
-    return { ...entry, hooks: remaining };
-  }).filter((entry) => Array.isArray(entry.hooks) && entry.hooks.length > 0);
+    if (remaining.length === 0 && handlers.length > 0) {
+      // We emptied this matcher entry of our own hooks; drop the now-
+      // useless matcher entry to keep settings.json tidy.
+      continue;
+    }
+    next.push({ ...(entry as object), hooks: remaining } as HookMatcherEntry);
+  }
 
-  if (stripped.length === 0) {
+  if (next.length === 0) {
     delete out.hooks.PreToolUse;
     if (Object.keys(out.hooks).length === 0) {
       delete out.hooks;
     }
   } else {
-    out.hooks.PreToolUse = stripped;
+    out.hooks.PreToolUse = next;
   }
   return out;
 }
