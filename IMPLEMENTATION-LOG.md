@@ -372,3 +372,28 @@
     than the `sed -i` deny-substring branch's reason. No semantic
     change; downstream consumers parsing reason strings should be
     aware. Documented for posterity, no fix.
+
+## v0.1.2 PR A: universal description principles
+
+- Completed: 2026-04-30
+- What works:
+  - All eighteen `edit_*` tool descriptions in
+    `src/tools/descriptions.ts` carry an identical trailing block
+    `General principles (apply to every edit):` with two bullets
+    ("Keep the code simple ..." and "When the intent or boundary
+    is unclear, stop and ask the user ..."). The same block is
+    appended to each description in `docs/SPEC.md` §4 so the
+    verbatim rule (CLAUDE.md §4) is preserved.
+  - `src/tools/registry.test.ts` gains a positive assertion that
+    every description contains the principles block — this also
+    guards against drift if a future PR rewrites a single tool's
+    description and forgets to copy the trailing block.
+- Known issues: none.
+- Tests added: 1 (`includes the universal General principles block
+  in every description`).
+- Spec deviations: none — the same block is added to both files in
+  the same change, per CLAUDE.md §4.
+- Out of scope (deliberately): the bash hook v0.2 candidates,
+  the edit-log readAll robustness, and the Option B schema rewrite
+  all stay for PR B / C / D respectively. PR A is the lowest-risk
+  policy edit so it ships first.

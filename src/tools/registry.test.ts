@@ -31,4 +31,21 @@ describe("eighteen tools", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_refactor_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_test_only_change");
   });
+
+  it("includes the universal General principles block verbatim in every description", () => {
+    // Per the v0.1.2 policy change: every edit_* tool description must
+    // carry the same three-line block so the agent reads the same text
+    // at every tool call (cf. docs/SPEC.md §4 trailing block on each
+    // tool). Assert byte-for-byte equality of the block — substring-
+    // only checks would let drift in spacing, ordering, or bullet
+    // wording slip through.
+    const principlesBlock =
+      "General principles (apply to every edit):\n" +
+      "- Keep the code simple. Prefer three similar lines over a premature abstraction.\n" +
+      "- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.";
+    for (const name of TOOL_NAMES) {
+      const desc = TOOL_DESCRIPTIONS[name];
+      expect(desc).toContain(principlesBlock);
+    }
+  });
 });
