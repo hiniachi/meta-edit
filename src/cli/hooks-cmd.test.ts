@@ -92,6 +92,42 @@ describe("installMetaEditHooks (pure)", () => {
     expect(cmds).toContain(META_EDIT_HOOK_COMMANDS.rawEdit);
   });
 
+  it("does not crash on a malformed PreToolUse entry missing hooks", () => {
+    const before: SettingsShape = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Edit|Write|MultiEdit" } as unknown as HookMatcherEntry,
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "user-bash-hook" }],
+          },
+        ],
+      },
+    };
+    expect(() => installMetaEditHooks(before)).not.toThrow();
+    const after = installMetaEditHooks(before);
+    const cmds = (after.hooks?.PreToolUse ?? [])
+      .flatMap((e) => (Array.isArray(e.hooks) ? e.hooks : []))
+      .map((h) => (h as { command?: string }).command);
+    expect(cmds).toContain(META_EDIT_HOOK_COMMANDS.rawEdit);
+    expect(cmds).toContain(META_EDIT_HOOK_COMMANDS.bashWriteBypass);
+    expect(cmds).toContain("user-bash-hook");
+  });
+
+  it("does not crash when out.hooks.PreToolUse is not an array", () => {
+    const before = {
+      hooks: { PreToolUse: "garbage" },
+    } as unknown as SettingsShape;
+    expect(() => installMetaEditHooks(before)).not.toThrow();
+    const after = installMetaEditHooks(before);
+    expect(Array.isArray(after.hooks?.PreToolUse)).toBe(true);
+  });
+
+  it("does not crash when out.hooks is not an object", () => {
+    const before = { hooks: 42 } as unknown as SettingsShape;
+    expect(() => installMetaEditHooks(before)).not.toThrow();
+  });
+
   it("adds a full Edit|Write|MultiEdit entry even when a narrower user matcher already has our hook", () => {
     // A user-edited narrower matcher (Edit|Write) is NOT treated as
     // sufficient because MultiEdit would be unprotected. install adds

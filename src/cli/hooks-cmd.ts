@@ -81,8 +81,18 @@ export function installMetaEditHooks(
   settings: SettingsShape,
 ): SettingsShape {
   const out: SettingsShape = clone(settings);
-  out.hooks = out.hooks ?? {};
-  out.hooks.PreToolUse = out.hooks.PreToolUse ?? [];
+  // Coerce hooks/PreToolUse into a usable shape. A hand-edited
+  // settings.json may have `hooks` as a non-object or `PreToolUse` as
+  // a non-array; in either case we replace with an empty array rather
+  // than letting `e.hooks.some(...)` crash downstream. This is safe
+  // because if the user wrote garbage there, our install would already
+  // be incompatible — we just need to avoid throwing.
+  if (out.hooks === null || typeof out.hooks !== "object" || Array.isArray(out.hooks)) {
+    out.hooks = {};
+  }
+  if (!Array.isArray(out.hooks.PreToolUse)) {
+    out.hooks.PreToolUse = [];
+  }
   ensureMatcherEntry(
     out.hooks.PreToolUse,
     META_EDIT_RAW_EDIT_MATCHER,
@@ -143,29 +153,44 @@ function ensureMatcherEntry(
   matcher: string,
   command: string,
 ): void {
+  // Defensive: a hand-edited settings.json may contain entries that
+  // aren't objects, lack a `hooks` array, or have non-string `command`
+  // fields. We must NOT crash on those, must NOT modify them (they're
+  // user-owned), and must still produce a correct install for our own
+  // shape.
+  const safeHooksOf = (e: unknown): Array<{ command?: unknown }> | null => {
+    if (e === null || typeof e !== "object") return null;
+    const h = (e as { hooks?: unknown }).hooks;
+    return Array.isArray(h) ? (h as Array<{ command?: unknown }>) : null;
+  };
+  const matcherOf = (e: unknown): string | null => {
+    if (e === null || typeof e !== "object") return null;
+    const m = (e as { matcher?: unknown }).matcher;
+    return typeof m === "string" ? m : null;
+  };
+
   // Idempotent only when we find a matcher entry whose `matcher` string
   // EXACTLY equals what we want and whose hooks already include our
   // command. A narrower user-edited matcher (e.g. `Edit|Write` instead
-  // of `Edit|Write|MultiEdit`) does NOT count as covering us — leaving
-  // it alone would silently leave `MultiEdit` unprotected. In that case
-  // we add a new matcher entry with the required matcher; the user can
-  // clean up the duplicate on Edit/Write afterwards (the hook decision
-  // is idempotent so duplicate firing is at worst noisy, not unsafe).
-  const exactMatch = list.find(
-    (e) =>
-      e.matcher === matcher &&
-      e.hooks.some((h) => h.command === command),
-  );
+  // of `Edit|Write|MultiEdit`) does NOT count as covering us.
+  const exactMatch = list.find((e) => {
+    if (matcherOf(e) !== matcher) return false;
+    const hooks = safeHooksOf(e);
+    if (hooks === null) return false;
+    return hooks.some((h) => h !== null && typeof h === "object" && (h as { command?: unknown }).command === command);
+  });
   if (exactMatch !== undefined) {
     return;
   }
 
-  let entry = list.find((e) => e.matcher === matcher);
+  let entry = list.find((e) => matcherOf(e) === matcher && safeHooksOf(e) !== null) as
+    | HookMatcherEntry
+    | undefined;
   if (entry === undefined) {
     entry = { matcher, hooks: [] };
     list.push(entry);
   }
-  if (!entry.hooks.some((h) => h.command === command)) {
+  if (!entry.hooks.some((h) => h !== null && typeof h === "object" && (h as { command?: unknown }).command === command)) {
     entry.hooks.push({ type: "command", command });
   }
 }
