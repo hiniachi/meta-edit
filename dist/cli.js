@@ -18339,6 +18339,11 @@ async function runStdioServer(options = {}) {
   const server = createServer(options);
   const transport = new StdioServerTransport;
   await server.connect(transport);
+  await new Promise((resolve4) => {
+    transport.onclose = () => {
+      resolve4();
+    };
+  });
 }
 
 // src/cli/parse-since.ts
@@ -18867,4 +18872,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=7491A8FFFFB0C36B64756E2164756E21
+//# debugId=D758725721C588D264756E2164756E21

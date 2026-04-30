@@ -18338,10 +18338,15 @@ async function runStdioServer(options = {}) {
   const server = createServer(options);
   const transport = new StdioServerTransport;
   await server.connect(transport);
+  await new Promise((resolve4) => {
+    transport.onclose = () => {
+      resolve4();
+    };
+  });
 }
 export {
   runStdioServer,
   createServer
 };
 
-//# debugId=965998C8593220AC64756E2164756E21
+//# debugId=2B8B3D44E2BA31BF64756E2164756E21
