@@ -101,6 +101,32 @@ describe("EditLog.nextEditId", () => {
     expect(log.nextEditId(d)).toBe("edit_20260430_10001");
   });
 
+  it("refuses to append when .meta-edit/state is a symlink", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit"), { recursive: true });
+    const targetDir = path.join(tmpRoot, "outside");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, path.join(tmpRoot, ".meta-edit", "state"));
+
+    const log = new EditLog(tmpRoot);
+    expect(() => log.append(entry())).toThrow(
+      /refusing to use edit-log path.*is a symlink/,
+    );
+    // Nothing should have been written through the symlink.
+    expect(fs.existsSync(path.join(targetDir, "edits.jsonl"))).toBe(false);
+  });
+
+  it("refuses to append when edits.jsonl is itself a symlink", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const target = path.join(tmpRoot, "outside.jsonl");
+    fs.writeFileSync(target, "", "utf8");
+    fs.symlinkSync(target, path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"));
+
+    const log = new EditLog(tmpRoot);
+    expect(() => log.append(entry())).toThrow();
+    // Nothing landed in the symlink target.
+    expect(fs.readFileSync(target, "utf8")).toBe("");
+  });
+
   it("survives malformed log lines", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
     const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");

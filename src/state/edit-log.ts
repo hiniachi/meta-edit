@@ -58,9 +58,48 @@ export class EditLog {
   }
 
   append(entry: EditLogEntry): void {
+    // Refuse to write through any symlink in the edit-log path. The log
+    // is the audit record; if `.meta-edit/state` (or `edits.jsonl`
+    // itself) has been replaced with a symlink that points outside the
+    // repo, an attacker can either silently exfiltrate edit metadata or
+    // make the tool overwrite an unrelated file. We guard each ancestor
+    // explicitly with lstat (symlink-aware) before mkdir, and use
+    // O_NOFOLLOW on the final open so the leaf swap is also caught.
+    ensureNoSymlinkOnPath(this.statePath);
     fs.mkdirSync(this.statePath, { recursive: true });
+    // Re-check: mkdirSync of an intermediate that was created during
+    // this call may have followed a parent symlink we didn't see. Walk
+    // again from the top and reject if any segment is now a symlink.
+    ensureNoSymlinkOnPath(this.statePath);
+
     const line = JSON.stringify(entry) + "\n";
-    fs.appendFileSync(this.logPath, line, { encoding: "utf8" });
+    const O_NOFOLLOW = fs.constants.O_NOFOLLOW;
+    if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+      throw new Error(
+        "this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection",
+      );
+    }
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(
+        this.logPath,
+        // eslint-disable-next-line no-bitwise
+        fs.constants.O_WRONLY |
+          fs.constants.O_APPEND |
+          fs.constants.O_CREAT |
+          O_NOFOLLOW,
+        0o600,
+      );
+      fs.writeSync(fd, line, null, "utf8");
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 
   readAll(): EditLogEntry[] {
@@ -117,6 +156,30 @@ export class EditLog {
       }
     }
     return max;
+  }
+}
+
+function ensureNoSymlinkOnPath(absDir: string): void {
+  // Walk from the topmost segment of absDir down to the leaf and reject
+  // if any existing component is a symlink. Non-existent components are
+  // fine — they'll be created normally by mkdirSync.
+  const segments = absDir.split(path.sep).filter((s) => s.length > 0);
+  let cur: string = path.sep;
+  for (const seg of segments) {
+    cur = path.join(cur, seg);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(cur);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") return; // remaining ancestors don't exist; safe to create
+      throw e;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `refusing to use edit-log path: "${cur}" is a symlink. The audit log must not be redirected through a symlink.`,
+      );
+    }
   }
 }
 
