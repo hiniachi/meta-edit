@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { RiskLevel } from "../tools/common.js";
+import { z } from "zod";
+import { RiskLevelSchema } from "../tools/common.js";
 
 // Append-only JSON Lines log of every edit_* call attempted against this
 // repository. Per docs/SPEC.md §6:
@@ -12,18 +13,24 @@ import type { RiskLevel } from "../tools/common.js";
 // counter from there + 1. Sequential calls increment in memory; the file
 // itself is read once per day boundary, not per call.
 
-export type EditLogEntry = {
-  edit_id: string;
-  timestamp: string;
-  tool_name: string;
-  target_file: string;
-  rationale: string;
-  risk_level: RiskLevel;
-  test_files: string[];
-  patch_size_bytes: number;
-  applied: boolean;
-  warnings: string[];
-};
+// Per OBSERVED-FAILURES.md "Phase 5 (CLI) residual gaps" entry that was
+// resolved in v0.1.2: the schema is validated at read time so a hand-
+// edited or older `edits.jsonl` line cannot crash `meta-edit summary`
+// or `meta-edit log` via a missing / non-string field.
+export const EditLogEntrySchema = z.object({
+  edit_id: z.string(),
+  timestamp: z.string(),
+  tool_name: z.string(),
+  target_file: z.string(),
+  rationale: z.string(),
+  risk_level: RiskLevelSchema,
+  test_files: z.array(z.string()),
+  patch_size_bytes: z.number(),
+  applied: z.boolean(),
+  warnings: z.array(z.string()),
+});
+
+export type EditLogEntry = z.infer<typeof EditLogEntrySchema>;
 
 // 4-digit minimum padding, but the counter is allowed to grow past 9999
 // in a single day (e.g. `edit_20260430_10000`). The regex matches 4 or
@@ -111,11 +118,22 @@ export class EditLog {
     for (const line of text.split("\n")) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
+      let parsed: unknown;
       try {
-        out.push(JSON.parse(trimmed) as EditLogEntry);
+        parsed = JSON.parse(trimmed);
       } catch {
-        // Skip malformed lines; never crash the reader.
+        // JSON-malformed lines are silently skipped (existing
+        // behavior — never crash the reader).
+        continue;
       }
+      const validated = EditLogEntrySchema.safeParse(parsed);
+      if (validated.success) {
+        out.push(validated.data);
+      }
+      // Schema-malformed lines are silently skipped: every downstream
+      // consumer (`meta-edit summary` / `meta-edit log`) assumes well-
+      // typed entries, and crashing on a stray bad line would lose all
+      // forensic value of the surrounding good lines.
     }
     return out;
   }

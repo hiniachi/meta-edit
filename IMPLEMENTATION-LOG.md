@@ -397,3 +397,47 @@
   the edit-log readAll robustness, and the Option B schema rewrite
   all stay for PR B / C / D respectively. PR A is the lowest-risk
   policy edit so it ships first.
+
+## v0.1.2 PR C: edit-log readAll schema validation
+
+- Completed: 2026-04-30
+- Trigger: user-directed promotion of OBSERVED-FAILURES.md item 4
+  (Phase 5 CLI residual gap) to v0.1.2 (per session plan
+  `~/.claude/plans/observed-failures-md-v0-2-v0-1-2-pr-code-snug-ember.md`).
+- What works:
+  - **`EditLogEntrySchema`** exported from `src/state/edit-log.ts`
+    as a zod object schema covering all ten fields
+    (edit_id, timestamp, tool_name, target_file, rationale,
+    risk_level, test_files, patch_size_bytes, applied, warnings).
+    The TS `EditLogEntry` type is now `z.infer<typeof
+    EditLogEntrySchema>` so writer and reader cannot drift.
+  - **`EditLog.readAll()`** now runs `EditLogEntrySchema.safeParse`
+    on each successfully `JSON.parse`-d line. Schema-malformed
+    lines are silently skipped, so a stray bad entry no longer
+    corrupts the rest of the report. JSON-malformed lines were
+    already silently skipped; that behavior is preserved.
+  - Downstream consumers (`meta-edit summary` `formatSummary` and
+    `meta-edit log` filter pipeline) automatically benefit because
+    they only ever see schema-valid entries — `name.padEnd(...)` /
+    `file.padEnd(...)` no longer crash on a missing or non-string
+    `tool_name` / `target_file`.
+  - `package.json` and `.claude-plugin/plugin.json` bumped to
+    `0.1.2`.
+- Known issues: none introduced.
+- Tests added (9 new in `src/state/edit-log.test.ts` under
+  `describe("zod-validated readAll skips schema-malformed entries (v0.1.2)", ...)`):
+  - valid entry round-trips
+  - missing `tool_name` field skipped
+  - `tool_name: null` skipped
+  - `tool_name: 42` (non-string) skipped
+  - missing `target_file` skipped
+  - `risk_level` outside the enum skipped
+  - `test_files` as string (instead of array) skipped
+  - mixed valid+invalid file returns only the valid entries (in
+    original order)
+  - regression guard: `formatSummary`-style `padEnd(...)` on
+    surviving entries does not throw
+- Spec deviations: none. The fix follows the OBSERVED-FAILURES rec
+  for item 4 verbatim ("zod-validate each entry in
+  `EditLog.readAll()` against `EditLogEntry` and skip lines that
+  fail").

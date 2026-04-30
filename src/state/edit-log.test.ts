@@ -221,6 +221,120 @@ describe("EditLog.append / readAll", () => {
     expect(back.length).toBe(1);
     expect(back[0]?.edit_id).toBe("edit_20260430_0001");
   });
+
+  describe("zod-validated readAll skips schema-malformed entries (v0.1.2)", () => {
+    function writeJsonl(lines: unknown[]): EditLog {
+      fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), {
+        recursive: true,
+      });
+      const p = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
+      fs.writeFileSync(
+        p,
+        lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
+        "utf8",
+      );
+      return new EditLog(tmpRoot);
+    }
+
+    it("includes a fully valid entry", () => {
+      const log = writeJsonl([entry()]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a line missing tool_name", () => {
+      const bad = { ...entry() } as Record<string, unknown>;
+      delete bad.tool_name;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      const back = log.readAll();
+      expect(back.length).toBe(1);
+      expect(back[0]?.edit_id).toBe("edit_20260430_0002");
+    });
+
+    it("skips a line where tool_name is null", () => {
+      const bad = { ...entry(), tool_name: null } as unknown;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a line where tool_name is a number (non-string)", () => {
+      const bad = { ...entry(), tool_name: 42 } as unknown;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a line where target_file is missing", () => {
+      const bad = { ...entry() } as Record<string, unknown>;
+      delete bad.target_file;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a line where risk_level is outside the enum", () => {
+      const bad = { ...entry(), risk_level: "extreme" } as unknown;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a line where test_files is a string instead of array", () => {
+      const bad = { ...entry(), test_files: "tests/foo.test.ts" } as unknown;
+      const log = writeJsonl([bad, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("returns only the valid entries from a mixed file", () => {
+      const log = writeJsonl([
+        entry({ edit_id: "edit_20260430_0001" }),
+        { ...entry(), tool_name: null } as unknown,
+        entry({ edit_id: "edit_20260430_0003" }),
+        { ...entry(), risk_level: "extreme" } as unknown,
+        entry({ edit_id: "edit_20260430_0005" }),
+      ]);
+      const back = log.readAll();
+      expect(back.map((e) => e.edit_id)).toEqual([
+        "edit_20260430_0001",
+        "edit_20260430_0003",
+        "edit_20260430_0005",
+      ]);
+    });
+
+    it("does not crash formatSummary-style consumers on a mixed file", () => {
+      // Guards the original failure mode: `name.padEnd(...)` would
+      // throw when tool_name was non-string. After zod filtering the
+      // padEnd-on-tool_name code path only sees strings.
+      const log = writeJsonl([
+        { ...entry(), tool_name: 42 } as unknown,
+        entry({ edit_id: "edit_20260430_0002" }),
+      ]);
+      const back = log.readAll();
+      // Direct simulation of the prior padEnd crash site.
+      for (const e of back) {
+        expect(typeof e.tool_name).toBe("string");
+        expect(typeof e.target_file).toBe("string");
+        expect(() => e.tool_name.padEnd(28)).not.toThrow();
+      }
+    });
+
+    it("skips an empty-object entry", () => {
+      const log = writeJsonl([{}, entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("skips a non-object JSON value (bare string)", () => {
+      const log = writeJsonl(["a-bare-string", entry({ edit_id: "edit_20260430_0002" })]);
+      expect(log.readAll().length).toBe(1);
+    });
+
+    it("accepts an entry with extra unknown fields (forward-compat)", () => {
+      // The schema does NOT call .strict(), so a future log written
+      // by a newer meta-edit can add fields without breaking older
+      // readers. Verify that intent.
+      const future = { ...entry(), future_field: "from-v0.2" } as unknown;
+      const log = writeJsonl([future]);
+      const back = log.readAll();
+      expect(back.length).toBe(1);
+      expect(back[0]?.edit_id).toBe("edit_20260430_0001");
+    });
+  });
 });
 
 describe("isoTimestamp", () => {

@@ -18291,6 +18291,18 @@ function cleanupTemp(p) {
 // src/state/edit-log.ts
 import * as fs3 from "node:fs";
 import * as path3 from "node:path";
+var EditLogEntrySchema = exports_external.object({
+  edit_id: exports_external.string(),
+  timestamp: exports_external.string(),
+  tool_name: exports_external.string(),
+  target_file: exports_external.string(),
+  rationale: exports_external.string(),
+  risk_level: RiskLevelSchema,
+  test_files: exports_external.array(exports_external.string()),
+  patch_size_bytes: exports_external.number(),
+  applied: exports_external.boolean(),
+  warnings: exports_external.array(exports_external.string())
+});
 var EDIT_ID_RE = /^edit_(\d{8})_(\d{4,})$/;
 
 class EditLog {
@@ -18348,9 +18360,16 @@ class EditLog {
       const trimmed = line.trim();
       if (trimmed.length === 0)
         continue;
+      let parsed;
       try {
-        out.push(JSON.parse(trimmed));
-      } catch {}
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      const validated = EditLogEntrySchema.safeParse(parsed);
+      if (validated.success) {
+        out.push(validated.data);
+      }
     }
     return out;
   }
@@ -18457,4 +18476,4 @@ export {
   createServer
 };
 
-//# debugId=331CC5F0E5759E9164756E2164756E21
+//# debugId=3774E20A79ABC55264756E2164756E21
