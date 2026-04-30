@@ -91,3 +91,33 @@
   - Exact-set assertion on `PROTECTED_PREFIXES`
 - Known issues:
   - The Phase 3 applier still has to land the TOCTOU re-canonicalization documented in the `checkPathSafety` comment. The validation layer alone cannot close that race.
+
+## Phase 3: Patch application and edit log
+
+- Completed: 2026-04-30
+- Trigger: implementation plan `~/.claude/plans/elegant-bubbling-mochi.md` Phase 3.
+- What works:
+  - **Edit log**: `src/state/edit-log.ts` writes append-only JSONL to `.meta-edit/state/edits.jsonl`. `edit_id` format `edit_YYYYMMDD_NNNN`, monotonic per day. New EditLog instances recover today's max counter from existing log lines, surviving malformed lines and missing files. Schema follows SPEC §6 exactly (edit_id, timestamp with timezone offset, tool_name, target_file, rationale, risk_level, test_files, patch_size_bytes, applied, warnings).
+  - **Patch applier**: `src/tools/apply.ts` lands the TOCTOU contract documented in Phase 2's `checkPathSafety`. At apply time it:
+    - Re-realpaths each target and the parent directory, verifies repo containment, drift, and protected-path status.
+    - Stages every patched file in memory before any write.
+    - Writes via temp-file + atomic rename: `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`, `fsync`, `chmod` to the mode captured at read time, then `renameSync` over the target. `O_TRUNC` is not used.
+    - Re-realpaths the parent directory immediately before each pathname-resolving syscall (open of the temp file and rename of the temp into the target). Drift abandons the operation.
+    - Hard-fails when `O_NOFOLLOW` is unavailable on the platform (Windows). No silent no-op.
+    - Best-effort fsync of the parent directory after rename for durability.
+  - **Handler integration**: `src/tools/common.ts` adds `makeApplyingHandler({ ctx, log, applyChanges, now? })` wiring validate → apply → log. Both validation failures and apply-time failures are logged with `applied: false`.
+  - **Server**: `src/server.ts` composes EditLog + applyChanges + makeApplyingHandler so the live MCP server now actually applies patches and records them.
+- Tests added (now 74 total, all green):
+  - `src/state/edit-log.test.ts` — 12 tests for edit_id counter recovery, day rollover, malformed lines, append/read round-trip, isoTimestamp formatting.
+  - `src/tools/apply.test.ts` — 13 tests covering the happy path, multi-file apply, context-mismatch staging rollback, target-symlink swap to outside repo (escape branch), drift to in-repo path (drift branch), drift to protected path, validated-canonical resolving into protected dir, mode preservation, no leftover .metaedit-tmp on success, O_NOFOLLOW hard-fail on `oNofollow: 0`, and a sanity check on `oNofollow: undefined`.
+  - `src/tools/handler.test.ts` — 4 tests for the end-to-end validate → apply → log flow including monotonic edit_id.
+- Codex review summary (3 rounds before commit):
+  - Round 1: identified parent-dir TOCTOU window between realpath/openSync/renameSync, mode-swap race, missing O_NOFOLLOW unavailable test. Fixed by re-realpathing the parent before each pathname syscall, capturing mode at read time, and adding an injectable `oNofollow` option.
+  - Round 2: ready to commit with two LOW residual issues — silent null-mode skip and a happy-path symlink coverage gap.
+  - Round 3 fix: added an explicit warning when `statSync` of the original target fails, so the audit log records that the replacement carries the conservative 0o600 mode rather than the original.
+- Known issues / accepted MVP limitations:
+  - Multi-file rollback is not implemented. If rename N+1 fails after rename N succeeded, files 1..N remain on disk. Documented in IMPLEMENTATION-LOG.
+  - Parent-directory TOCTOU is reduced (not eliminated) by `parentDriftCheck`. Fully closing the race needs `openat`/`O_DIRECTORY` semantics that Node's high-level fs API does not expose.
+  - Concurrent server processes on the same repo would both recover the same edit_id counter and assign duplicates. MVP assumes a single server per repo.
+  - macOS `fsync` on a directory FD may be a no-op without `F_FULLFSYNC`; durability is best-effort.
+- Spec deviations: none.

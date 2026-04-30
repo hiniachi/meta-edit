@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parsePatch } from "diff";
+import { parsePatch, type StructuredPatch } from "diff";
 import { z } from "zod";
 import {
   TOOLS_REQUIRING_TEST_FILES,
@@ -39,9 +39,15 @@ export type ValidationFailure = {
   warnings: string[];
 };
 
+export type PatchChange = {
+  canonical: string;
+  diff: StructuredPatch;
+};
+
 export type ValidationSuccess = {
   ok: true;
   touchedFiles: string[];
+  changes: PatchChange[];
 };
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
@@ -121,6 +127,7 @@ export function validateRequest(
   }
 
   const touched: string[] = [];
+  const changes: PatchChange[] = [];
   for (const p of parsed) {
     if (!p.oldFileName && !p.newFileName) {
       warnings.push(
@@ -165,6 +172,7 @@ export function validateRequest(
       continue;
     }
     touched.push(safe.canonical);
+    changes.push({ canonical: safe.canonical, diff: p });
   }
 
   const allowed = new Set<string>();
@@ -186,10 +194,30 @@ export function validateRequest(
     }
   }
 
+  // Reject patches that contain multiple sections targeting the same
+  // canonical path. Applying each section independently re-reads the
+  // original disk content, so later sections silently clobber earlier
+  // ones and the call returns applied:true with hunks dropped. We could
+  // merge hunks ourselves, but hunk-merge across sections is ambiguous
+  // under diff@9's fuzzFactor=0 + repeated-line semantics — a low-
+  // context hunk with repeated deleted lines could match at the wrong
+  // line after an earlier section inserted/deleted lines. Rejecting
+  // outright is safer; clients can split into separate edit_* calls.
+  const seenCanonical = new Set<string>();
+  for (const t of touched) {
+    if (seenCanonical.has(t)) {
+      warnings.push(
+        `patch contains multiple sections targeting "${t}". Submit each as its own edit_* call so hunks are not silently dropped.`,
+      );
+    } else {
+      seenCanonical.add(t);
+    }
+  }
+
   if (warnings.length > 0) {
     return { ok: false, warnings };
   }
-  return { ok: true, touchedFiles: touched };
+  return { ok: true, touchedFiles: touched, changes };
 }
 
 export type ToolHandler = (
@@ -215,6 +243,108 @@ export function makeStubHandler(ctx: ValidationContext): ToolHandler {
       ],
     };
   };
+}
+
+export type EditLogLike = {
+  nextEditId(now?: Date): string;
+  append(entry: import("../state/edit-log.js").EditLogEntry): void;
+};
+
+export type ApplyChangesFn = (
+  repoRoot: string,
+  changes: PatchChange[],
+) => import("./apply.js").ApplyResult;
+
+export type ApplyingHandlerDependencies = {
+  ctx: ValidationContext;
+  log: EditLogLike;
+  applyChanges: ApplyChangesFn;
+  now?: () => Date;
+};
+
+export function makeApplyingHandler(
+  deps: ApplyingHandlerDependencies,
+): ToolHandler {
+  const { ctx, log, applyChanges } = deps;
+  const now = deps.now ?? (() => new Date());
+
+  return async (toolName, args) => {
+    const ts = now();
+    const editId = log.nextEditId(ts);
+    const patchSize = Buffer.byteLength(args.patch, "utf8");
+    const baseEntry = {
+      edit_id: editId,
+      timestamp: isoTimestampForHandler(ts),
+      tool_name: toolName,
+      target_file: args.target_file,
+      rationale: args.rationale,
+      risk_level: args.risk_level,
+      test_files: args.test_files,
+      patch_size_bytes: patchSize,
+    } as const;
+
+    const validation = validateRequest(toolName, args, ctx);
+    if (!validation.ok) {
+      const finalWarnings = appendLogSafely(log, {
+        ...baseEntry,
+        applied: false,
+        warnings: validation.warnings,
+      });
+      return {
+        applied: false,
+        edit_id: editId,
+        warnings: finalWarnings,
+      };
+    }
+
+    const result = applyChanges(ctx.repoRoot, validation.changes);
+    // The patch is already on disk if result.applied. We MUST NOT throw
+    // out of the handler here even if log.append fails: the client would
+    // see the call as failed and likely retry, causing duplicate edits.
+    // appendLogSafely surfaces the log failure as a warning instead.
+    const finalWarnings = appendLogSafely(log, {
+      ...baseEntry,
+      applied: result.applied,
+      warnings: result.warnings,
+    });
+    return {
+      applied: result.applied,
+      edit_id: editId,
+      warnings: finalWarnings,
+    };
+  };
+}
+
+function appendLogSafely(
+  log: EditLogLike,
+  entry: import("../state/edit-log.js").EditLogEntry,
+): string[] {
+  try {
+    log.append(entry);
+    return entry.warnings;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    const msg = (e as Error | undefined)?.message ?? String(e);
+    return [
+      ...entry.warnings,
+      `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
+    ];
+  }
+}
+
+function isoTimestampForHandler(d: Date): string {
+  // Inlined to avoid a circular import between common.ts and edit-log.ts.
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const offAbs = Math.abs(offMin);
+  const offH = pad(Math.floor(offAbs / 60));
+  const offM = pad(offAbs % 60);
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+    `${sign}${offH}:${offM}`
+  );
 }
 
 function preValidatePatchInput(
