@@ -188,3 +188,77 @@
   - `npm publish` itself is not run; the package is `@hiniachi/meta-edit` 0.1.0 and ready for publish when the user gives explicit approval.
   - Plugin marketplace submission requires a separate Anthropic-side process; `plugin.json` is in place but not yet submitted.
 - Spec deviations: none.
+
+## Phase 7: Add `edit_docs_only` (eighteenth tool) — dogfooding unblock
+
+- Completed: 2026-04-30
+- Trigger: smoke-test self-application observation in `OBSERVED-FAILURES.md`
+  ("No edit_* tool covers documentation files"). Pure documentation edits
+  had no honest tool choice in the seventeen-tool surface, which forced
+  the typed surface to be bypassed for any docs-touching workflow on this
+  very repo. Promoted from v0.2 backlog into MVP because, without it,
+  dogfooding meta-edit on its own README / OBSERVED-FAILURES /
+  IMPLEMENTATION-LOG / inline code comments / docstrings is structurally
+  impossible and the design's central question ("do descriptions alone
+  change AI behavior?") cannot even be observed on the files where the
+  bypass happens most often.
+- What changed:
+  - `docs/SPEC.md` §3 ("seventeen → eighteen", `test_files` exclusion list
+    extended to include `edit_docs_only`), §4 (new `edit_docs_only` block
+    placed after `edit_policy_change`), §6, §10, §11 — all numeric and
+    prose references updated. Patch scope rules are unchanged: the
+    `edit_test_only_change`-only target_file restriction stays as-is, and
+    `edit_docs_only` follows the standard "target_file plus listed
+    test_files" rule used by every other non-test-only tool.
+  - `src/tools/descriptions.ts`:
+    - `TOOL_NAMES` extended to 18 with `edit_docs_only` appended.
+    - `TOOLS_REQUIRING_TEST_FILES` filter extended to also exclude
+      `edit_docs_only`, mirroring the way `edit_refactor_only` is
+      excluded — both tools have `Required tests: NONE` and
+      `test_files may be empty`.
+    - `edit_docs_only` description copied verbatim from SPEC §4.
+  - `src/tools/common.ts`: no validation logic change. The
+    `edit_test_only_change`-only `=== "edit_test_only_change"` checks are
+    unchanged. `edit_docs_only` is treated the same as `edit_refactor_only`
+    by the filter constant, which automatically gives it the right
+    cardinality (test_files optional) and the right patch scope
+    (target_file plus listed test_files).
+  - `src/tools/registry.ts`: the `test_files` JSON schema description
+    text updated to "Required (non-empty) for all tools except
+    edit_refactor_only, edit_test_only_change, and edit_docs_only. Must
+    be empty for edit_test_only_change." — keeps the schema doc in sync
+    with the validation predicate.
+  - `CLAUDE.md` §1, §3, §4, §5, §6, §7.4, §12, §13 — count and tool list
+    updated.
+  - `OBSERVED-FAILURES.md`: the documentation-coverage entry is removed
+    from the active queue and a one-line "Resolved (promoted to MVP)"
+    note points at SPEC §4. The Phase 4 / Phase 5 residual gap entries
+    are kept intact (still v0.2 candidates).
+  - `README.md` / `README.ja.md` / `README.zh-CN.md` / `CONTRIBUTING.md`
+    / `package.json` / `.claude-plugin/plugin.json` /
+    `.claude-plugin/marketplace.json` / hook reason text in
+    `src/hooks/raw-edit-policy.ts` / inline comment in
+    `src/hooks/bash-write-policy.ts` — count updated.
+- Tests added (4 new, 265 total green):
+  - `src/tools/registry.test.ts` — `TOOL_NAMES.length === 18`, presence
+    of `edit_docs_only`, verbatim-anchor assertion on the description's
+    opening line, sibling-class assertion that `edit_docs_only`,
+    `edit_refactor_only`, and `edit_test_only_change` are all excluded
+    from `TOOLS_REQUIRING_TEST_FILES`.
+  - `src/tools/common.test.ts` — `edit_docs_only` accepts empty
+    test_files, accepts non-empty test_files (parallel to
+    `edit_refactor_only`), accepts a target+test_files multi-file patch
+    (same scope rule as every other non-test-only tool), and rejects a
+    multi-file patch where the extra file is outside `target_file +
+    test_files` (same scope rule, same warning shape).
+- Spec deviations: none. SPEC.md and `descriptions.ts` are kept in
+  lockstep per CLAUDE.md §4 verbatim sync rule.
+- Out of scope (deliberately): no detection logic added, no diff
+  classification, no docs-pattern matching on `target_file`. The
+  description's MUST-NOT list is honor-system text just like every other
+  tool's MUST-NOT list. Tool selection is the obligation.
+- Decision rationale (vs. v0.2 deferral): the OBSERVED-FAILURES entry
+  was the single MEDIUM-severity gap that broke dogfooding outright.
+  The other v0.2 candidates (deny-bash-write-bypass detection
+  refinements, summary schema validation) are robustness improvements
+  that do not block any observable workflow; they remain in the queue.

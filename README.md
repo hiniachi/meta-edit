@@ -7,13 +7,13 @@
 
 **Languages:** **English** · [日本語](./README.ja.md) · [简体中文](./README.zh-CN.md)
 
-> An MCP server that replaces a coding agent's generic file-edit tool with **seventeen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
+> An MCP server that replaces a coding agent's generic file-edit tool with **eighteen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
 
 The bet: tool design — not detection, not verification — is what changes AI editing behavior. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification.
 
 ## Status
 
-`0.1.0` — pre-release. All core components are in place: seventeen
+`0.1.0` — pre-release. All core components are in place: eighteen
 `edit_*` MCP tools, two PreToolUse safety hooks, append-only edit log
 at `.meta-edit/state/edits.jsonl`, and the CLI. See
 [`docs/SPEC.md`](./docs/SPEC.md) for the contract and
@@ -22,7 +22,7 @@ at `.meta-edit/state/edits.jsonl`, and the CLI. See
 Distributed as a single-plugin Claude Code marketplace (this repo) and
 as the `@hiniachi/meta-edit` npm package. Not yet published to npm.
 
-## The seventeen tools
+## The eighteen tools
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -33,7 +33,7 @@ edit_serialization            edit_error_handling
 edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
-edit_policy_change
+edit_policy_change            edit_docs_only
 ```
 
 Each tool description specifies:
@@ -55,7 +55,7 @@ install meta-edit:
 /plugin install meta-edit@meta-edit
 ```
 
-That auto-registers the meta-edit MCP server (the seventeen `edit_*`
+That auto-registers the meta-edit MCP server (the eighteen `edit_*`
 tools) and the two safety hooks (`deny-raw-edit`,
 `deny-bash-write-bypass`). Requires [Bun](https://bun.sh) on PATH —
 the plugin runs the TypeScript sources directly without a build

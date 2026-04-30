@@ -129,51 +129,11 @@ or write — is blocked. Option (b) is the safer floor.
 
 ---
 
-## Spec (§4 tool descriptions) coverage gaps
+## Resolved (promoted to MVP)
 
-### MEDIUM: No edit_* tool covers documentation files
-
-The seventeen tools in SPEC §4 each have descriptions framed around
-"production code", "test files", "schema migrations", "dependency
-manifests", "policy/governance", etc. Pure documentation edits
-(README, OBSERVED-FAILURES.md, IMPLEMENTATION-LOG.md, doc-only
-comments inside `docs/`, etc.) match **none** of the seventeen tool
-descriptions cleanly:
-
-- `edit_refactor_only` is "production code without changing observable
-  behavior" — docs aren't code.
-- `edit_test_only_change` is for `tests/` and `*.test.*` files.
-- `edit_policy_change` is for governance / policy text — narrower than
-  arbitrary docs.
-- `edit_dependency_config` is for `package.json` / lockfiles.
-- All others are kind-specific to a code mutation.
-
-Concretely observed during Phase 6 self-application: appending a new
-entry to OBSERVED-FAILURES.md (this very file) had no honest tool
-choice. The agent's options were:
-
-1. Stretch `edit_refactor_only` (technically the MUST-NOT list passes
-   trivially because docs have no operators / no return shape / etc.,
-   but the description explicitly says "production code")
-2. Disable the plugin to use raw `Edit` / `Write`
-3. Stop and ask the user to expand the toolset
-
-Option 2 is what was actually done for this entry, which means the
-typed-surface discipline is bypassed for any docs-touching workflow.
-This will accumulate friction quickly: the project itself has README,
-SPEC, IMPLEMENTATION-LOG, OBSERVED-FAILURES, plus three localized
-README copies and a CONTRIBUTING / SECURITY pair, and any meta-edit
-work session that touches one of these files exits the typed surface.
-
-Promote to detection / spec change by adding `edit_docs_only` (or
-similar) to v0.2's tool list, with description framed as:
-"Documentation, comments, or other non-executable text." MUST-NOT list:
-any change to a code file (`.ts`, `.tsx`, `.js`, `.py`, `.go`, etc.),
-since those are covered by the existing seventeen tools. Required
-tests: none.
-
-This is a structural gap, not a description bug — it is what the spec
-explicitly excludes today (SPEC §11 "out of scope: documentation
-generation"). But since meta-edit is the kind of project that needs to
-edit its own docs constantly, the gap is felt immediately on
-self-application.
+- **`edit_docs_only` tool added** (v0.1.x). Pure documentation edits had no
+  honest tool choice in the original seventeen-tool surface, which forced
+  the typed surface to be bypassed for any docs-touching workflow during
+  self-application. Promoted from coverage-gap entry to a full SPEC §4
+  description; see `docs/SPEC.md` §3 (validation, patch scope) and §4
+  (`edit_docs_only`).

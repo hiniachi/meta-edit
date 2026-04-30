@@ -1,4 +1,4 @@
-// The seventeen tool descriptions, copied verbatim from docs/SPEC.md §4.
+// The eighteen tool descriptions, copied verbatim from docs/SPEC.md §4.
 // CLAUDE.md §4 forbids paraphrasing, summarizing, or "improving" these.
 // If you change a description here, update docs/SPEC.md §4 in the same change.
 
@@ -20,12 +20,16 @@ export const TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   "edit_policy_change",
+  "edit_docs_only",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 export const TOOLS_REQUIRING_TEST_FILES: readonly ToolName[] = TOOL_NAMES.filter(
-  (name) => name !== "edit_refactor_only" && name !== "edit_test_only_change",
+  (name) =>
+    name !== "edit_refactor_only" &&
+    name !== "edit_test_only_change" &&
+    name !== "edit_docs_only",
 );
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
@@ -494,4 +498,35 @@ rationale.
 If your change loosens a restriction without a strong justification, do
 not use this tool. Reconsider whether the restriction was correct in the
 first place.`,
+
+  edit_docs_only: `Modify documentation, README, comments, or other narrative content
+that does not affect runtime behavior.
+
+Use this tool when:
+- Editing Markdown files (README, docs/, *.md)
+- Editing inline code comments
+- Editing JSDoc / docstrings / Rustdoc that document existing API
+- Editing changelogs, release notes, contribution guides
+- Editing OBSERVED-FAILURES.md and similar project meta-documentation
+
+Required tests: NONE. test_files may be empty.
+
+Recommended verifications (not enforced):
+- Internal links resolve
+- Code blocks (if any) are syntactically valid in their stated language
+- Terminology is consistent with the rest of the project documentation
+- No accidental references to renamed APIs or removed features
+
+This tool MUST NOT be used when:
+- The patch modifies any executable production code
+- The patch modifies test code (use edit_test_only_change)
+- The patch modifies build, CI, or meta-edit configuration
+  (use edit_dependency_config or edit_policy_change)
+- The "documentation" change actually changes API contracts
+  documented in code (use edit_api_contract)
+
+Rationale: documentation changes have a different risk profile from
+code refactors. They cannot break runtime behavior, but they can
+mislead future readers (including future AI agents). Treat
+documentation as a contract with future readers.`,
 };

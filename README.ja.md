@@ -7,13 +7,13 @@
 
 **言語:** [English](./README.md) · **日本語** · [简体中文](./README.zh-CN.md)
 
-> AI コーディングエージェントの汎用ファイル編集ツールを、**17 個の編集種別ごとのツール**に置き換える MCP サーバ。各ツールの説明文に、その種別の編集に必要なテスト義務を直接埋め込みます。
+> AI コーディングエージェントの汎用ファイル編集ツールを、**18 個の編集種別ごとのツール**に置き換える MCP サーバ。各ツールの説明文に、その種別の編集に必要なテスト義務を直接埋め込みます。
 
 仕様の全文は [`docs/SPEC.md`](./docs/SPEC.md)。検出・検証ではなくツール設計のみで AI の編集挙動を変える、という賭けに基づく実装です。
 
 ## 状態
 
-`0.1.0` プレリリース。コア構成は揃っています — 17 個の `edit_*` MCP
+`0.1.0` プレリリース。コア構成は揃っています — 18 個の `edit_*` MCP
 ツール、2 つの PreToolUse 安全フック、`.meta-edit/state/edits.jsonl`
 への追記専用ログ、CLI。仕様は [`docs/SPEC.md`](./docs/SPEC.md)、
 v0.2 候補は [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照。
@@ -22,7 +22,7 @@ v0.2 候補は [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照。
 として動作し、npm パッケージ `@hiniachi/meta-edit` でも配布できます
 （npm 公開はまだ）。
 
-## 17 個のツール
+## 18 個のツール
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -33,7 +33,7 @@ edit_serialization            edit_error_handling
 edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
-edit_policy_change
+edit_policy_change            edit_docs_only
 ```
 
 各ツールの説明文は以下を明示します。
@@ -54,7 +54,7 @@ edit_policy_change
 /plugin install meta-edit@meta-edit
 ```
 
-これだけで MCP サーバ（17 個の `edit_*` ツール）と、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。実行に [Bun](https://bun.sh) が必要です（TypeScript ソースを直接動かすためビルドは不要）。
+これだけで MCP サーバ（18 個の `edit_*` ツール）と、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。実行に [Bun](https://bun.sh) が必要です（TypeScript ソースを直接動かすためビルドは不要）。
 
 ### B. npm パッケージ
 
