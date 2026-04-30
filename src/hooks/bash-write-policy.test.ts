@@ -185,6 +185,58 @@ describe("evaluateBashCommand — chained-segment bypass", () => {
   });
 });
 
+describe("evaluateBashCommand — prefix-only deny verbs", () => {
+  it("denies mv with tab argument separator", () => {
+    const r = evaluateBashCommand("mv\tsrc/old.ts\tsrc/new.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("denies cp with tab argument separator", () => {
+    const r = evaluateBashCommand("cp\tsrc/a.ts\tsrc/b.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cp");
+  });
+
+  it("denies mv following a backgrounded allowlist segment via bare &", () => {
+    // Without splitting on bare `&`, the whole string is one segment and
+    // mv at position N is never seen as a segment-start prefix.
+    const r = evaluateBashCommand("cargo fmt & mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("denies cp following bare &", () => {
+    const r = evaluateBashCommand("eslint --fix src/ & cp src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cp");
+  });
+
+  it("denies patch following bare &", () => {
+    const r = evaluateBashCommand("prettier --write src/ & patch -p1 < x.diff");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("patch");
+  });
+
+  it("does not split on `&>` stdout redirect", () => {
+    // `echo foo &> /dev/null` is a redirect, not a background fork.
+    // We must not split here; the trimmed segment start is `echo`, not
+    // a deny verb, so this should allow.
+    const r = evaluateBashCommand("echo foo &> /dev/null");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("does not split on `2>&1` fd duplication", () => {
+    const r = evaluateBashCommand("ls 2>&1");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("does not split on `>&` redirect even when followed by content", () => {
+    const r = evaluateBashCommand("exec 2>&1");
+    expect(r.decision).toBe("allow");
+  });
+});
+
 describe("evaluateBashCommand — backslash-escape bypass", () => {
   it("denies a backslash-escaped sed -i", () => {
     const r = evaluateBashCommand("s\\ed -i 's/x/y/' src/foo.ts");

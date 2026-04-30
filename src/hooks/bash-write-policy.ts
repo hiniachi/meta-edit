@@ -56,10 +56,14 @@ export const DENY_SUBSTRINGS: readonly string[] = [
 
 // Patterns that are "verb path" forms — denied when they look like they
 // move/copy/patch files (rather than reading or operating on a single
-// argument that is unlikely to be a repo path).
+// argument that is unlikely to be a repo path). Both space and tab
+// argument separators are covered: shells accept either, so a malicious
+// caller could otherwise sneak `mv\tfoo\tbar` past a space-only matcher.
 export const DENY_PREFIX_PATTERNS: readonly string[] = [
   "mv ",
+  "mv\t",
   "cp ",
+  "cp\t",
   "patch ",
   "patch\t",
 ];
@@ -206,6 +210,25 @@ function splitSegments(cmd: string): string[] {
         continue;
       }
       if (c === ";" || c === "|" || c === "\n") {
+        segments.push(buf);
+        buf = "";
+        continue;
+      }
+      if (c === "&") {
+        // Bare `&` (background fork) MUST split here so a command like
+        // `cargo fmt & mv a b` is broken into two segments and the
+        // prefix-only deny verbs (mv/cp/patch) match against `mv`.
+        // The `&&` case is handled above and consumes both characters;
+        // this arm only sees a single `&`.
+        //
+        // BUT skip when the `&` is part of a redirection: `&>` (stdout
+        // redirect) or `>&` / `2>&1` (fd duplication). For redirections
+        // we leave the `&` in the current segment and keep going.
+        const prev = i > 0 ? cmd[i - 1] : undefined;
+        if (next === ">" || prev === ">") {
+          buf += c;
+          continue;
+        }
         segments.push(buf);
         buf = "";
         continue;
