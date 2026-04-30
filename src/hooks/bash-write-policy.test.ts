@@ -272,6 +272,66 @@ describe("evaluateBashCommand — protected paths without trailing slash", () =>
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("protected");
   });
+
+  it("denies path-equivalent spelling .meta-edit//state", () => {
+    const r = evaluateBashCommand("cat > .meta-edit//state/edits.jsonl");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies path-equivalent spelling .meta-edit/./state", () => {
+    const r = evaluateBashCommand("cat > .meta-edit/./state/edits.jsonl");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies repeated /./ chains", () => {
+    const r = evaluateBashCommand("cat > .meta-edit/././state");
+    expect(r.decision).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () => {
+  const wrapperCases: Array<[string, string, string]> = [
+    ["sudo mv a b", "mv", "sudo"],
+    ["doas mv a b", "mv", "doas"],
+    ["env mv a b", "mv", "env"],
+    ["nice mv a b", "mv", "nice"],
+    ["ionice mv a b", "mv", "ionice"],
+    ["nohup mv a b", "mv", "nohup"],
+    ["time mv a b", "mv", "time"],
+    ["xargs mv -t /tmp", "mv", "xargs"],
+    ["env FOO=bar mv a b", "mv", "env+assignment"],
+    ["sudo env FOO=bar mv a b", "mv", "sudo+env+assignment"],
+    ["sudo cp a b", "cp", "sudo"],
+    ["xargs patch -p1", "patch", "xargs"],
+  ];
+  for (const [command, verb, label] of wrapperCases) {
+    it(`denies ${verb} via ${label}: "${command}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain(verb);
+    });
+  }
+
+  const absolutePathCases: Array<[string, string]> = [
+    ["/usr/bin/mv a b", "mv"],
+    ["/bin/cp a b", "cp"],
+    ["/usr/local/bin/patch -p1 < x.diff", "patch"],
+    ["sudo /usr/bin/mv a b", "mv"],
+  ];
+  for (const [command, verb] of absolutePathCases) {
+    it(`denies basename match for "${command}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain(verb);
+    });
+  }
+
+  it("does not deny a wrapped allowlist-style verb", () => {
+    expect(evaluateBashCommand("sudo cargo fmt").decision).toBe("allow");
+    expect(evaluateBashCommand("env prettier --write src/").decision).toBe("allow");
+  });
 });
 
 describe("evaluateBashCommand — backslash-escape bypass", () => {

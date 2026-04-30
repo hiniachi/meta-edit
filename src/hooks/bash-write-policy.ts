@@ -107,7 +107,10 @@ function evaluateSegment(rawSegment: string): HookDecision {
   // `s\ed -i ...`. Stripping backslashes can change the *meaning* of
   // commands inside quoted regions, but for substring pattern detection
   // we don't care — we never execute the normalized form.
-  const normalized = rawSegment.replace(/\\/g, "");
+  // We also collapse `//` -> `/` and `/./` -> `/` so path-equivalent
+  // spellings (`.meta-edit//state`, `.meta-edit/./state`) reach the
+  // same protected-path needles as the canonical form.
+  const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
 
   // Protected-path edits are denied unconditionally — even when the
   // surrounding command otherwise matches a documented allowlist entry.
@@ -144,21 +147,18 @@ function evaluateSegment(rawSegment: string): HookDecision {
     }
   }
 
-  // Prefix-style patterns (mv, cp, patch) are matched only at the start
-  // of the trimmed segment so a substring like " mv " inside an argument
-  // string does not falsely deny. We also strip leading shell variable
-  // assignments such as `FOO=bar mv a b` so `FOO=bar mv` is treated as
-  // `mv` for the purposes of prefix matching. Stripping is greedy: any
-  // chain of `NAME=value` (each assignment separated by whitespace) is
-  // peeled off until the next non-assignment token.
-  const trimmed = stripLeadingEnvAssignments(normalized.trimStart());
-  for (const prefix of DENY_PREFIX_PATTERNS) {
-    if (trimmed.startsWith(prefix)) {
-      return {
-        decision: "deny",
-        reason: denyReason(prefix.trim()),
-      };
-    }
+  // Verb-based deny: extract the actual command verb after stripping
+  // leading env assignments (`FOO=bar mv a b` -> `mv`), peeling wrapper
+  // verbs (`sudo mv a b`, `env mv a b`, `xargs mv -t /tmp`,
+  // `nice mv a b`, ...) and taking the basename of any absolute-path
+  // invocation (`/usr/bin/mv` -> `mv`). The deny set is the basename
+  // form of every prefix in DENY_PREFIX_PATTERNS.
+  const verb = extractCommandVerb(normalized.trimStart());
+  if (verb !== null && DENY_VERBS.has(verb)) {
+    return {
+      decision: "deny",
+      reason: denyReason(verb),
+    };
   }
   if (matchesPythonNodeWrite(normalized)) {
     return {
@@ -258,6 +258,54 @@ function denyReason(pattern: string): string {
     `or codegen needs to run, route it through the allowlist (see ` +
     `docs/SPEC.md §5.2).`
   );
+}
+
+// Wrapper verbs whose remaining tokens are themselves the command we
+// actually care about. After encountering one of these as the first
+// non-env token, peel it and continue resolving the verb.
+const WRAPPER_VERBS: ReadonlySet<string> = new Set([
+  "sudo",
+  "doas",
+  "env",
+  "xargs",
+  "nice",
+  "ionice",
+  "nohup",
+  "time",
+  "command",
+  "exec",
+  "eval",
+  "stdbuf",
+  "chrt",
+  "taskset",
+]);
+
+// Verbs whose mere invocation is denied.
+const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
+
+function collapsePathDoublings(s: string): string {
+  let out = s;
+  out = out.replace(/\/(\.\/)+/g, "/");
+  out = out.replace(/\/{2,}/g, "/");
+  return out;
+}
+
+function extractCommandVerb(segment: string): string | null {
+  let s = stripLeadingEnvAssignments(segment);
+  for (let safety = 0; safety < 16; safety++) {
+    s = stripLeadingEnvAssignments(s);
+    const m = /^(\S+)/.exec(s);
+    if (m === null || m[0] === undefined) return null;
+    const word = m[0];
+    const baseStart = word.lastIndexOf("/");
+    const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
+    if (WRAPPER_VERBS.has(base)) {
+      s = s.slice(word.length).replace(/^\s+/, "");
+      continue;
+    }
+    return base;
+  }
+  return null;
 }
 
 // Strip a chain of leading `NAME=value` shell variable assignments.
