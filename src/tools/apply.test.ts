@@ -240,6 +240,33 @@ describe("applyChanges", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("alpha\n");
   });
 
+  it("rejects (defense in depth) when the validator slipped through duplicate canonicals", () => {
+    // validateRequest is supposed to reject multi-section patches
+    // targeting the same canonical (silent-hunk-drop hazard under
+    // diff@9 fuzzFactor=0). If it ever fails to, applyChanges must
+    // refuse rather than silently apply only the last section.
+    writeFile("src/foo.ts", "alpha\n");
+    const concatenated =
+      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n" +
+      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-beta\n+gamma\n";
+    const parsed = parsePatch(concatenated);
+    const result = applyChanges(tmpRoot, [
+      { canonical: "src/foo.ts", diff: parsed[0]! },
+      { canonical: "src/foo.ts", diff: parsed[1]! },
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(
+        result.warnings.some((w) =>
+          w.includes("duplicate canonical") && w.includes("internal error"),
+        ),
+      ).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
+      "alpha\n",
+    );
+  });
+
   it("also hard-fails when O_NOFOLLOW is undefined", () => {
     writeFile("src/foo.ts", "alpha\n");
     const patch =

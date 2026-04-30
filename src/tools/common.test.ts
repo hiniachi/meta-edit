@@ -261,6 +261,25 @@ describe("validateRequest", () => {
       }
     });
 
+    it("rejects a patch with multiple sections targeting the same canonical", () => {
+      const duplicatedPatch =
+        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n" +
+        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-beta\n+gamma\n";
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({ patch: duplicatedPatch }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("multiple sections") && w.includes("src/foo.ts"),
+          ),
+        ).toBe(true);
+      }
+    });
+
     it("accepts patch touching target_file and listed test_files", () => {
       const multiFilePatch =
         "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +

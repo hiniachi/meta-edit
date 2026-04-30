@@ -122,6 +122,91 @@ describe("makeApplyingHandler", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DIFFERENT\n");
   });
 
+  it("does not throw if log.append fails after a successful apply", async () => {
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "alpha\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tests/foo.test.ts"), "test\n", "utf8");
+
+    let appendCalls = 0;
+    const failingLog = {
+      nextEditId: () => "edit_20260430_0001",
+      append: () => {
+        appendCalls++;
+        const err = new Error("simulated ENOSPC") as NodeJS.ErrnoException;
+        err.code = "ENOSPC";
+        throw err;
+      },
+    };
+
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log: failingLog,
+      applyChanges,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      patch:
+        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+      rationale: "log failure must not block reporting the apply result",
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+    });
+
+    // The handler MUST NOT throw, and MUST surface the failure as a
+    // warning. The patch IS on disk, so a thrown handler would cause
+    // the client to retry and double-apply.
+    expect(appendCalls).toBe(1);
+    expect(result.applied).toBe(true);
+    expect(
+      result.warnings.some(
+        (w) => w.includes("failed to append edit log") &&
+          w.includes("ENOSPC") &&
+          w.includes("audit record may be missing"),
+      ),
+    ).toBe(true);
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
+      "beta\n",
+    );
+  });
+
+  it("does not throw if log.append fails on a validation rejection", async () => {
+    const failingLog = {
+      nextEditId: () => "edit_20260430_0001",
+      append: () => {
+        const err = new Error("simulated EACCES") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      },
+    };
+
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log: failingLog,
+      applyChanges,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      patch:
+        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+      rationale: "   ",
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
+    expect(
+      result.warnings.some(
+        (w) => w.includes("failed to append edit log") && w.includes("EACCES"),
+      ),
+    ).toBe(true);
+  });
+
   it("assigns monotonic edit_id values across multiple calls", async () => {
     fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(tmpRoot, "src/a.ts"), "a\n", "utf8");

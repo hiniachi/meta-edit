@@ -28,6 +28,15 @@ import type { PatchChange } from "./common.js";
 // where it is not (currently Windows). This is enforced at apply time
 // rather than at module load so unrelated callers (CLI helpers, tests)
 // can import this module without crashing on unsupported platforms.
+//
+// Known limitation (acknowledged, not closed): if the captured parent
+// directory is unlinked AND a NEW directory is created at the same
+// canonical string between the first read and the rename, our
+// `parentDriftCheck` (which compares `realpathSync(parent)` to the same
+// path) cannot detect the swap by string equality alone. Closing that
+// race fully requires fd-pinned (openat) operations, which Node's
+// high-level fs API does not expose. The threat model is single-user
+// local TOCTOU; we document this rather than promise full coverage.
 
 const PLATFORM_O_NOFOLLOW = fs.constants.O_NOFOLLOW;
 
@@ -80,8 +89,23 @@ export function applyChanges(
     mode: number | null;
   };
   const staged: Staged[] = [];
+  // The validation layer (common.ts validateRequest) already rejects
+  // patches that contain multiple sections targeting the same canonical
+  // path, so by the time changes reach this loop every entry has a unique
+  // canonical. If that invariant is ever violated upstream, we want to
+  // notice loudly rather than silently overwrite — the assertion below
+  // catches it.
+  const seenCanonical = new Set<string>();
 
   for (const ch of changes) {
+    if (seenCanonical.has(ch.canonical)) {
+      warnings.push(
+        `internal error: applyChanges received duplicate canonical "${ch.canonical}" — validateRequest should have rejected this. No write performed.`,
+      );
+      return { applied: false, warnings };
+    }
+    seenCanonical.add(ch.canonical);
+
     const lexicalAbs = path.join(realRoot, ch.canonical);
 
     let realAbs: string;
