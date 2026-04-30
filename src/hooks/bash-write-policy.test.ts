@@ -707,3 +707,227 @@ describe("evaluateBashCommand — writes to protected paths still denied", () =>
     expect(r.reason).toContain("protected");
   });
 });
+
+describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
+  describe("command substitution expansion (items 1, 2)", () => {
+    it("denies a backtick command substitution containing mv", () => {
+      const r = evaluateBashCommand("cargo fmt && echo `mv old new`");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies a $(...) command substitution containing mv", () => {
+      const r = evaluateBashCommand("cargo fmt && echo $(mv old new)");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies $() inside double quotes (POSIX expands it)", () => {
+      const r = evaluateBashCommand('echo "result $(mv a b)"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("allows $() inside single quotes (POSIX leaves it literal)", () => {
+      const r = evaluateBashCommand("echo 'literal $(mv a b)'");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("allows benign $() with no deny patterns inside", () => {
+      const r = evaluateBashCommand("echo $(date)");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("denies nested $() $(mv a b)", () => {
+      const r = evaluateBashCommand("echo $(echo $(mv a b))");
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("wrapper value-option grammar (item 3)", () => {
+    it("denies sudo -u USER mv a b", () => {
+      const r = evaluateBashCommand("sudo -u root mv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies env -u VAR mv a b", () => {
+      const r = evaluateBashCommand("env -u HOME mv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo -g grp cp x y", () => {
+      const r = evaluateBashCommand("sudo -g admins cp x y");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still strips wrapper flag-only opts (regression)", () => {
+      const r = evaluateBashCommand("env -i mv a b");
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("safety-flag exception (item 5)", () => {
+    it("allows cp --no-clobber a b", () => {
+      const r = evaluateBashCommand("cp --no-clobber a b");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("allows cp -n a b (short safety flag)", () => {
+      const r = evaluateBashCommand("cp -n a b");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("allows patch --dry-run < changes.diff", () => {
+      const r = evaluateBashCommand("patch --dry-run < changes.diff");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("allows patch --check < changes.diff", () => {
+      const r = evaluateBashCommand("patch --check < changes.diff");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still denies cp without safety flag (regression)", () => {
+      const r = evaluateBashCommand("cp a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still denies mv even with --no-clobber (no exception for mv)", () => {
+      // Conservative: mv's --no-clobber is an opt-in safety, but the
+      // OBSERVED-FAILURES rec only carved out cp + patch. mv stays
+      // denied to avoid widening the carve-out beyond observation.
+      const r = evaluateBashCommand("mv --no-clobber a b");
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("path-component matching for protected paths (item 6)", () => {
+    it("does not flag the protected-path needle inside a longer dirname", () => {
+      // ".meta-edit/state" appears as a substring in
+      // "x-with-.meta-edit/state-in-name" but the leading '-' is a
+      // path-component continuation, so it is NOT a true protected
+      // path component and should be allowed (when the verb is benign).
+      const r = evaluateBashCommand(
+        "awk '{print $1}' /tmp/x-with-.meta-edit/state-in-name",
+      );
+      expect(r.decision).toBe("allow");
+    });
+
+    it("flags real protected paths anywhere in the command", () => {
+      const r = evaluateBashCommand(
+        "awk '{print $1}' /tmp/work/.meta-edit/state/edits.jsonl",
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected");
+    });
+
+    it("flags protected path glued to short-option flag (less -O<path>)", () => {
+      // Regression guard: option-glued path stays detected via the
+      // hasAcceptableBeforeBoundary short-option carve-out.
+      const r = evaluateBashCommand(
+        "cat /etc/hostname | less -O.meta-edit/state/exfil.log",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("flags protected path glued to long-option with = (--output=<path>)", () => {
+      const r = evaluateBashCommand(
+        "sort --output=.meta-edit/state/exfil.txt input.txt",
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("python -c / node -e string-literal masking (item 7)", () => {
+    it("allows python -c that only PRINTS the literal string 'write_text'", () => {
+      const r = evaluateBashCommand(
+        'python -c "print(\\"write_text\\")"',
+      );
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still denies python -c with real .write() (regression)", () => {
+      const r = evaluateBashCommand(
+        "python -c \"open('src/foo.ts','w').write('x')\"",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("allows python -c with literal write_text inside a string", () => {
+      const r = evaluateBashCommand(
+        "python -c \"print('write_text inside a string')\"",
+      );
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still denies node -e with real writeFileSync (regression)", () => {
+      const r = evaluateBashCommand(
+        "node -e \"require('fs').writeFileSync('src/foo.ts','x')\"",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("allows node -e with literal writeFile inside a string", () => {
+      const r = evaluateBashCommand(
+        "node -e \"console.log('writeFile is a method')\"",
+      );
+      expect(r.decision).toBe("allow");
+    });
+  });
+
+  describe("codex round-1 HIGH regressions", () => {
+    it("denies $() with literal '(' inside the substitution body (quoted-paren)", () => {
+      // Round 1 finding: a literal `'('` inside `$()` shifted the
+      // depth count and the closing `)` was missed, so `mv a b` was
+      // never extracted as an inner segment. The body now tracks
+      // single/double quotes independently from the outer pass.
+      const r = evaluateBashCommand('echo "$(printf \'(\'; mv a b)"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo -T <timeout> mv (sudo time-limit short option)", () => {
+      const r = evaluateBashCommand("sudo -T 5 mv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo -R <chroot> mv (sudo chroot short option)", () => {
+      const r = evaluateBashCommand("sudo -R /jail mv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies node -e $'...' (ANSI-C-quoted JS arg) with writeFileSync", () => {
+      const r = evaluateBashCommand(
+        "node -e $'require(\"fs\").writeFileSync(\"x\",\"y\")'",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies python -c f-string interpolation with .write()", () => {
+      const r = evaluateBashCommand(
+        'python -c "print(f\\"{open(\\\'x\\\',\\\'w\\\').write(\\\'y\\\')}\\")"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("allows python -c f-string with literal write_text (no interpolation)", () => {
+      const r = evaluateBashCommand(
+        'python -c "print(f\\"this is write_text\\")"',
+      );
+      expect(r.decision).toBe("allow");
+    });
+  });
+
+  describe("Unicode line separators (item 8)", () => {
+    it("treats CR as a segment boundary", () => {
+      const r = evaluateBashCommand("cargo fmt\rmv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("treats U+2028 LINE SEPARATOR as a segment boundary", () => {
+      const r = evaluateBashCommand("cargo fmt mv a b");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("treats U+2029 PARAGRAPH SEPARATOR as a segment boundary", () => {
+      const r = evaluateBashCommand("cargo fmt mv a b");
+      expect(r.decision).toBe("deny");
+    });
+  });
+});
