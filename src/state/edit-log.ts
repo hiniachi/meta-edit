@@ -159,10 +159,20 @@ export class EditLog {
   }
 }
 
-function ensureNoSymlinkOnPath(absDir: string): void {
-  // Walk from the topmost segment of absDir down to the leaf and reject
-  // if any existing component is a symlink. Non-existent components are
-  // fine — they'll be created normally by mkdirSync.
+function ensureNoSymlinkOnPath(maybeRelativeDir: string): void {
+  // Walk from the topmost segment of the path down to the leaf and
+  // reject if any existing component is a symlink. Non-existent
+  // components are fine — they'll be created normally by mkdirSync.
+  //
+  // CRITICAL: resolve to an absolute path first. The caller passed
+  // path.join(repoRoot, ".meta-edit", "state"), which can be relative
+  // when repoRoot is relative. Splitting a relative path on path.sep
+  // and re-joining from path.sep would walk `/repo/...` instead of
+  // `<cwd>/repo/...`, missing a symlinked .meta-edit at the relative
+  // location. path.resolve is purely lexical — it concatenates cwd +
+  // segments and normalizes `..`, never calling lstat/realpath — so it
+  // is safe to use here without re-introducing symlink-following.
+  const absDir = path.resolve(maybeRelativeDir);
   const segments = absDir.split(path.sep).filter((s) => s.length > 0);
   let cur: string = path.sep;
   for (const seg of segments) {

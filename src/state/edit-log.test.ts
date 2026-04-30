@@ -101,32 +101,6 @@ describe("EditLog.nextEditId", () => {
     expect(log.nextEditId(d)).toBe("edit_20260430_10001");
   });
 
-  it("refuses to append when .meta-edit/state is a symlink", () => {
-    fs.mkdirSync(path.join(tmpRoot, ".meta-edit"), { recursive: true });
-    const targetDir = path.join(tmpRoot, "outside");
-    fs.mkdirSync(targetDir);
-    fs.symlinkSync(targetDir, path.join(tmpRoot, ".meta-edit", "state"));
-
-    const log = new EditLog(tmpRoot);
-    expect(() => log.append(entry())).toThrow(
-      /refusing to use edit-log path.*is a symlink/,
-    );
-    // Nothing should have been written through the symlink.
-    expect(fs.existsSync(path.join(targetDir, "edits.jsonl"))).toBe(false);
-  });
-
-  it("refuses to append when edits.jsonl is itself a symlink", () => {
-    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
-    const target = path.join(tmpRoot, "outside.jsonl");
-    fs.writeFileSync(target, "", "utf8");
-    fs.symlinkSync(target, path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"));
-
-    const log = new EditLog(tmpRoot);
-    expect(() => log.append(entry())).toThrow();
-    // Nothing landed in the symlink target.
-    expect(fs.readFileSync(target, "utf8")).toBe("");
-  });
-
   it("survives malformed log lines", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
     const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
@@ -140,6 +114,61 @@ describe("EditLog.nextEditId", () => {
     );
     const log = new EditLog(tmpRoot);
     expect(log.nextEditId(new Date(2026, 3, 30))).toBe("edit_20260430_0006");
+  });
+});
+
+describe("EditLog.append symlink defense", () => {
+  it("refuses to append when .meta-edit/state is a symlink", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit"), { recursive: true });
+    const targetDir = path.join(tmpRoot, "outside");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, path.join(tmpRoot, ".meta-edit", "state"));
+
+    const log = new EditLog(tmpRoot);
+    expect(() => log.append(entry())).toThrow(
+      /refusing to use edit-log path.*is a symlink/,
+    );
+    expect(fs.existsSync(path.join(targetDir, "edits.jsonl"))).toBe(false);
+  });
+
+  it("refuses to append when .meta-edit is a symlink AND repoRoot is given as a relative path", () => {
+    // Regression: ensureNoSymlinkOnPath previously seeded traversal with
+    // path.sep so a relative repoRoot caused the walk to start from /
+    // instead of cwd, missing a symlinked .meta-edit at the relative
+    // location. Verify the path is canonicalized first.
+    const targetDir = path.join(tmpRoot, "outside-meta-edit");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, path.join(tmpRoot, ".meta-edit"));
+
+    // Run with cwd = tmpRoot, repoRoot = "." (relative). chdir back
+    // unconditionally and ALSO assert the restore actually happened so
+    // we catch a silent cwd leak that would pollute later tests in the
+    // same bun worker process.
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(tmpRoot);
+      const log = new EditLog(".");
+      expect(() => log.append(entry())).toThrow(
+        /refusing to use edit-log path.*is a symlink/,
+      );
+      expect(fs.existsSync(path.join(targetDir, "state", "edits.jsonl"))).toBe(
+        false,
+      );
+    } finally {
+      process.chdir(originalCwd);
+    }
+    expect(process.cwd()).toBe(originalCwd);
+  });
+
+  it("refuses to append when edits.jsonl is itself a symlink", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const target = path.join(tmpRoot, "outside.jsonl");
+    fs.writeFileSync(target, "", "utf8");
+    fs.symlinkSync(target, path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"));
+
+    const log = new EditLog(tmpRoot);
+    expect(() => log.append(entry())).toThrow();
+    expect(fs.readFileSync(target, "utf8")).toBe("");
   });
 });
 
