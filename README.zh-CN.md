@@ -13,7 +13,16 @@
 
 ## 当前状态
 
-预发布阶段。已完成 Phase 1（骨架），工具已注册，但尚未实际应用补丁。
+预发布 `0.1.0`。核心功能端到端可用：
+
+- 17 个 `edit_*` MCP 工具（说明文逐字复制自 [`SPEC.md` §4](./docs/SPEC.md)）
+- 参数校验：拒绝越界补丁、新建/删除/重命名、traversal 别名、通过符号链接绕过保护路径、大小写别名、git 扩展头、超过 1 MiB 或含 NUL 字节
+- 补丁原子写入：`O_CREAT | O_EXCL | O_NOFOLLOW` 临时文件 + fsync + rename，每次 pathname 系统调用前重新规范化父目录
+- 所有调用都追加到 `.meta-edit/state/edits.jsonl`（成功/失败都记）
+- 两个 PreToolUse Hook (`deny-raw-edit`, `deny-bash-write-bypass`) 以最佳努力方式封堵 raw edit 和 bash 写入旁路
+- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`
+
+尚未发布到 npm，也未在 Claude Code 插件市场上架。
 
 ## 十七个工具
 

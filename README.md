@@ -13,7 +13,16 @@ The bet: tool design — not detection, not verification — is what changes AI 
 
 ## Status
 
-Pre-release. Phase 1 skeleton is in place; tools register but do not yet apply patches.
+Pre-release `0.1.0`. The core surface is functional end-to-end:
+
+- Seventeen `edit_*` MCP tools with descriptions copied verbatim from [`SPEC.md` §4](./docs/SPEC.md).
+- Validation rejects multi-file scope violations, file creations / deletions / renames, traversal aliases, symlink-bypass into protected paths, case-insensitive aliases, git extended headers, and patches above 1 MiB or containing NUL bytes.
+- Patches apply atomically (`O_CREAT | O_EXCL | O_NOFOLLOW` temp + fsync + `rename`) with parent-directory drift re-canonicalization right before each pathname syscall.
+- Every call is recorded in `.meta-edit/state/edits.jsonl` (success or validation/apply failure) with monotonic `edit_YYYYMMDD_NNNN` ids.
+- Two PreToolUse hooks (`deny-raw-edit`, `deny-bash-write-bypass`) close the obvious raw-edit and bash-write bypass routes on a best-effort substring basis ([SPEC §5.2](./docs/SPEC.md)).
+- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`.
+
+Not yet published to npm or the Claude Code plugin marketplace.
 
 ## The seventeen tools
 
@@ -84,12 +93,51 @@ Source is published as TypeScript and runs unchanged on:
 ## Commands
 
 ```
-meta-edit serve              Run the MCP stdio server
-meta-edit log [filters]      Print edits.jsonl entries
-meta-edit summary            Aggregate statistics from the edit log
-meta-edit install-hooks      Install Claude Code hooks into settings.json
-meta-edit uninstall-hooks    Remove Claude Code hooks from settings.json
+meta-edit serve                                          Run the MCP stdio server
+meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]  Print edits.jsonl entries
+meta-edit summary [--since DATE]                         Aggregate statistics from the edit log
+meta-edit install-hooks --scope user|project             Install Claude Code hooks into settings.json
+meta-edit uninstall-hooks --scope user|project           Remove Claude Code hooks from settings.json
 ```
+
+### Examples
+
+```sh
+# Show all edits to billing code that landed since the start of April:
+meta-edit log --tool edit_boundary_condition --since 2026-04-01
+
+# Show high-risk and critical edits only:
+meta-edit log --risk high
+meta-edit log --risk critical
+
+# Aggregate summary for the last seven days (date in YYYY-MM-DD or any ISO 8601 form):
+meta-edit summary --since 2026-04-23
+
+# Install hooks for the current project (writes .claude/settings.json):
+meta-edit install-hooks --scope project
+
+# Install hooks for the user (writes ~/.claude/settings.json):
+meta-edit install-hooks --scope user
+```
+
+## Edit log
+
+Every `edit_*` call appends one JSONL line to `.meta-edit/state/edits.jsonl`,
+whether the call succeeded, was rejected by validation, or failed during
+apply. The schema follows [`SPEC.md` §6](./docs/SPEC.md):
+
+```json
+{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
+```
+
+The patch body is **not** stored. If you need it, your VCS history is
+the source of truth.
+
+## CI integration
+
+A reference workflow at [`examples/.github/workflows/meta-edit-summary.yml`](./examples/.github/workflows/meta-edit-summary.yml)
+runs `meta-edit summary` on every PR and uploads the report as a build
+artifact. Drop it into your own repo's `.github/workflows/` directory.
 
 ## Support
 

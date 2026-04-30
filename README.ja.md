@@ -13,7 +13,16 @@
 
 ## 状態
 
-プレリリース。Phase 1（スケルトン）まで実装済み。ツールは登録されますが、まだパッチは適用しません。
+プレリリース `0.1.0`。コアの動作は一通り完成しています:
+
+- 17 個の `edit_*` MCP ツール（説明文は [`SPEC.md` §4](./docs/SPEC.md) から逐語コピー）
+- 引数検証: 範囲違反・新規/削除/rename・traversal alias・symlink での保護パス突破・大文字小文字エイリアス・git 拡張ヘッダ・1 MiB 超過・NUL バイトを拒否
+- パッチ適用は temp + `O_NOFOLLOW` + fsync + rename で原子的、親ディレクトリの再正規化を pathname syscall 直前に毎回行う
+- すべての呼び出しを `.meta-edit/state/edits.jsonl` に追記（成否問わず）
+- 2 つの PreToolUse フック (`deny-raw-edit`, `deny-bash-write-bypass`) が raw edit / bash write bypass を best-effort で閉じる
+- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`
+
+npm publish と Claude Code Plugin marketplace への公開はまだです。
 
 ## 17 個のツール
 
