@@ -90,7 +90,7 @@ function evaluateRawEdit(toolName) {
   if (RAW_EDIT_TOOLS.has(toolName)) {
     return {
       decision: "deny",
-      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the seventeen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
+      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the eighteen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
     };
   }
   return { decision: "allow" };
@@ -111,4 +111,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=51F39A1BD626367064756E2164756E21
+//# debugId=EF96E6D80E10F0BE64756E2164756E21

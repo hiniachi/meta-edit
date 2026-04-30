@@ -7,13 +7,13 @@
 
 **语言:** [English](./README.md) · [日本語](./README.ja.md) · **简体中文**
 
-> 一个 MCP 服务器，将编程 AI 代理的通用文件编辑工具替换为 **十七个按编辑种类划分的专用工具**，并把每种编辑必须满足的测试义务直接写进工具说明里。
+> 一个 MCP 服务器，将编程 AI 代理的通用文件编辑工具替换为 **十八个按编辑种类划分的专用工具**，并把每种编辑必须满足的测试义务直接写进工具说明里。
 
 完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)。这是一项赌注式实践：**仅靠工具设计**（而不是检测或验证）就足以改变 AI 的编辑行为。
 
 ## 当前状态
 
-`0.1.0` 预发布版。核心组件已就绪 — 17 个 `edit_*` MCP 工具、两个
+`0.1.0` 预发布版。核心组件已就绪 — 18 个 `edit_*` MCP 工具、两个
 PreToolUse 安全 Hook、追加式编辑日志（`.meta-edit/state/edits.jsonl`），
 以及 CLI。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)，v0.2 候选
 项见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
@@ -21,7 +21,7 @@ PreToolUse 安全 Hook、追加式编辑日志（`.meta-edit/state/edits.jsonl`�
 本仓库自身就是一个单插件的 Claude Code marketplace；同时也以 npm
 包 `@hiniachi/meta-edit` 形式分发（npm 尚未发布）。
 
-## 十七个工具
+## 十八个工具
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -32,7 +32,7 @@ edit_serialization            edit_error_handling
 edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
-edit_policy_change
+edit_policy_change            edit_docs_only
 ```
 
 每个工具说明都明确指出：
@@ -53,7 +53,7 @@ edit_policy_change
 /plugin install meta-edit@meta-edit
 ```
 
-这会自动注册 MCP 服务器（17 个 `edit_*` 工具）以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。运行需要 PATH 中存在 [Bun](https://bun.sh)（插件直接运行 TypeScript 源码，无需构建步骤）。
+这会自动注册 MCP 服务器（18 个 `edit_*` 工具）以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。运行需要 PATH 中存在 [Bun](https://bun.sh)（插件直接运行 TypeScript 源码，无需构建步骤）。
 
 ### 方式 B：npm 包
 

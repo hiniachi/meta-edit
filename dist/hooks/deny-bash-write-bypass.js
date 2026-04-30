@@ -205,7 +205,7 @@ function splitSegments(cmd) {
   return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 function denyReason(pattern) {
-  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the seventeen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
+  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the eighteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
 }
 var WRAPPER_VERBS = new Set([
   "sudo",
@@ -348,4 +348,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=229BB9B9D520D27D64756E2164756E21
+//# debugId=761DFD22DEAD11B164756E2164756E21

@@ -36,7 +36,7 @@ const inputSchema = {
       type: "array",
       items: { type: "string" },
       description:
-        "Paths of test files relevant to this edit. Required for all tools except edit_refactor_only and edit_test_only_change.",
+        "Paths of test files relevant to this edit. Required (non-empty) for all tools except edit_refactor_only, edit_test_only_change, and edit_docs_only. Must be empty for edit_test_only_change.",
     },
   },
   additionalProperties: false,

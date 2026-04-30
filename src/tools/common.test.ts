@@ -104,6 +104,39 @@ describe("validateRequest", () => {
       );
       expect(r.ok).toBe(true);
     });
+
+    it("allows empty test_files for edit_docs_only", () => {
+      const r = validateRequest(
+        "edit_docs_only",
+        baseRequest({
+          target_file: "OBSERVED-FAILURES.md",
+          patch: makePatch("OBSERVED-FAILURES.md"),
+          test_files: [],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.touchedFiles).toEqual(["OBSERVED-FAILURES.md"]);
+      }
+    });
+
+    it("does not enforce empty test_files for edit_docs_only (test_files may be empty, per SPEC §4)", () => {
+      // edit_docs_only's description says "test_files may be empty" — i.e.,
+      // empty is permitted but not required. A non-empty test_files declaration
+      // is also accepted; the patch-scope rules then apply uniformly with
+      // edit_refactor_only (target_file plus listed test_files are in scope).
+      const r = validateRequest(
+        "edit_docs_only",
+        baseRequest({
+          target_file: "README.md",
+          patch: makePatch("README.md"),
+          test_files: ["tests/foo.test.ts"],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+    });
   });
 
   describe("path safety", () => {
@@ -315,6 +348,55 @@ describe("validateRequest", () => {
         expect(
           r.warnings.some(
             (w) => w.includes('"tests/bar.test.ts"') && w.includes("scope"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts edit_docs_only with target_file plus declared test_files patch (matches edit_refactor_only scope)", () => {
+      // edit_docs_only follows the same patch-scope rule as
+      // edit_refactor_only: the patch may touch target_file and any listed
+      // test_files. Whether the change should have been split is a question
+      // the description (§4 MUST-NOT) addresses; the server does not enforce
+      // it.
+      const multiFilePatch =
+        "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
+        "--- a/tests/foo.test.ts\n+++ b/tests/foo.test.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+      const r = validateRequest(
+        "edit_docs_only",
+        baseRequest({
+          target_file: "README.md",
+          patch: multiFilePatch,
+          test_files: ["tests/foo.test.ts"],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.touchedFiles.sort()).toEqual(
+          ["README.md", "tests/foo.test.ts"].sort(),
+        );
+      }
+    });
+
+    it("rejects edit_docs_only patch touching files outside target_file + test_files", () => {
+      const multiFilePatch =
+        "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
+        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+      const r = validateRequest(
+        "edit_docs_only",
+        baseRequest({
+          target_file: "README.md",
+          patch: multiFilePatch,
+          test_files: [],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes('"src/foo.ts"') && w.includes("scope"),
           ),
         ).toBe(true);
       }

@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of seventeen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -12,7 +12,7 @@ Modern AI coding agents (Claude Code, Cursor, Cline, Aider, Codex) all use a gen
 
 `meta-edit` is built on a different bet:
 
-> If you split the generic edit tool into seventeen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
+> If you split the generic edit tool into eighteen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
 >
 > 1. Be forced to decide which kind of edit it is making, *as a tool selection step*
 > 2. Read the testing obligations every time, because tool descriptions are part of the prompt
@@ -64,7 +64,7 @@ That is the entire system.
 
 ---
 
-## 3. The seventeen tools: common schema
+## 3. The eighteen tools: common schema
 
 All tools accept the same arguments and return the same result.
 
@@ -81,8 +81,10 @@ type EditToolRequest = {
                                               // following edit_test_only_change
                                               // calls, or existing tests that
                                               // already cover the change.
-                                              // May be empty only for
+                                              // May be empty for
                                               // edit_refactor_only and
+                                              // edit_docs_only.
+                                              // Must be empty for
                                               // edit_test_only_change.
 };
 
@@ -102,7 +104,7 @@ The MCP server enforces:
 - `target_file` must be a path within the repository root (after `realpath` resolution; symlinks resolving outside the repository root are rejected)
 - `target_file` must not match `.meta-edit/state/**` or other protected paths
 - `rationale` must be non-empty after trim
-- `test_files` must be non-empty for tools other than `edit_refactor_only` and `edit_test_only_change`
+- `test_files` must be non-empty for tools other than `edit_refactor_only`, `edit_test_only_change`, and `edit_docs_only`
 - `test_files` must be empty for `edit_test_only_change` (the `target_file` is itself the declared test file)
 - `patch` must apply cleanly (using a standard unified-diff library)
 - `patch` must contain only modifications to existing files; file creations, deletions, and renames are rejected (modify-only)
@@ -161,7 +163,7 @@ The server does not analyze the patch contents. It does not check whether the ch
 
 ---
 
-## 4. The seventeen tool descriptions
+## 4. The eighteen tool descriptions
 
 These descriptions are the product. Everything else is plumbing.
 
@@ -757,6 +759,43 @@ first place.
 
 ---
 
+### `edit_docs_only`
+
+```
+Modify documentation, README, comments, or other narrative content
+that does not affect runtime behavior.
+
+Use this tool when:
+- Editing Markdown files (README, docs/, *.md)
+- Editing inline code comments
+- Editing JSDoc / docstrings / Rustdoc that document existing API
+- Editing changelogs, release notes, contribution guides
+- Editing OBSERVED-FAILURES.md and similar project meta-documentation
+
+Required tests: NONE. test_files may be empty.
+
+Recommended verifications (not enforced):
+- Internal links resolve
+- Code blocks (if any) are syntactically valid in their stated language
+- Terminology is consistent with the rest of the project documentation
+- No accidental references to renamed APIs or removed features
+
+This tool MUST NOT be used when:
+- The patch modifies any executable production code
+- The patch modifies test code (use edit_test_only_change)
+- The patch modifies build, CI, or meta-edit configuration
+  (use edit_dependency_config or edit_policy_change)
+- The "documentation" change actually changes API contracts
+  documented in code (use edit_api_contract)
+
+Rationale: documentation changes have a different risk profile from
+code refactors. They cannot break runtime behavior, but they can
+mislead future readers (including future AI agents). Treat
+documentation as a contract with future readers.
+```
+
+---
+
 ## 5. Hooks
 
 Two hooks. No more.
@@ -840,7 +879,7 @@ Fields:
 
 - `edit_id`: monotonically increasing within a day, format `edit_YYYYMMDD_NNNN`
 - `timestamp`: ISO 8601 with timezone
-- `tool_name`: one of the seventeen tool names
+- `tool_name`: one of the eighteen tool names
 - `target_file`: repository-relative path
 - `rationale`: as supplied by the AI (any language)
 - `risk_level`: as supplied by the AI (recorded for audit, not enforcement)
@@ -994,7 +1033,7 @@ meta-edit/
   src/
     tools/
       common.ts              shared types, validation, patch application
-      descriptions.ts        the seventeen descriptions, verbatim from §4
+      descriptions.ts        the eighteen descriptions, verbatim from §4
       registry.ts            MCP tool registration
     server.ts                MCP stdio server entry
     cli.ts                   CLI entry
@@ -1015,7 +1054,7 @@ meta-edit/
 
 ### The most important file
 
-`src/tools/descriptions.ts` is the most important file in the repository. It contains the seventeen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
+`src/tools/descriptions.ts` is the most important file in the repository. It contains the eighteen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
 
 ```typescript
 export const TOOL_DESCRIPTIONS = {
@@ -1026,11 +1065,11 @@ Use this tool when:
 
   edit_test_only_change: `...`,
 
-  // ... seventeen total
+  // ... eighteen total
 } as const;
 ```
 
-Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of seventeen separate tools is that **tool selection is the reasoning step**.
+Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of eighteen separate tools is that **tool selection is the reasoning step**.
 
 ---
 
@@ -1044,7 +1083,7 @@ That is the only planned semantic-enforcement direction. Workspace protocols, VC
 
 Smaller maintenance changes — refining tool descriptions based on observed usage, tightening the bash hook's allowlist if it becomes a bypass route, improving log details — are not "future directions" in the same sense; they are ordinary upkeep and will happen as needed.
 
-`meta-edit` is exactly this: seventeen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
+`meta-edit` is exactly this: eighteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
 
 ---
 
