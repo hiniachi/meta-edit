@@ -40,5 +40,20 @@ export function createServer(options: CreateServerOptions = {}): Server {
 export async function runStdioServer(options: CreateServerOptions = {}): Promise<void> {
   const server = createServer(options);
   const transport = new StdioServerTransport();
+
+  process.stdin.once("end", () => {
+    transport.close().catch(() => {
+      /* transport already closing or closed; nothing to do */
+    });
+  });
+
   await server.connect(transport);
+
+  await new Promise<void>((resolve) => {
+    const previousOnClose = transport.onclose;
+    transport.onclose = () => {
+      previousOnClose?.call(transport);
+      resolve();
+    };
+  });
 }

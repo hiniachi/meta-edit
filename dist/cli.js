@@ -18338,7 +18338,17 @@ function createServer(options = {}) {
 async function runStdioServer(options = {}) {
   const server = createServer(options);
   const transport = new StdioServerTransport;
+  process.stdin.once("end", () => {
+    transport.close().catch(() => {});
+  });
   await server.connect(transport);
+  await new Promise((resolve4) => {
+    const previousOnClose = transport.onclose;
+    transport.onclose = () => {
+      previousOnClose?.call(transport);
+      resolve4();
+    };
+  });
 }
 
 // src/cli/parse-since.ts
@@ -18867,4 +18877,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=7491A8FFFFB0C36B64756E2164756E21
+//# debugId=06F6CFBA15EF9DBE64756E2164756E21
