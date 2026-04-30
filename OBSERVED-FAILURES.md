@@ -102,3 +102,78 @@ bare `\r`. Realistic agent commands use `\n`. Substring denies still fire
 on the deny patterns that appear literally; only prefix-only verbs would
 slip through, and only when the user deliberately separates commands
 with exotic Unicode line terminators. Document only.
+
+### LOW: Read-only commands referencing protected paths are blocked
+
+`evaluateBashCommand` substring-matches the protected-path patterns
+(`.meta-edit/state/**`, `.meta-edit/tmp/**`) against the entire command
+text, regardless of whether the surrounding command is read or write.
+Concretely, observed during the meta-edit smoke test (Phase 6 self-app):
+
+    tail -2 /home/.../.meta-edit/state/edits.jsonl
+
+is denied with "command touches a protected meta-edit path; writes to
+these paths must go through an edit_policy_change tool call". The
+denial is misleading — `tail` only reads. The block is conservative
+but adds friction for legitimate inspection during debugging; agents
+have to fall back to `Read` for the same content.
+
+Same pattern applies to `cat`, `head`, `wc`, `grep`, `less`, `jq`, etc.
+when given a path under the protected directories.
+
+Promote to detection by either (a) limiting the protected-path check
+to the same prefix-verb / inline-write detectors used elsewhere
+(i.e. "this command would WRITE here"), or (b) keeping the conservative
+block but rephrasing the deny reason to clarify that any access — read
+or write — is blocked. Option (b) is the safer floor.
+
+---
+
+## Spec (§4 tool descriptions) coverage gaps
+
+### MEDIUM: No edit_* tool covers documentation files
+
+The seventeen tools in SPEC §4 each have descriptions framed around
+"production code", "test files", "schema migrations", "dependency
+manifests", "policy/governance", etc. Pure documentation edits
+(README, OBSERVED-FAILURES.md, IMPLEMENTATION-LOG.md, doc-only
+comments inside `docs/`, etc.) match **none** of the seventeen tool
+descriptions cleanly:
+
+- `edit_refactor_only` is "production code without changing observable
+  behavior" — docs aren't code.
+- `edit_test_only_change` is for `tests/` and `*.test.*` files.
+- `edit_policy_change` is for governance / policy text — narrower than
+  arbitrary docs.
+- `edit_dependency_config` is for `package.json` / lockfiles.
+- All others are kind-specific to a code mutation.
+
+Concretely observed during Phase 6 self-application: appending a new
+entry to OBSERVED-FAILURES.md (this very file) had no honest tool
+choice. The agent's options were:
+
+1. Stretch `edit_refactor_only` (technically the MUST-NOT list passes
+   trivially because docs have no operators / no return shape / etc.,
+   but the description explicitly says "production code")
+2. Disable the plugin to use raw `Edit` / `Write`
+3. Stop and ask the user to expand the toolset
+
+Option 2 is what was actually done for this entry, which means the
+typed-surface discipline is bypassed for any docs-touching workflow.
+This will accumulate friction quickly: the project itself has README,
+SPEC, IMPLEMENTATION-LOG, OBSERVED-FAILURES, plus three localized
+README copies and a CONTRIBUTING / SECURITY pair, and any meta-edit
+work session that touches one of these files exits the typed surface.
+
+Promote to detection / spec change by adding `edit_docs_only` (or
+similar) to v0.2's tool list, with description framed as:
+"Documentation, comments, or other non-executable text." MUST-NOT list:
+any change to a code file (`.ts`, `.tsx`, `.js`, `.py`, `.go`, etc.),
+since those are covered by the existing seventeen tools. Required
+tests: none.
+
+This is a structural gap, not a description bug — it is what the spec
+explicitly excludes today (SPEC §11 "out of scope: documentation
+generation"). But since meta-edit is the kind of project that needs to
+edit its own docs constantly, the gap is felt immediately on
+self-application.
