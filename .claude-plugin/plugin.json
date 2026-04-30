@@ -1,0 +1,19 @@
+{
+  "name": "meta-edit",
+  "version": "0.1.0",
+  "description": "Replaces raw Edit / Write / MultiEdit with seventeen kind-specific edit_* MCP tools that encode the testing obligations for each kind of change directly in their tool descriptions.",
+  "author": {
+    "name": "nia",
+    "email": "nia@yukinofurumachi.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/hiniachi/meta-edit",
+  "repository": "https://github.com/hiniachi/meta-edit",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+}

@@ -13,16 +13,14 @@
 
 ## 状態
 
-プレリリース `0.1.0`。コアの動作は一通り完成しています:
+`0.1.0` プレリリース。コア構成は揃っています — 17 個の `edit_*` MCP
+ツール、2 つの PreToolUse 安全フック、`.meta-edit/state/edits.jsonl`
+への追記専用ログ、CLI。仕様は [`docs/SPEC.md`](./docs/SPEC.md)、
+v0.2 候補は [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照。
 
-- 17 個の `edit_*` MCP ツール（説明文は [`SPEC.md` §4](./docs/SPEC.md) から逐語コピー）
-- 引数検証: 範囲違反・新規/削除/rename・traversal alias・symlink での保護パス突破・大文字小文字エイリアス・git 拡張ヘッダ・1 MiB 超過・NUL バイトを拒否
-- パッチ適用は temp + `O_NOFOLLOW` + fsync + rename で原子的、親ディレクトリの再正規化を pathname syscall 直前に毎回行う
-- すべての呼び出しを `.meta-edit/state/edits.jsonl` に追記（成否問わず）
-- 2 つの PreToolUse フック (`deny-raw-edit`, `deny-bash-write-bypass`) が raw edit / bash write bypass を best-effort で閉じる
-- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`
-
-npm publish と Claude Code Plugin marketplace への公開はまだです。
+このリポジトリ自体が単一プラグインの Claude Code マーケットプレイス
+として動作し、npm パッケージ `@hiniachi/meta-edit` でも配布できます
+（npm 公開はまだ）。
 
 ## 17 個のツール
 
@@ -49,13 +47,14 @@ edit_policy_change
 
 ### A. Claude Code Plugin marketplace
 
-公開後:
+このリポジトリ自体が単一プラグインのマーケットプレイスです。一度マーケットを追加すれば、`/plugin install` で導入できます。
 
 ```sh
-/plugin install meta-edit
+/plugin marketplace add hiniachi/meta-edit
+/plugin install meta-edit@meta-edit
 ```
 
-これだけで MCP サーバと、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。
+これだけで MCP サーバ（17 個の `edit_*` ツール）と、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。実行に [Bun](https://bun.sh) が必要です（TypeScript ソースを直接動かすためビルドは不要）。
 
 ### B. npm パッケージ
 

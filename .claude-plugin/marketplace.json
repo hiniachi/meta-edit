@@ -1,0 +1,30 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "meta-edit",
+  "description": "Single-plugin marketplace exposing the meta-edit Claude Code plugin: seventeen kind-specific edit_* MCP tools and two safety hooks.",
+  "owner": {
+    "name": "nia",
+    "email": "nia@yukinofurumachi.com"
+  },
+  "plugins": [
+    {
+      "name": "meta-edit",
+      "description": "Replaces raw Edit / Write / MultiEdit with seventeen kind-specific edit_* MCP tools that encode the testing obligations for each kind of change directly in their tool descriptions.",
+      "author": {
+        "name": "nia",
+        "email": "nia@yukinofurumachi.com"
+      },
+      "category": "development",
+      "source": ".",
+      "homepage": "https://github.com/hiniachi/meta-edit",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "claude-code",
+        "ai-coding",
+        "edit-tools",
+        "test-obligations"
+      ]
+    }
+  ]
+}

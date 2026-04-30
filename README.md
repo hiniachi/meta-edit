@@ -13,16 +13,14 @@ The bet: tool design — not detection, not verification — is what changes AI 
 
 ## Status
 
-Pre-release `0.1.0`. The core surface is functional end-to-end:
+`0.1.0` — pre-release. All core components are in place: seventeen
+`edit_*` MCP tools, two PreToolUse safety hooks, append-only edit log
+at `.meta-edit/state/edits.jsonl`, and the CLI. See
+[`docs/SPEC.md`](./docs/SPEC.md) for the contract and
+[`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for known v0.2 work.
 
-- Seventeen `edit_*` MCP tools with descriptions copied verbatim from [`SPEC.md` §4](./docs/SPEC.md).
-- Validation rejects multi-file scope violations, file creations / deletions / renames, traversal aliases, symlink-bypass into protected paths, case-insensitive aliases, git extended headers, and patches above 1 MiB or containing NUL bytes.
-- Patches apply atomically (`O_CREAT | O_EXCL | O_NOFOLLOW` temp + fsync + `rename`) with parent-directory drift re-canonicalization right before each pathname syscall.
-- Every call is recorded in `.meta-edit/state/edits.jsonl` (success or validation/apply failure) with monotonic `edit_YYYYMMDD_NNNN` ids.
-- Two PreToolUse hooks (`deny-raw-edit`, `deny-bash-write-bypass`) close the obvious raw-edit and bash-write bypass routes on a best-effort substring basis ([SPEC §5.2](./docs/SPEC.md)).
-- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`.
-
-Not yet published to npm or the Claude Code plugin marketplace.
+Distributed as a single-plugin Claude Code marketplace (this repo) and
+as the `@hiniachi/meta-edit` npm package. Not yet published to npm.
 
 ## The seventeen tools
 
@@ -49,14 +47,19 @@ Each tool description specifies:
 
 ### Option A: Claude Code Plugin marketplace
 
-Once published:
+This repository **is** a single-plugin marketplace. Add it once, then
+install meta-edit:
 
 ```sh
-/plugin install meta-edit
+/plugin marketplace add hiniachi/meta-edit
+/plugin install meta-edit@meta-edit
 ```
 
-This auto-registers the MCP server and the two safety hooks
-(`deny-raw-edit`, `deny-bash-write-bypass`).
+That auto-registers the meta-edit MCP server (the seventeen `edit_*`
+tools) and the two safety hooks (`deny-raw-edit`,
+`deny-bash-write-bypass`). Requires [Bun](https://bun.sh) on PATH —
+the plugin runs the TypeScript sources directly without a build
+step.
 
 ### Option B: npm package
 
