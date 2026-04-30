@@ -132,7 +132,7 @@ or write — is blocked. Option (b) is the safer floor.
 ## Resolved (promoted to MVP)
 
 - **`edit_docs_only` tool added** (v0.1.x). Pure documentation edits had no
-  honest tool choice in the original seventeen-tool surface, which forced
+  honest tool choice in the pre-`edit_docs_only` tool surface, which forced
   the typed surface to be bypassed for any docs-touching workflow during
   self-application. Promoted from coverage-gap entry to a full SPEC §4
   description; see `docs/SPEC.md` §3 (validation, patch scope) and §4
