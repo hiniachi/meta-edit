@@ -90,4 +90,19 @@ describe("parseLogArgs", () => {
     const r = parseLogArgs(["--since", "2026-13-01"]);
     expect(r.ok).toBe(false);
   });
+
+  it("rejects ISO 8601 timestamps with rollover dates (2026-02-31T00:00:00Z)", () => {
+    const r = parseLogArgs(["--since", "2026-02-31T00:00:00Z"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects ISO 8601 timestamps with month 13", () => {
+    const r = parseLogArgs(["--since", "2026-13-01T00:00:00Z"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("accepts a valid ISO 8601 timestamp", () => {
+    const r = parseLogArgs(["--since", "2026-04-30T12:34:56Z"]);
+    expect(r.ok).toBe(true);
+  });
 });

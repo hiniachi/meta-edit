@@ -1,5 +1,6 @@
 import { EditLog, type EditLogEntry } from "../state/edit-log.js";
 import type { RiskLevel } from "../tools/common.js";
+import { parseStrictSince } from "./parse-since.js";
 
 export type LogFilters = {
   tool?: string | undefined;
@@ -83,25 +84,5 @@ function parseTimestamp(ts: string): Date | null {
 }
 
 function parseSinceDate(s: string): Date | null {
-  // Accept YYYY-MM-DD (interpreted as start of that day, local time) or
-  // any value Date(...) can parse (ISO 8601 timestamps with TZ).
-  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (ymd) {
-    const y = Number.parseInt(ymd[1]!, 10);
-    const m = Number.parseInt(ymd[2]!, 10);
-    const d = Number.parseInt(ymd[3]!, 10);
-    const dt = new Date(y, m - 1, d, 0, 0, 0);
-    if (Number.isNaN(dt.getTime())) return null;
-    // Reject silent rollover: Date(2026, 1, 31) yields March 3.
-    if (
-      dt.getFullYear() !== y ||
-      dt.getMonth() !== m - 1 ||
-      dt.getDate() !== d
-    ) {
-      return null;
-    }
-    return dt;
-  }
-  const dt = new Date(s);
-  return Number.isNaN(dt.getTime()) ? null : dt;
+  return parseStrictSince(s);
 }
