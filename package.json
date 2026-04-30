@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
     "test": "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     "typecheck": "tsc --noEmit",
