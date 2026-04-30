@@ -37,11 +37,12 @@ describe("makeApplyingHandler", () => {
 
     const result = await handler("edit_boundary_condition", {
       target_file: "src/foo.ts",
-      patch:
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
       rationale: "Tighten by one.",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
+      changes: [
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
     });
 
     expect(result.applied).toBe(true);
@@ -54,6 +55,8 @@ describe("makeApplyingHandler", () => {
     expect(entries[0]?.tool_name).toBe("edit_boundary_condition");
     expect(entries[0]?.edit_id).toBe("edit_20260430_0001");
     expect(entries[0]?.timestamp).toMatch(/^2026-04-30T12:00:00[+\-]\d{2}:\d{2}$/);
+    // patch_size_bytes is now the byte length of the synthesized
+    // unified diff, not the length of any incoming patch string.
     expect(entries[0]?.patch_size_bytes).toBeGreaterThan(0);
   });
 
@@ -69,14 +72,14 @@ describe("makeApplyingHandler", () => {
       now: fixedNow,
     });
 
-    // Empty rationale → validation rejects.
     const result = await handler("edit_boundary_condition", {
       target_file: "src/foo.ts",
-      patch:
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
       rationale: "   ",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
+      changes: [
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
     });
 
     expect(result.applied).toBe(false);
@@ -89,9 +92,9 @@ describe("makeApplyingHandler", () => {
     expect(entries[0]?.warnings.some((w) => w.includes("rationale"))).toBe(true);
   });
 
-  it("logs apply-time failures with applied=false", async () => {
+  it("logs apply-time failures with applied=false on stale old_content", async () => {
     fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
-    fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "DIFFERENT\n", "utf8");
+    fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "DRIFTED\n", "utf8");
     fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
     fs.writeFileSync(path.join(tmpRoot, "tests/foo.test.ts"), "test\n", "utf8");
 
@@ -105,21 +108,23 @@ describe("makeApplyingHandler", () => {
 
     const result = await handler("edit_boundary_condition", {
       target_file: "src/foo.ts",
-      // The patch expects "alpha\n" but the file contains "DIFFERENT\n".
-      patch:
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
-      rationale: "context mismatch should fail apply.",
+      rationale: "stale content should fail apply.",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
+      changes: [
+        // Stale: disk has "DRIFTED\n" but request says "alpha\n".
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
     });
 
     expect(result.applied).toBe(false);
     const entries = log.readAll();
     expect(entries.length).toBe(1);
     expect(entries[0]?.applied).toBe(false);
-    expect(entries[0]?.warnings.some((w) => w.includes("did not apply cleanly"))).toBe(true);
-    // File still untouched.
-    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DIFFERENT\n");
+    expect(
+      entries[0]?.warnings.some((w) => w.includes("stale old_content")),
+    ).toBe(true);
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DRIFTED\n");
   });
 
   it("does not throw if log.append fails after a successful apply", async () => {
@@ -148,21 +153,20 @@ describe("makeApplyingHandler", () => {
 
     const result = await handler("edit_boundary_condition", {
       target_file: "src/foo.ts",
-      patch:
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
       rationale: "log failure must not block reporting the apply result",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
+      changes: [
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
     });
 
-    // The handler MUST NOT throw, and MUST surface the failure as a
-    // warning. The patch IS on disk, so a thrown handler would cause
-    // the client to retry and double-apply.
     expect(appendCalls).toBe(1);
     expect(result.applied).toBe(true);
     expect(
       result.warnings.some(
-        (w) => w.includes("failed to append edit log") &&
+        (w) =>
+          w.includes("failed to append edit log") &&
           w.includes("ENOSPC") &&
           w.includes("audit record may be missing"),
       ),
@@ -191,11 +195,12 @@ describe("makeApplyingHandler", () => {
 
     const result = await handler("edit_boundary_condition", {
       target_file: "src/foo.ts",
-      patch:
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
       rationale: "   ",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
+      changes: [
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
     });
 
     expect(result.applied).toBe(false);
@@ -205,6 +210,41 @@ describe("makeApplyingHandler", () => {
         (w) => w.includes("failed to append edit log") && w.includes("EACCES"),
       ),
     ).toBe(true);
+  });
+
+  it("logs patch_size_bytes=0 on validation failure (no diff synthesis on rejected requests)", async () => {
+    // Defense: synthesizing the unified diff before validation would
+    // let a malicious client force unbounded createTwoFilesPatch work
+    // on requests that are about to be rejected. Validate first; only
+    // synthesize on success.
+    const log = new EditLog(tmpRoot);
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log,
+      applyChanges,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "   ", // empty rationale → validation rejects
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+      changes: [
+        // Big content; would synthesize a large diff if computed.
+        {
+          file: "src/foo.ts",
+          old_content: "x".repeat(100_000),
+          new_content: "y".repeat(100_000),
+        },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.applied).toBe(false);
+    expect(entries[0]?.patch_size_bytes).toBe(0);
   });
 
   it("assigns monotonic edit_id values across multiple calls", async () => {
@@ -224,17 +264,21 @@ describe("makeApplyingHandler", () => {
 
     const r1 = await handler("edit_boundary_condition", {
       target_file: "src/a.ts",
-      patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-a\n+A\n",
       rationale: "first",
       risk_level: "low",
       test_files: ["tests/x.test.ts"],
+      changes: [
+        { file: "src/a.ts", old_content: "a\n", new_content: "A\n" },
+      ],
     });
     const r2 = await handler("edit_boundary_condition", {
       target_file: "src/b.ts",
-      patch: "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1,1 +1,1 @@\n-b\n+B\n",
       rationale: "second",
       risk_level: "low",
       test_files: ["tests/x.test.ts"],
+      changes: [
+        { file: "src/b.ts", old_content: "b\n", new_content: "B\n" },
+      ],
     });
 
     expect(r1.edit_id).toBe("edit_20260430_0001");

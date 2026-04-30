@@ -620,3 +620,107 @@ case that pure `--dry-run` still passes).
 
 Total `bash-write-policy.test.ts`: **172 pass, 0 fail**. Full
 suite: **336 pass, 0 fail**. typecheck clean. build clean.
+
+## v0.1.2 PR D: replace `patch` with content-pair `changes` (BREAKING)
+
+- Completed: 2026-04-30
+- Trigger: user-directed promotion of OBSERVED-FAILURES.md item 9
+  (Phase 3 validation tool-surface DX gap, Option B) to v0.1.2.
+  Per session plan
+  `~/.claude/plans/observed-failures-md-v0-2-v0-1-2-pr-code-snug-ember.md`
+  and the mmpi pipeline plan files under
+  `docs/plan/pr-d-content-pair-schema/`.
+- What works:
+  - **New request shape**:
+    ```typescript
+    {
+      target_file: string;
+      rationale: string;
+      risk_level: "low" | "medium" | "high" | "critical";
+      test_files: string[];
+      changes: Array<{
+        file: string;
+        old_content: string;
+        new_content: string;
+      }>;
+    }
+    ```
+    The `patch: string` field is gone. No compat shim. Updated in
+    `src/tools/common.ts` (`EditToolRequestSchema`, `Change`,
+    `EditToolRequest`), `src/tools/registry.ts` (`inputSchema`),
+    `docs/SPEC.md` §3 type block.
+  - **Validation rewrite** in `validateRequest` (`src/tools/common.ts`):
+    rationale, test_files cardinality, target_file path-safety,
+    test_files path-safety (unchanged from prior PRs); plus
+    `changes` non-empty, total payload ≤ `MAX_CHANGE_BYTES` (1 MiB,
+    summed across `Buffer.byteLength(old_content,'utf8') +
+    Buffer.byteLength(new_content,'utf8')` for each change), per-
+    change NUL-byte rejection on both old and new content,
+    per-change path-safety, scope (target_file ∪ test_files; only
+    target_file for `edit_test_only_change`), and duplicate-
+    canonical rejection.
+  - **Apply rewrite** in `applyChanges` (`src/tools/apply.ts`):
+    drops `parsePatch` / `applyPatch`; reuses the existing TOCTOU
+    re-realpath, parent-drift check, sibling-temp + rename +
+    parent-fsync atomic-write path. New phase-1 preflight reads
+    each `change.file` from disk and asserts `current === oldContent`
+    before any write. ENOENT at apply is treated as a request error
+    ("modify-only requires the file already exist"), not creation.
+    Multi-file atomicity is best-effort: if any precondition or
+    temp-write fails, no target is modified; rename failures
+    after some renames committed surface a partial-write warning.
+  - **Edit log** (`src/state/edit-log.ts` shape unchanged):
+    `patch_size_bytes` is now the byte length of
+    `Diff.createTwoFilesPatch(file, file, old, new, "old", "new")`
+    joined across every `change` in the request. Computed from
+    request inputs, populated on both success and failure paths.
+    Field name preserved for log-shape compat per SPEC §6.
+  - **Spec sync**: `docs/SPEC.md` §3 type block, validation rules,
+    patch-scope, path-safety, and "what the server does, in order"
+    list all updated. §6 `patch_size_bytes` description updated.
+  - **Version bump**: `package.json` and `.claude-plugin/plugin.json`
+    to `0.1.2`. dist/ regenerated and committed (per the
+    `package.json` `files: ["dist/", ...]` ship contract).
+  - **OBSERVED-FAILURES.md**: item 9 (Phase 3 DX) moved to "Resolved
+    (promoted to MVP)" with full description of what landed.
+- Codex MCP plan-gate review (Phase 7, mmpi pipeline):
+  - Round 1: 2 HIGH (multi-file atomicity false claim;
+    `dist/` omitted from blast-radius) + 4 MEDIUM (no-create/
+    no-delete contract not stated; byte-counting inconsistency;
+    test coverage gaps; README not in scope).
+  - Round 2: all round-1 findings resolved. New MEDIUM (`tmp/`
+    protected-path exemption) addressed by switching to the
+    existing sibling-temp pattern (no `.meta-edit/tmp/` use). New
+    LOW (stale Unit A/B references) cleaned up.
+  - Round 2 verdict: `no remaining CRITICAL/HIGH issues`.
+- Known issues: none introduced. The schema is intentionally
+  not `.strict()` so future versions can add fields without
+  breaking older readers (mirrors PR C's `EditLogEntrySchema`
+  posture).
+- Tests rewritten:
+  - `src/tools/common.test.ts` — 30 tests covering rationale,
+    test_files cardinality, path safety, changes-shape (empty
+    array, payload bound, NUL byte in old/new), scope (single +
+    multi-change, target_file ∪ test_files, duplicate canonical,
+    edit_test_only_change strict scope, edit_docs_only scope),
+    happy-path including a per-tool parameterized smoke over all
+    eighteen `TOOL_NAMES`, plus a real-filesystem suite covering
+    symlink-into-protected and realpath-fail-closed.
+  - `src/tools/apply.test.ts` — 13 tests covering single + multi
+    happy paths, stale `old_content` mismatch (no writes), multi-
+    change all-or-nothing on stale second change, ENOENT modify-
+    only behavior, EACCES at apply (skipped on Windows), symlink-
+    out-of-repo escape, drift-to-other-in-repo path, drift-into-
+    protected, mode preservation, no-temp-leftovers, no-write-on-
+    second-missing, hard-fail without O_NOFOLLOW, defense-in-depth
+    duplicate canonical at apply.
+  - `src/tools/handler.test.ts` — 6 tests covering successful
+    edit, validation rejection, stale-content apply rejection, log-
+    append-failure isolation on success, log-append-failure on
+    validation rejection, monotonic edit_id.
+  - `src/tools/registry.test.ts` — unchanged (asserts the eighteen
+    tool names + descriptions; PR D's schema change is opaque to
+    those assertions).
+- Spec deviations: none. SPEC.md and `EditToolRequestSchema` /
+  `inputSchema` are kept in lockstep per CLAUDE.md §4.
+- Tests: 282 pass, 0 fail. typecheck clean. build clean.

@@ -3,32 +3,34 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  MAX_PATCH_BYTES,
+  MAX_CHANGE_BYTES,
   validateRequest,
+  type Change,
   type EditToolRequest,
   type ValidationContext,
 } from "./common.js";
+import { TOOL_NAMES } from "./descriptions.js";
 
 const REPO_ROOT = "/tmp/meta-edit-test-repo";
 const ctx: ValidationContext = { repoRoot: REPO_ROOT };
 
-function makePatch(file: string, isCreation = false, isDeletion = false): string {
-  if (isCreation) {
-    return `--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,1 @@\n+hello\n`;
-  }
-  if (isDeletion) {
-    return `--- a/${file}\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-hello\n`;
-  }
-  return `--- a/${file}\n+++ b/${file}\n@@ -1,1 +1,1 @@\n-foo\n+bar\n`;
+function makeChange(
+  file: string,
+  oldContent = "foo\n",
+  newContent = "bar\n",
+): Change {
+  return { file, old_content: oldContent, new_content: newContent };
 }
 
-function baseRequest(overrides: Partial<EditToolRequest> = {}): EditToolRequest {
+function baseRequest(
+  overrides: Partial<EditToolRequest> = {},
+): EditToolRequest {
   return {
     target_file: "src/foo.ts",
-    patch: makePatch("src/foo.ts"),
     rationale: "Tighten boundary check to avoid off-by-one.",
     risk_level: "medium",
     test_files: ["tests/foo.test.ts"],
+    changes: [makeChange("src/foo.ts")],
     ...overrides,
   };
 }
@@ -77,7 +79,7 @@ describe("validateRequest", () => {
         "edit_test_only_change",
         baseRequest({
           target_file: "tests/foo.test.ts",
-          patch: makePatch("tests/foo.test.ts"),
+          changes: [makeChange("tests/foo.test.ts")],
           test_files: ["tests/foo.test.ts"],
         }),
         ctx,
@@ -92,12 +94,12 @@ describe("validateRequest", () => {
       }
     });
 
-    it("accepts edit_test_only_change with empty test_files and target_file-only patch", () => {
+    it("accepts edit_test_only_change with empty test_files and target_file-only changes", () => {
       const r = validateRequest(
         "edit_test_only_change",
         baseRequest({
           target_file: "tests/foo.test.ts",
-          patch: makePatch("tests/foo.test.ts"),
+          changes: [makeChange("tests/foo.test.ts")],
           test_files: [],
         }),
         ctx,
@@ -110,7 +112,7 @@ describe("validateRequest", () => {
         "edit_docs_only",
         baseRequest({
           target_file: "OBSERVED-FAILURES.md",
-          patch: makePatch("OBSERVED-FAILURES.md"),
+          changes: [makeChange("OBSERVED-FAILURES.md")],
           test_files: [],
         }),
         ctx,
@@ -122,15 +124,11 @@ describe("validateRequest", () => {
     });
 
     it("does not enforce empty test_files for edit_docs_only (test_files may be empty, per SPEC §4)", () => {
-      // edit_docs_only's description says "test_files may be empty" — i.e.,
-      // empty is permitted but not required. A non-empty test_files declaration
-      // is also accepted; the patch-scope rules then apply uniformly with
-      // edit_refactor_only (target_file plus listed test_files are in scope).
       const r = validateRequest(
         "edit_docs_only",
         baseRequest({
           target_file: "README.md",
-          patch: makePatch("README.md"),
+          changes: [makeChange("README.md")],
           test_files: ["tests/foo.test.ts"],
         }),
         ctx,
@@ -160,9 +158,9 @@ describe("validateRequest", () => {
       );
       expect(r.ok).toBe(false);
       if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("escapes repository root"))).toBe(
-          true,
-        );
+        expect(
+          r.warnings.some((w) => w.includes("escapes repository root")),
+        ).toBe(true);
       }
     });
 
@@ -171,7 +169,7 @@ describe("validateRequest", () => {
         "edit_boundary_condition",
         baseRequest({
           target_file: ".meta-edit/state/edits.jsonl",
-          patch: makePatch(".meta-edit/state/edits.jsonl"),
+          changes: [makeChange(".meta-edit/state/edits.jsonl")],
         }),
         ctx,
       );
@@ -186,7 +184,7 @@ describe("validateRequest", () => {
         "edit_boundary_condition",
         baseRequest({
           target_file: ".meta-edit/tmp/scratch.txt",
-          patch: makePatch(".meta-edit/tmp/scratch.txt"),
+          changes: [makeChange(".meta-edit/tmp/scratch.txt")],
         }),
         ctx,
       );
@@ -202,7 +200,7 @@ describe("validateRequest", () => {
         "edit_boundary_condition",
         baseRequest({
           target_file: aliased,
-          patch: makePatch(aliased),
+          changes: [makeChange(aliased)],
         }),
         ctx,
       );
@@ -216,13 +214,13 @@ describe("validateRequest", () => {
       }
     });
 
-    it("rejects patch-internal path aliasing into protected path via traversal", () => {
+    it("rejects change.file aliasing into protected path via traversal", () => {
       const innerAlias = "tests/../.meta-edit/tmp/scratch.txt";
-      const aliasedPatch =
-        `--- a/${innerAlias}\n+++ b/${innerAlias}\n@@ -1,1 +1,1 @@\n-x\n+y\n`;
       const r = validateRequest(
         "edit_boundary_condition",
-        baseRequest({ patch: aliasedPatch }),
+        baseRequest({
+          changes: [makeChange("src/foo.ts"), makeChange(innerAlias)],
+        }),
         ctx,
       );
       expect(r.ok).toBe(false);
@@ -236,90 +234,151 @@ describe("validateRequest", () => {
     });
   });
 
-  describe("modify-only enforcement", () => {
-    it("rejects file creation", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: makePatch("src/foo.ts", true, false) }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("creation"))).toBe(true);
-      }
-    });
-
-    it("rejects file deletion", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: makePatch("src/foo.ts", false, true) }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("deletion"))).toBe(true);
-      }
-    });
-
-    it("rejects rename", () => {
-      const renamePatch =
-        "--- a/src/foo.ts\n+++ b/src/bar.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: renamePatch }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("rename"))).toBe(true);
-      }
-    });
-  });
-
-  describe("patch scope", () => {
-    it("rejects patch touching files outside target_file + test_files", () => {
-      const multiFilePatch =
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
-        "--- a/src/other.ts\n+++ b/src/other.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: multiFilePatch }),
-        ctx,
-      );
+  describe("changes shape", () => {
+    it("rejects an empty changes array via zod (the .min(1) refinement)", () => {
+      // The schema enforces .min(1); but validateRequest is called with an
+      // already-typed object so we exercise the in-handler defensive
+      // re-check via a cast.
+      const req = baseRequest({ changes: [] as unknown as EditToolRequest["changes"] });
+      const r = validateRequest("edit_boundary_condition", req, ctx);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
-          r.warnings.some((w) => w.includes('"src/other.ts"') && w.includes("scope")),
+          r.warnings.some((w) => w.includes("changes") && w.includes("at least one")),
         ).toBe(true);
       }
     });
 
-    it("rejects a patch with multiple sections targeting the same canonical", () => {
-      const duplicatedPatch =
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n" +
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-beta\n+gamma\n";
+    it("rejects more than MAX_CHANGES_PER_REQUEST entries", () => {
+      // Defensive cap: too many changes per request would force a
+      // large `Buffer.byteLength` sweep + `createTwoFilesPatch`
+      // synthesis. The cap is 100; 101 must be rejected.
+      const tooMany = Array.from({ length: 101 }, (_, i) =>
+        makeChange(`src/foo.ts`, `o${i}`, `n${i}`),
+      );
       const r = validateRequest(
         "edit_boundary_condition",
-        baseRequest({ patch: duplicatedPatch }),
+        baseRequest({ changes: tooMany }),
         ctx,
       );
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
           r.warnings.some(
-            (w) => w.includes("multiple sections") && w.includes("src/foo.ts"),
+            (w) => w.includes("entries") && w.includes("entry limit"),
           ),
         ).toBe(true);
       }
     });
 
-    it("accepts patch touching target_file and listed test_files", () => {
-      const multiFilePatch =
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
-        "--- a/tests/foo.test.ts\n+++ b/tests/foo.test.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+    it("rejects total payload over MAX_CHANGE_BYTES", () => {
+      const big = "x".repeat(MAX_CHANGE_BYTES);
       const r = validateRequest(
         "edit_boundary_condition",
-        baseRequest({ patch: multiFilePatch }),
+        baseRequest({
+          changes: [makeChange("src/foo.ts", "y", big)],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("exceeds the") && w.includes("byte limit"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects NUL byte in old_content", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [makeChange("src/foo.ts", "before\0after", "after")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("old_content") && w.includes("NUL"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects NUL byte in new_content", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [makeChange("src/foo.ts", "before", "after\0and-more")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("new_content") && w.includes("NUL"),
+          ),
+        ).toBe(true);
+      }
+    });
+  });
+
+  describe("scope", () => {
+    it("rejects a change touching files outside target_file + test_files", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [
+            makeChange("src/foo.ts"),
+            makeChange("src/other.ts", "x", "y"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes('"src/other.ts"') && w.includes("scope"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects a request with multiple changes targeting the same canonical", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/foo.ts", "beta", "gamma"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("multiple entries") && w.includes("src/foo.ts"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts a change touching target_file and listed test_files", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [
+            makeChange("src/foo.ts"),
+            makeChange("tests/foo.test.ts", "old", "new"),
+          ],
+        }),
         ctx,
       );
       expect(r.ok).toBe(true);
@@ -330,15 +389,17 @@ describe("validateRequest", () => {
       }
     });
 
-    it("rejects edit_test_only_change patch touching files other than target_file", () => {
-      const multiFilePatch =
-        "--- a/tests/foo.test.ts\n+++ b/tests/foo.test.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
-        "--- a/tests/bar.test.ts\n+++ b/tests/bar.test.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+    it("rejects edit_test_only_change with a change.file other than target_file", () => {
+      // For edit_test_only_change, only target_file is in scope; test_files
+      // must be empty so a second change is automatically out-of-scope.
       const r = validateRequest(
         "edit_test_only_change",
         baseRequest({
           target_file: "tests/foo.test.ts",
-          patch: multiFilePatch,
+          changes: [
+            makeChange("tests/foo.test.ts"),
+            makeChange("tests/bar.test.ts", "x", "y"),
+          ],
           test_files: [],
         }),
         ctx,
@@ -353,20 +414,15 @@ describe("validateRequest", () => {
       }
     });
 
-    it("accepts edit_docs_only with target_file plus declared test_files patch (matches edit_refactor_only scope)", () => {
-      // edit_docs_only follows the same patch-scope rule as
-      // edit_refactor_only: the patch may touch target_file and any listed
-      // test_files. Whether the change should have been split is a question
-      // the description (§4 MUST-NOT) addresses; the server does not enforce
-      // it.
-      const multiFilePatch =
-        "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
-        "--- a/tests/foo.test.ts\n+++ b/tests/foo.test.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+    it("accepts edit_docs_only with target_file plus declared test_files changes", () => {
       const r = validateRequest(
         "edit_docs_only",
         baseRequest({
           target_file: "README.md",
-          patch: multiFilePatch,
+          changes: [
+            makeChange("README.md"),
+            makeChange("tests/foo.test.ts", "x", "y"),
+          ],
           test_files: ["tests/foo.test.ts"],
         }),
         ctx,
@@ -379,15 +435,15 @@ describe("validateRequest", () => {
       }
     });
 
-    it("rejects edit_docs_only patch touching files outside target_file + test_files", () => {
-      const multiFilePatch =
-        "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-foo\n+bar\n" +
-        "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+    it("rejects edit_docs_only changes touching files outside target_file + test_files", () => {
       const r = validateRequest(
         "edit_docs_only",
         baseRequest({
           target_file: "README.md",
-          patch: multiFilePatch,
+          changes: [
+            makeChange("README.md"),
+            makeChange("src/foo.ts", "x", "y"),
+          ],
           test_files: [],
         }),
         ctx,
@@ -403,177 +459,39 @@ describe("validateRequest", () => {
     });
   });
 
-  describe("patch parsing", () => {
-    it("rejects unparseable patch", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: "this is not a unified diff" }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("could not be parsed") ||
-              w.includes("did not contain any file headers") ||
-              w.includes("no file header") ||
-              w.includes("no hunks"),
-          ),
-        ).toBe(true);
-      }
-    });
-  });
-
   describe("happy path", () => {
     it("accepts a well-formed boundary condition edit", () => {
       const r = validateRequest("edit_boundary_condition", baseRequest(), ctx);
       expect(r.ok).toBe(true);
       if (r.ok) {
         expect(r.touchedFiles).toEqual(["src/foo.ts"]);
-      }
-    });
-  });
-
-  describe("diff prefix conventions", () => {
-    it("accepts c/d-prefixed unified diffs as modify-only", () => {
-      const cdPatch =
-        "--- c/src/foo.ts\n+++ d/src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: cdPatch }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles).toEqual(["src/foo.ts"]);
+        expect(r.changes.length).toBe(1);
+        expect(r.changes[0]?.canonical).toBe("src/foo.ts");
+        expect(r.changes[0]?.oldContent).toBe("foo\n");
+        expect(r.changes[0]?.newContent).toBe("bar\n");
       }
     });
 
-    it("accepts no-prefix unified diffs", () => {
-      const noPrefix =
-        "--- src/foo.ts\n+++ src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: noPrefix }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles).toEqual(["src/foo.ts"]);
-      }
-    });
-  });
-
-  describe("git extended headers", () => {
-    it("rejects a patch carrying `rename from` / `rename to`", () => {
-      const renamePatch =
-        "diff --git a/src/foo.ts b/src/bar.ts\n" +
-        "similarity index 95%\n" +
-        "rename from src/foo.ts\n" +
-        "rename to src/bar.ts\n" +
-        "--- a/src/foo.ts\n+++ b/src/bar.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: renamePatch }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("rename from")),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects a patch carrying `new file mode`", () => {
-      const newFile =
-        "diff --git a/src/new.ts b/src/new.ts\n" +
-        "new file mode 100644\n" +
-        "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,1 @@\n+content\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: newFile }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("new file mode")),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects a patch carrying `deleted file mode`", () => {
-      const deletedFile =
-        "diff --git a/src/old.ts b/src/old.ts\n" +
-        "deleted file mode 100644\n" +
-        "--- a/src/old.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-content\n";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: deletedFile }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("deleted file mode")),
-        ).toBe(true);
-      }
-    });
-
-    const headerCases: Array<[string, string]> = [
-      ["copy from", "copy from src/foo.ts\n"],
-      ["copy to", "copy to src/bar.ts\n"],
-      ["similarity index", "similarity index 100%\n"],
-      ["dissimilarity index", "dissimilarity index 100%\n"],
-    ];
-    for (const [headerName, headerLine] of headerCases) {
-      it(`rejects a patch carrying \`${headerName}\``, () => {
-        const patch =
-          `diff --git a/src/foo.ts b/src/foo.ts\n` +
-          headerLine +
-          `--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-foo\n+bar\n`;
-        const r = validateRequest(
-          "edit_boundary_condition",
-          baseRequest({ patch }),
-          ctx,
-        );
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.warnings.some((w) => w.includes(headerName))).toBe(true);
+    it("accepts the new shape for every one of the eighteen edit_* tools", () => {
+      // Smoke test: validate each tool's typical request shape passes.
+      // For tools requiring test_files, use the default test_files entry;
+      // for edit_test_only_change, target only itself; for refactor /
+      // docs, no test_files.
+      for (const name of TOOL_NAMES) {
+        let req: EditToolRequest;
+        if (name === "edit_test_only_change") {
+          req = baseRequest({
+            target_file: "tests/foo.test.ts",
+            changes: [makeChange("tests/foo.test.ts")],
+            test_files: [],
+          });
+        } else if (name === "edit_refactor_only" || name === "edit_docs_only") {
+          req = baseRequest({ test_files: [] });
+        } else {
+          req = baseRequest();
         }
-      });
-    }
-  });
-
-  describe("input hardening (CVE-2026-24001 defense)", () => {
-    it("rejects patches containing a NUL byte", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          patch: "--- a/foo.ts\n+++ b/foo.ts \n@@ -1,1 +1,1 @@\n-x\n+y\n",
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("NUL byte"))).toBe(true);
-      }
-    });
-
-    it("rejects patches larger than the size limit before parsing", () => {
-      const bigPatch = "x".repeat(MAX_PATCH_BYTES + 1);
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ patch: bigPatch }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("exceeds the") && w.includes("byte limit")),
-        ).toBe(true);
+        const r = validateRequest(name, req, ctx);
+        expect(r.ok).toBe(true);
       }
     });
   });
@@ -598,16 +516,14 @@ describe("validateRequest with real filesystem (symlink)", () => {
 
   it("rejects target_file that traverses a symlink into protected dir", () => {
     const aliased = "src/state-link/edits.jsonl";
-    const patch =
-      `--- a/${aliased}\n+++ b/${aliased}\n@@ -1,1 +1,1 @@\n-x\n+y\n`;
     const r = validateRequest(
       "edit_boundary_condition",
       {
         target_file: aliased,
-        patch,
         rationale: "should be rejected",
         risk_level: "medium",
         test_files: ["tests/foo.test.ts"],
+        changes: [makeChange(aliased)],
       },
       { repoRoot: tmpRoot },
     );
@@ -621,18 +537,16 @@ describe("validateRequest with real filesystem (symlink)", () => {
     }
   });
 
-  it("rejects patch-internal path that traverses a symlink into protected dir", () => {
+  it("rejects change.file that traverses a symlink into protected dir", () => {
     const innerAlias = "src/state-link/edits.jsonl";
-    const aliasedPatch =
-      `--- a/${innerAlias}\n+++ b/${innerAlias}\n@@ -1,1 +1,1 @@\n-x\n+y\n`;
     const r = validateRequest(
       "edit_boundary_condition",
       {
         target_file: "src/foo.ts",
-        patch: aliasedPatch,
-        rationale: "should be rejected via patch path",
+        rationale: "should be rejected via change path",
         risk_level: "medium",
         test_files: ["tests/foo.test.ts"],
+        changes: [makeChange("src/foo.ts"), makeChange(innerAlias)],
       },
       { repoRoot: tmpRoot },
     );
@@ -647,8 +561,6 @@ describe("validateRequest with real filesystem (symlink)", () => {
   });
 
   it("fails closed when realpath cannot canonicalize (symlink loop)", () => {
-    // Self-referential symlink: realpath returns ELOOP. We must reject
-    // rather than fall back to the lexical form.
     const loopPath = path.join(tmpRoot, "loop");
     fs.symlinkSync(loopPath, loopPath);
     try {
@@ -656,10 +568,10 @@ describe("validateRequest with real filesystem (symlink)", () => {
         "edit_boundary_condition",
         {
           target_file: "loop",
-          patch: "--- a/loop\n+++ b/loop\n@@ -1,1 +1,1 @@\n-x\n+y\n",
           rationale: "should be rejected because realpath cannot resolve",
           risk_level: "medium",
           test_files: ["tests/foo.test.ts"],
+          changes: [makeChange("loop")],
         },
         { repoRoot: tmpRoot },
       );

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parsePatch, type StructuredPatch } from "diff";
+import * as Diff from "diff";
 import { z } from "zod";
 import {
   TOOLS_REQUIRING_TEST_FILES,
@@ -14,12 +14,35 @@ import {
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
+// A single content-pair change. The server reads disk content and
+// asserts byte-for-byte equality with `old_content` before any write,
+// then atomically replaces the file with `new_content`. Modify-only:
+// the file must already exist; creation, deletion, and rename are not
+// representable in this shape.
+export const ChangeSchema = z.object({
+  file: z.string().min(1),
+  old_content: z.string(),
+  new_content: z.string(),
+});
+export type Change = z.infer<typeof ChangeSchema>;
+
+// Defensive cap on the number of `change` entries. Combined with
+// `MAX_CHANGE_BYTES`, this bounds the total work the server has to do
+// per request — both for validation (per-change `checkPathSafety`,
+// NUL scan) and for the synthesized-diff computation that populates
+// `patch_size_bytes`. Chosen well above any realistic agent edit
+// (typical: 1-5 changes per call).
+export const MAX_CHANGES_PER_REQUEST = 100;
+
 export const EditToolRequestSchema = z.object({
   target_file: z.string().min(1),
-  patch: z.string().min(1),
   rationale: z.string(),
   risk_level: RiskLevelSchema,
   test_files: z.array(z.string()),
+  changes: z
+    .array(ChangeSchema)
+    .min(1)
+    .max(MAX_CHANGES_PER_REQUEST),
 });
 
 export type EditToolRequest = z.infer<typeof EditToolRequestSchema>;
@@ -39,36 +62,26 @@ export type ValidationFailure = {
   warnings: string[];
 };
 
-export type PatchChange = {
+export type ContentChange = {
   canonical: string;
-  diff: StructuredPatch;
+  oldContent: string;
+  newContent: string;
 };
 
 export type ValidationSuccess = {
   ok: true;
   touchedFiles: string[];
-  changes: PatchChange[];
+  changes: ContentChange[];
 };
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
 
-// Defensive bound on patch size to keep parsePatch's worst-case bounded
-// and to avoid pathological inputs from a malicious MCP client.
-export const MAX_PATCH_BYTES = 1_048_576;
-
-// Git extended diff headers that imply a non-modify-only operation.
-// Even when oldFileName/newFileName look benign, we reject these so a
-// downstream applier cannot honor the extended semantics behind our back.
-const FORBIDDEN_EXTENDED_HEADERS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: "rename from", pattern: /^rename from /m },
-  { name: "rename to", pattern: /^rename to /m },
-  { name: "copy from", pattern: /^copy from /m },
-  { name: "copy to", pattern: /^copy to /m },
-  { name: "new file mode", pattern: /^new file mode /m },
-  { name: "deleted file mode", pattern: /^deleted file mode /m },
-  { name: "similarity index", pattern: /^similarity index /m },
-  { name: "dissimilarity index", pattern: /^dissimilarity index /m },
-];
+// Defensive bound on the total request payload size: the sum across
+// all `change.old_content` and `change.new_content` of
+// `Buffer.byteLength(s, "utf8")`. Same 1 MiB ceiling the prior
+// `MAX_PATCH_BYTES` enforced on the unified-diff string, just measured
+// on the new shape.
+export const MAX_CHANGE_BYTES = 1_048_576;
 
 export function validateRequest(
   toolName: ToolName,
@@ -106,73 +119,52 @@ export function validateRequest(
     }
   }
 
-  const patchCheck = preValidatePatchInput(request.patch);
-  if (!patchCheck.ok) {
-    warnings.push(...patchCheck.errors);
+  if (request.changes.length === 0) {
+    warnings.push("changes must contain at least one entry");
     return { ok: false, warnings };
   }
-
-  let parsed;
-  try {
-    parsed = parsePatch(request.patch);
-  } catch (err) {
+  if (request.changes.length > MAX_CHANGES_PER_REQUEST) {
     warnings.push(
-      `patch could not be parsed as a unified diff: ${(err as Error).message}`,
+      `changes contains ${request.changes.length} entries; exceeds the ${MAX_CHANGES_PER_REQUEST}-entry limit`,
     );
     return { ok: false, warnings };
   }
-  if (parsed.length === 0) {
-    warnings.push("patch did not contain any file headers");
+
+  let totalBytes = 0;
+  for (const c of request.changes) {
+    totalBytes +=
+      Buffer.byteLength(c.old_content, "utf8") +
+      Buffer.byteLength(c.new_content, "utf8");
+  }
+  if (totalBytes > MAX_CHANGE_BYTES) {
+    warnings.push(
+      `changes total payload is ${totalBytes} bytes; exceeds the ${MAX_CHANGE_BYTES}-byte limit`,
+    );
     return { ok: false, warnings };
   }
 
   const touched: string[] = [];
-  const changes: PatchChange[] = [];
-  for (const p of parsed) {
-    if (!p.oldFileName && !p.newFileName) {
-      warnings.push(
-        "patch entry has no file header; input is not a valid unified diff",
-      );
+  const changes: ContentChange[] = [];
+  for (const c of request.changes) {
+    if (c.old_content.includes("\0")) {
+      warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-    if (!p.hunks || p.hunks.length === 0) {
-      warnings.push(
-        `patch entry for "${p.oldFileName ?? p.newFileName}" has no hunks`,
-      );
+    if (c.new_content.includes("\0")) {
+      warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-
-    const cls = classifyPatchFile(p.oldFileName, p.newFileName);
-    if (cls.kind === "invalid") {
-      warnings.push("patch entry has no usable file header");
-      continue;
-    }
-    if (cls.kind === "creation") {
-      warnings.push(
-        "patch contains a file creation (/dev/null source); modify-only patches are required",
-      );
-      continue;
-    }
-    if (cls.kind === "deletion") {
-      warnings.push(
-        `patch contains a file deletion (${cls.filename}); modify-only patches are required`,
-      );
-      continue;
-    }
-    if (cls.kind === "rename") {
-      warnings.push(
-        `patch contains a rename (${cls.from} -> ${cls.to}); modify-only patches are required`,
-      );
-      continue;
-    }
-
-    const safe = checkPathSafety(cls.filename, ctx.repoRoot);
+    const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
-      warnings.push(`patch path "${cls.filename}": ${safe.error}`);
+      warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
     touched.push(safe.canonical);
-    changes.push({ canonical: safe.canonical, diff: p });
+    changes.push({
+      canonical: safe.canonical,
+      oldContent: c.old_content,
+      newContent: c.new_content,
+    });
   }
 
   const allowed = new Set<string>();
@@ -189,25 +181,22 @@ export function validateRequest(
     if (!allowed.has(t)) {
       const allowedList = [...allowed].join(", ");
       warnings.push(
-        `patch modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`,
+        `change modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`,
       );
     }
   }
 
-  // Reject patches that contain multiple sections targeting the same
-  // canonical path. Applying each section independently re-reads the
-  // original disk content, so later sections silently clobber earlier
-  // ones and the call returns applied:true with hunks dropped. We could
-  // merge hunks ourselves, but hunk-merge across sections is ambiguous
-  // under diff@9's fuzzFactor=0 + repeated-line semantics — a low-
-  // context hunk with repeated deleted lines could match at the wrong
-  // line after an earlier section inserted/deleted lines. Rejecting
-  // outright is safer; clients can split into separate edit_* calls.
+  // Reject duplicate canonicals. Earlier validateRequest rejected
+  // multi-section patches that targeted the same file; the same
+  // protection applies here. Two changes pointing at the same
+  // canonical path mean the second silently wins and the first's
+  // intent is lost — clearer to fail and have the caller submit
+  // separate edit_* calls.
   const seenCanonical = new Set<string>();
   for (const t of touched) {
     if (seenCanonical.has(t)) {
       warnings.push(
-        `patch contains multiple sections targeting "${t}". Submit each as its own edit_* call so hunks are not silently dropped.`,
+        `changes contain multiple entries targeting "${t}". Submit each as its own edit_* call so changes are not silently dropped.`,
       );
     } else {
       seenCanonical.add(t);
@@ -252,7 +241,7 @@ export type EditLogLike = {
 
 export type ApplyChangesFn = (
   repoRoot: string,
-  changes: PatchChange[],
+  changes: ContentChange[],
 ) => import("./apply.js").ApplyResult;
 
 export type ApplyingHandlerDependencies = {
@@ -271,7 +260,6 @@ export function makeApplyingHandler(
   return async (toolName, args) => {
     const ts = now();
     const editId = log.nextEditId(ts);
-    const patchSize = Buffer.byteLength(args.patch, "utf8");
     const baseEntry = {
       edit_id: editId,
       timestamp: isoTimestampForHandler(ts),
@@ -280,13 +268,18 @@ export function makeApplyingHandler(
       rationale: args.rationale,
       risk_level: args.risk_level,
       test_files: args.test_files,
-      patch_size_bytes: patchSize,
     } as const;
 
     const validation = validateRequest(toolName, args, ctx);
     if (!validation.ok) {
+      // Synthesizing the unified diff before validation would let a
+      // malicious or buggy client force unbounded `createTwoFilesPatch`
+      // work on a request that was about to be rejected. We log
+      // `patch_size_bytes: 0` on validation failure — there is no
+      // applied diff to measure.
       const finalWarnings = appendLogSafely(log, {
         ...baseEntry,
+        patch_size_bytes: 0,
         applied: false,
         warnings: validation.warnings,
       });
@@ -297,13 +290,31 @@ export function makeApplyingHandler(
       };
     }
 
+    // Validation passed — total payload is bounded by MAX_CHANGE_BYTES
+    // and the changes count is bounded by MAX_CHANGES_PER_REQUEST. Now
+    // it's safe to synthesize the forensic diff for `patch_size_bytes`.
+    let synthesized = "";
+    for (const c of args.changes) {
+      synthesized += Diff.createTwoFilesPatch(
+        c.file,
+        c.file,
+        c.old_content,
+        c.new_content,
+        "old",
+        "new",
+      );
+    }
+    const patchSize = Buffer.byteLength(synthesized, "utf8");
+
     const result = applyChanges(ctx.repoRoot, validation.changes);
-    // The patch is already on disk if result.applied. We MUST NOT throw
-    // out of the handler here even if log.append fails: the client would
-    // see the call as failed and likely retry, causing duplicate edits.
-    // appendLogSafely surfaces the log failure as a warning instead.
+    // The new content is already on disk if result.applied. We MUST NOT
+    // throw out of the handler here even if log.append fails: the
+    // client would see the call as failed and likely retry, causing
+    // duplicate edits. appendLogSafely surfaces the log failure as a
+    // warning instead.
     const finalWarnings = appendLogSafely(log, {
       ...baseEntry,
+      patch_size_bytes: patchSize,
       applied: result.applied,
       warnings: result.warnings,
     });
@@ -345,96 +356,6 @@ function isoTimestampForHandler(d: Date): string {
     `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
     `${sign}${offH}:${offM}`
   );
-}
-
-function preValidatePatchInput(
-  patch: string,
-): { ok: true } | { ok: false; errors: string[] } {
-  const errors: string[] = [];
-
-  const byteLength = Buffer.byteLength(patch, "utf8");
-  if (byteLength > MAX_PATCH_BYTES) {
-    errors.push(
-      `patch is ${byteLength} bytes; exceeds the ${MAX_PATCH_BYTES}-byte limit`,
-    );
-    return { ok: false, errors };
-  }
-
-  if (patch.includes("\0")) {
-    errors.push("patch contains NUL byte; rejected");
-    return { ok: false, errors };
-  }
-
-  for (const { name, pattern } of FORBIDDEN_EXTENDED_HEADERS) {
-    if (pattern.test(patch)) {
-      errors.push(
-        `patch contains git extended header "${name}"; modify-only patches are required`,
-      );
-    }
-  }
-
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true };
-}
-
-type PatchFileClassification =
-  | { kind: "invalid" }
-  | { kind: "creation" }
-  | { kind: "deletion"; filename: string }
-  | { kind: "rename"; from: string; to: string }
-  | { kind: "modify"; filename: string };
-
-function classifyPatchFile(
-  oldName: string | undefined,
-  newName: string | undefined,
-): PatchFileClassification {
-  const oldT = trimDiffHeader(oldName);
-  const newT = trimDiffHeader(newName);
-
-  if (oldT === null && newT === null) {
-    return { kind: "invalid" };
-  }
-  if (oldT === null && newT !== null) {
-    return { kind: "creation" };
-  }
-  if (newT === null && oldT !== null) {
-    return { kind: "deletion", filename: oldT };
-  }
-  if (oldT === newT) {
-    return { kind: "modify", filename: oldT! };
-  }
-  const oldS = stripSingleCharPrefix(oldT!);
-  const newS = stripSingleCharPrefix(newT!);
-  if (oldS !== null && newS !== null && oldS === newS) {
-    return { kind: "modify", filename: oldS };
-  }
-  return {
-    kind: "rename",
-    from: oldS ?? oldT!,
-    to: newS ?? newT!,
-  };
-}
-
-function trimDiffHeader(name: string | undefined): string | null {
-  if (name === undefined || name === null) {
-    return null;
-  }
-  const tabIndex = name.indexOf("\t");
-  const trimmed = (tabIndex >= 0 ? name.slice(0, tabIndex) : name).trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  if (trimmed === "/dev/null") {
-    return null;
-  }
-  return trimmed;
-}
-
-function stripSingleCharPrefix(p: string): string | null {
-  const m = /^[^\s/]\/(.+)$/.exec(p);
-  return m && typeof m[1] === "string" ? m[1] : null;
 }
 
 function checkPathSafety(

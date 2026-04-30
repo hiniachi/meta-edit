@@ -70,22 +70,28 @@ All tools accept the same arguments and return the same result.
 
 ```typescript
 type EditToolRequest = {
-  target_file: string;
-  patch: string;                              // unified diff
+  target_file: string;                        // primary file the edit is about
   rationale: string;                          // 1-3 sentences, non-empty
   risk_level: "low" | "medium" | "high" | "critical";
   test_files: string[];                       // paths of test files relevant to
                                               // this edit. May be files modified
-                                              // in this patch, files the agent
-                                              // commits to updating in immediately
-                                              // following edit_test_only_change
-                                              // calls, or existing tests that
-                                              // already cover the change.
+                                              // in this request, files the agent
+                                              // commits to updating in
+                                              // immediately following
+                                              // edit_test_only_change calls, or
+                                              // existing tests that already
+                                              // cover the change.
                                               // May be empty for
                                               // edit_refactor_only and
                                               // edit_docs_only.
                                               // Must be empty for
                                               // edit_test_only_change.
+  changes: Array<{                            // one or more content-pair
+    file: string;                             // changes; modify-only
+    old_content: string;                      // exact current disk content
+                                              // (server rejects on mismatch)
+    new_content: string;                      // new content to write
+  }>;
 };
 
 type EditToolResult = {
@@ -106,36 +112,41 @@ The MCP server enforces:
 - `rationale` must be non-empty after trim
 - `test_files` must be non-empty for tools other than `edit_refactor_only`, `edit_test_only_change`, and `edit_docs_only`
 - `test_files` must be empty for `edit_test_only_change` (the `target_file` is itself the declared test file)
-- `patch` must apply cleanly (using a standard unified-diff library)
-- `patch` must contain only modifications to existing files; file creations, deletions, and renames are rejected (modify-only)
-- Every file path appearing inside the patch is validated under the same rules as `target_file` (inside repo, not in protected paths)
+- `changes` must be a non-empty array (`.min(1)` zod refinement; defensive re-check at validation time)
+- Each `change.file` is validated under the same path-safety rules as `target_file` (inside repo after `realpath`, not in protected paths)
+- The total payload bytes — the sum of `Buffer.byteLength(change.old_content, "utf8") + Buffer.byteLength(change.new_content, "utf8")` across every change — must not exceed `MAX_CHANGE_BYTES` (1 MiB)
+- Each `change.old_content` and `change.new_content` must not contain a NUL byte
+- `change.file` must reference an existing file on disk at apply time. The content-pair shape is **modify-only**: there is no representation for file creation, deletion, or rename. Missing files fail the call.
+- `change.old_content` must equal the current disk content of `change.file` byte-for-byte at apply time (precondition). A mismatch fails the entire call without writing anything.
+- Apply is two-phase: precondition check (no writes) → per-change sibling temp-write → rename. If any precondition fails OR any temp-write fails, NO target file is modified. Rename failures after some renames committed are reported as warnings (best-effort multi-file atomicity on POSIX).
 - Patch scope rules apply (see below)
 
 Validation failures result in `applied: false` and a clear error message in `warnings`. They do not crash the server.
 
 ### Patch scope
 
-The patch may be a unified diff that touches more than one file, but the set of touched files is restricted.
+The `changes` array may touch more than one file, but the set of touched files is restricted.
 
 For all tools other than `edit_test_only_change`:
 
-- The patch may modify `target_file`
-- The patch may modify any file listed in `test_files`
-- The patch must not modify any other file
+- A `change.file` may equal `target_file`
+- A `change.file` may equal any file listed in `test_files`
+- No `change.file` may reference any other path
+- Two `change.file` entries that resolve to the same canonical path are rejected (use separate `edit_*` calls so changes are not silently dropped)
 
 For `edit_test_only_change`:
 
-- The patch may modify only `target_file`; no other file may be touched
+- A `change.file` may equal `target_file` only; no other file may appear
 - `test_files` must be empty (the agent is declaring that `target_file` is itself the test edit)
 - The server does not pattern-match `target_file` against any test-file pattern. Choosing this tool is itself the agent's declaration that this is a test-only edit; tool selection is the obligation, not server-side classification
 
-A patch that violates these rules is rejected with `applied: false`.
+A request that violates these rules is rejected with `applied: false`.
 
 This rule lets the agent submit a production change and a colocated test addition in a single tool call when convenient (using a non-test-only tool), without forcing it. Splitting into a production edit followed by one or more `edit_test_only_change` calls is also valid; in that case, `test_files` on the production edit lists the planned test-file paths, and each test-file change is its own `edit_test_only_change` call.
 
 ### Path safety
 
-All paths — both `target_file` and any file paths inside the patch — are resolved with `realpath` after symlink resolution. A path is valid only if its resolved absolute path is inside the resolved repository root. Symlinks that resolve outside the repository root are rejected.
+All paths — both `target_file` and any `change.file` — are resolved with `realpath` after symlink resolution. A path is valid only if its resolved absolute path is inside the resolved repository root. Symlinks that resolve outside the repository root are rejected.
 
 The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees for protected paths; protection is enforced through the server's path checks and the bash hook on a best-effort basis.
 
@@ -153,13 +164,16 @@ Specific tools take precedence over generic tools when both could apply:
 
 ### What the server does, in order
 
-1. Validate arguments and patch scope
-2. Resolve and check all paths (target_file and patch-internal paths)
-3. Apply the patch
-4. Append an entry to `.meta-edit/state/edits.jsonl`
-5. Return result
+1. Validate arguments (rationale, test_files cardinality, payload bound, NUL-byte rejection)
+2. Resolve and check all paths (`target_file`, `test_files`, every `change.file`)
+3. Verify changes scope (target_file ∪ test_files; modify-only tool's stricter rule)
+4. Apply phase 1 (preflight): re-realpath each target, read disk, compare to `old_content`. Stop and reject without writing if any check fails.
+5. Apply phase 2 (sibling temp writes): write each `new_content` to a randomly-named sibling file in the same directory as the target.
+6. Apply phase 3 (rename commits): rename each temp into place atomically.
+7. Append an entry to `.meta-edit/state/edits.jsonl`
+8. Return result
 
-The server does not analyze the patch contents. It does not check whether the chosen tool is appropriate for the patch. It does not verify the test files exist or contain meaningful tests. None of that. The whole point is that tool descriptions, not server logic, do the work.
+The server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point is that tool descriptions, not server logic, do the work.
 
 ---
 
@@ -961,11 +975,11 @@ Fields:
 - `rationale`: as supplied by the AI (any language)
 - `risk_level`: as supplied by the AI (recorded for audit, not enforcement)
 - `test_files`: as supplied by the AI
-- `patch_size_bytes`: byte length of the patch
+- `patch_size_bytes`: byte length of the synthesized unified diff (`Diff.createTwoFilesPatch` joined across every `change` in the request, encoded as UTF-8). The field name is preserved for log shape compatibility; the value is computed from the request inputs (no incoming `patch` string exists in v0.1.2+).
 - `applied`: whether the patch applied successfully
 - `warnings`: any warnings or validation errors associated with this edit (empty array on success)
 
-The patch body itself is not stored. If the repository is under version control, external VCS history can often be used to reconstruct individual edits, but `meta-edit` itself does not guarantee patch reconstruction — sequential edits to the same lines, rebases, or amends can make per-edit reconstruction lossy or impossible.
+Per-change content is not stored. The synthesized diff is computed for `patch_size_bytes` and discarded; only its byte length lands in the log. If the repository is under version control, external VCS history can often be used to reconstruct individual edits, but `meta-edit` itself does not guarantee per-edit reconstruction — sequential edits to the same lines, rebases, or amends can make per-edit reconstruction lossy or impossible.
 
 Failed validations also append a record with `applied: false` and the relevant error messages in `warnings` for forensic purposes.
 

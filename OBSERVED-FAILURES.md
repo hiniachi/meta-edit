@@ -16,52 +16,6 @@ gaps were both resolved in v0.1.2 PR B and PR C respectively;
 their entries now live under "Resolved (promoted to MVP)" below. -->
 
 
-## Phase 3 (validation) tool-surface DX gaps
-
-### MEDIUM: Hand-crafted unified diffs are brittle for multi-line additions
-
-`EditToolRequestSchema` accepts only a `patch: string` field, validated
-server-side by `jsdiff`'s `parsePatch`. The parser is strict: every body
-line must begin with `' '`, `'-'`, `'+'`, or `'\'`. Empty body lines
-(produced by paragraph breaks in additions) trigger
-`Hunk at line N contained invalid line ` (trailing space — the line is
-empty). The error message names neither the offending line nor the
-missing prefix, so diagnosis takes several round-trips.
-
-Concretely, observed during Phase 7 + Phase 8 self-application sessions:
-any attempt to add a multi-section block (e.g., two new `describe(...)`
-blocks at the end of `bash-write-policy.test.ts`) by hand-crafting the
-`patch` parameter requires meticulous prefixing of every blank line as
-`' '` (context blank) or `'+'` (add blank). LLM-generated diff strings
-routinely emit raw `\n\n` between paragraphs and fail validation.
-
-The realistic workaround — write new content to `/tmp/x` via Bash, run
-`diff -u`, copy output back into the `patch` parameter — is itself
-fragile: heredoc content that mentions `.meta-edit/state/...` literally
-trips the `deny-bash-write-bypass` protected-path check (see the LOW
-entry above). Layered workarounds compound the friction.
-
-Promotion options for v0.2 (in increasing order of invasiveness):
-
-- **(A) Server-side normalization.** In `preValidatePatchInput`, re-prefix
-  empty body lines with a single space before passing to `parsePatch`.
-  Tiny diff. Doesn't change semantics for valid input. Catches the most
-  common LLM/human mistake.
-- **(B) Alternate request shape.** Accept an `old_content` + `new_content`
-  pair (mutually exclusive with `patch`); server computes the diff
-  internally via `jsdiff.createTwoFilesPatch`. Higher DX ceiling — agents
-  submit the new file content as a string, no diff math needed. Schema
-  change; `EditToolRequest` would become a discriminated union. **This is
-  the option the project author flagged as the right answer for v0.2.**
-- **(C) Better validation errors.** Keep the surface as-is but emit
-  "blank context lines must begin with ` ` (space); offending line: N"
-  instead of "invalid line ". Reduces diagnosis time without solving the
-  underlying authorability problem.
-
-Trigger for promotion: observed in **every** Phase 7+ session that needed
-to add a non-trivial block of test or doc content. Friction is not
-hypothetical; it is structurally on the dogfooding path.
-
 ---
 
 ## Resolved (promoted to MVP)
@@ -140,3 +94,26 @@ hypothetical; it is structurally on the dogfooding path.
   - LOW "Unicode line separators / CRLF / `\r` alone" —
     `primarySplitSegments` now treats `\r`, U+2028, and U+2029 as
     additional separators alongside `\n`.
+- **`patch` field replaced with content-pair `changes`** (v0.1.2).
+  `EditToolRequest` no longer takes `patch: string`; the new shape is
+  `{ target_file, rationale, risk_level, test_files, changes:
+  [{file, old_content, new_content}, ...] }`. The server reads each
+  `change.file` from disk and asserts byte-for-byte equality with
+  `old_content` before any write (precondition), then atomically
+  replaces the file with `new_content` via the existing sibling-temp
+  + rename + parent-fsync path. **Modify-only**: missing files fail
+  the call (no creation). Apply is two-phase atomic: precondition
+  preflight (no writes) → all sibling-temp writes → all renames; if
+  any precondition or temp-write fails, no target file is modified.
+  `patch_size_bytes` in the edit log is preserved for shape compat
+  but its value semantics shifted to "byte length of synthesized
+  unified diff via `Diff.createTwoFilesPatch`". Resolves the prior
+  MEDIUM "Hand-crafted unified diffs are brittle for multi-line
+  additions" entry by replacing the brittle authoring path entirely.
+  This is Option B from the original entry, chosen by user directive
+  for v0.1.2. **Breaking change** — no compat shim; callers must
+  migrate to `changes`. See `src/tools/common.ts`
+  (`EditToolRequestSchema`, `validateRequest`,
+  `makeApplyingHandler`), `src/tools/registry.ts` (`inputSchema`),
+  `src/tools/apply.ts` (`applyChanges` content-pair preflight),
+  `docs/SPEC.md` §3 + §6.

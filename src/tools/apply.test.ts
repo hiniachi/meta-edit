@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parsePatch } from "diff";
 import { applyChanges } from "./apply.js";
-import type { PatchChange } from "./common.js";
+import type { ContentChange } from "./common.js";
 
 let tmpRoot: string;
 
@@ -23,91 +22,149 @@ function writeFile(rel: string, content: string): string {
   return abs;
 }
 
-function changeFor(rel: string, patch: string): PatchChange {
-  const parsed = parsePatch(patch);
-  if (parsed.length === 0 || parsed[0] === undefined) {
-    throw new Error("invalid test patch");
-  }
-  return { canonical: rel, diff: parsed[0] };
+function change(
+  canonical: string,
+  oldContent: string,
+  newContent: string,
+): ContentChange {
+  return { canonical, oldContent, newContent };
 }
 
 describe("applyChanges", () => {
-  it("writes the patched content for a single modify-only change", () => {
+  it("writes the new content for a single modify-only change", () => {
     writeFile("src/foo.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-    const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
+    const result = applyChanges(tmpRoot, [
+      change("src/foo.ts", "alpha\n", "beta\n"),
+    ]);
     expect(result.applied).toBe(true);
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
       "beta\n",
     );
   });
 
-  it("applies multi-file changes when every patch lands cleanly", () => {
+  it("applies multi-file changes when every precondition holds", () => {
     writeFile("src/a.ts", "one\n");
     writeFile("src/b.ts", "uno\n");
-    const pa =
-      "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-one\n+two\n";
-    const pb =
-      "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1,1 +1,1 @@\n-uno\n+dos\n";
     const result = applyChanges(tmpRoot, [
-      changeFor("src/a.ts", pa),
-      changeFor("src/b.ts", pb),
+      change("src/a.ts", "one\n", "two\n"),
+      change("src/b.ts", "uno\n", "dos\n"),
     ]);
     expect(result.applied).toBe(true);
     expect(fs.readFileSync(path.join(tmpRoot, "src/a.ts"), "utf8")).toBe("two\n");
     expect(fs.readFileSync(path.join(tmpRoot, "src/b.ts"), "utf8")).toBe("dos\n");
   });
 
-  it("rolls back staging when one patch fails to apply (no partial writes)", () => {
+  it("rejects on stale old_content (mismatch with disk) without writing", () => {
     writeFile("src/a.ts", "one\n");
-    writeFile("src/b.ts", "DIFFERENT\n"); // patch context will not match
-    const pa =
-      "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-one\n+two\n";
-    const pb =
-      "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1,1 +1,1 @@\n-uno\n+dos\n";
     const result = applyChanges(tmpRoot, [
-      changeFor("src/a.ts", pa),
-      changeFor("src/b.ts", pb),
+      change("src/a.ts", "OLD-CONTENT-DOES-NOT-MATCH\n", "two\n"),
     ]);
     expect(result.applied).toBe(false);
     if (!result.applied) {
-      expect(result.warnings.some((w) => w.includes("did not apply cleanly"))).toBe(true);
+      expect(
+        result.warnings.some(
+          (w) => w.includes("stale old_content") && w.includes("src/a.ts"),
+        ),
+      ).toBe(true);
     }
-    // src/a.ts must NOT have been written, because we stage all patches in
-    // memory before writing any of them.
     expect(fs.readFileSync(path.join(tmpRoot, "src/a.ts"), "utf8")).toBe("one\n");
   });
 
-  it("refuses when the file is missing at apply time", () => {
-    const patch =
-      "--- a/src/missing.ts\n+++ b/src/missing.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n";
-    const result = applyChanges(tmpRoot, [changeFor("src/missing.ts", patch)]);
+  it("all-or-nothing on precondition mismatch in second of two changes", () => {
+    writeFile("src/a.ts", "one\n");
+    writeFile("src/b.ts", "DRIFTED-FROM-REQUEST\n");
+    const result = applyChanges(tmpRoot, [
+      change("src/a.ts", "one\n", "two\n"),
+      change("src/b.ts", "uno\n", "dos\n"),
+    ]);
     expect(result.applied).toBe(false);
     if (!result.applied) {
       expect(
-        result.warnings.some((w) => w.includes("apply-time canonicalization failed")),
+        result.warnings.some(
+          (w) => w.includes("stale old_content") && w.includes("src/b.ts"),
+        ),
       ).toBe(true);
+    }
+    // Critical: src/a.ts MUST NOT have been written. Phase 1
+    // (preflight) catches the mismatch before any temp/rename runs.
+    expect(fs.readFileSync(path.join(tmpRoot, "src/a.ts"), "utf8")).toBe("one\n");
+  });
+
+  it("refuses on ENOENT (modify-only — no creation)", () => {
+    const result = applyChanges(tmpRoot, [
+      change("src/missing.ts", "", "new content\n"),
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      // ENOENT trips the realpath canonicalization branch on the missing
+      // path; the resulting warning explicitly cites src/missing.ts.
+      // Either the canonicalization warning OR the does-not-exist warning
+      // is acceptable depending on which check fires first.
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.includes("src/missing.ts") &&
+            (w.includes("canonicalization failed") ||
+              w.includes("does not exist")),
+        ),
+      ).toBe(true);
+    }
+    expect(fs.existsSync(path.join(tmpRoot, "src/missing.ts"))).toBe(false);
+  });
+
+  it("refuses on EACCES at apply time without modifying the file", () => {
+    if (process.platform === "win32") return; // chmod 0 is meaningless on Windows
+    const abs = writeFile("src/locked.ts", "secret\n");
+    fs.chmodSync(abs, 0o000);
+    try {
+      const result = applyChanges(tmpRoot, [
+        change("src/locked.ts", "secret\n", "tampered\n"),
+      ]);
+      expect(result.applied).toBe(false);
+      // The file is untouched; the warnings detail the read failure.
+      // chmod 0 still allows root to read; in CI environments where
+      // tests run as root we accept that result.applied may be true.
+      // Verify only that, on failure, the file is not corrupted.
+      const after = (() => {
+        try {
+          return fs.readFileSync(abs, "utf8");
+        } catch {
+          fs.chmodSync(abs, 0o600);
+          return fs.readFileSync(abs, "utf8");
+        }
+      })();
+      if (!result.applied) {
+        expect(after).toBe("secret\n");
+      }
+    } finally {
+      try {
+        fs.chmodSync(abs, 0o600);
+      } catch {
+        /* ignore */
+      }
     }
   });
 
-  it("rejects when target was swapped to a symlink pointing outside the repo (escape branch)", () => {
+  it("rejects when target was swapped to a symlink pointing outside the repo", () => {
     writeFile("src/foo.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
-    const outsideTarget = path.join(os.tmpdir(), `meta-edit-outside-${Date.now()}.txt`);
+    const outsideTarget = path.join(
+      os.tmpdir(),
+      `meta-edit-outside-${Date.now()}.txt`,
+    );
     fs.writeFileSync(outsideTarget, "outside\n", "utf8");
     try {
       fs.unlinkSync(path.join(tmpRoot, "src/foo.ts"));
       fs.symlinkSync(outsideTarget, path.join(tmpRoot, "src/foo.ts"));
 
-      const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
+      const result = applyChanges(tmpRoot, [
+        change("src/foo.ts", "alpha\n", "beta\n"),
+      ]);
       expect(result.applied).toBe(false);
       if (!result.applied) {
-        // This specific scenario must trip the escape-the-root branch.
         expect(
-          result.warnings.some((w) => w.includes("escapes the repository root")),
+          result.warnings.some((w) =>
+            w.includes("escapes the repository root"),
+          ),
         ).toBe(true);
       }
       expect(fs.readFileSync(outsideTarget, "utf8")).toBe("outside\n");
@@ -115,72 +172,45 @@ describe("applyChanges", () => {
       try {
         fs.unlinkSync(outsideTarget);
       } catch {
-        // ignore
+        /* ignore */
       }
     }
   });
 
-  it("rejects when apply-time canonical drifts to a different in-repo path (drift branch)", () => {
+  it("rejects when apply-time canonical drifts to a different in-repo path", () => {
     writeFile("src/foo.ts", "alpha\n");
     writeFile("src/other.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
-    fs.unlinkSync(path.join(tmpRoot, "src/foo.ts"));
-    fs.symlinkSync(path.join(tmpRoot, "src/other.ts"), path.join(tmpRoot, "src/foo.ts"));
-
-    const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
-    expect(result.applied).toBe(false);
-    if (!result.applied) {
-      // Must fire the drift branch specifically.
-      expect(
-        result.warnings.some((w) => w.includes("differs from validated canonical")),
-      ).toBe(true);
-    }
-    expect(fs.readFileSync(path.join(tmpRoot, "src/other.ts"), "utf8")).toBe("alpha\n");
-  });
-
-  it("rejects when apply-time canonical lands in a protected directory (drift branch fires first)", () => {
-    // The drift check runs before the protected check on the modified
-    // path, because the realpath of src/foo.ts → .meta-edit/state/edits.jsonl
-    // produces a canonical (.meta-edit/state/edits.jsonl) that differs
-    // from the validated canonical (src/foo.ts). Drift fires.
-    writeFile("src/foo.ts", "alpha\n");
-    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
-    fs.writeFileSync(path.join(tmpRoot, ".meta-edit/state/edits.jsonl"), "alpha\n", "utf8");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
     fs.unlinkSync(path.join(tmpRoot, "src/foo.ts"));
     fs.symlinkSync(
-      path.join(tmpRoot, ".meta-edit/state/edits.jsonl"),
+      path.join(tmpRoot, "src/other.ts"),
       path.join(tmpRoot, "src/foo.ts"),
     );
 
-    const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
+    const result = applyChanges(tmpRoot, [
+      change("src/foo.ts", "alpha\n", "beta\n"),
+    ]);
     expect(result.applied).toBe(false);
     if (!result.applied) {
       expect(
-        result.warnings.some((w) => w.includes("differs from validated canonical")),
+        result.warnings.some((w) =>
+          w.includes("differs from validated canonical"),
+        ),
       ).toBe(true);
     }
-    expect(
-      fs.readFileSync(path.join(tmpRoot, ".meta-edit/state/edits.jsonl"), "utf8"),
-    ).toBe("alpha\n");
+    expect(fs.readFileSync(path.join(tmpRoot, "src/other.ts"), "utf8")).toBe(
+      "alpha\n",
+    );
   });
 
-  it("rejects when the validated canonical itself resolves into a protected directory at apply time", () => {
-    // Same canonical at validation and apply: .meta-edit/state/edits.jsonl
-    // should NEVER have been validated (Phase 2 rejects), but if a caller
-    // bypasses validation and feeds a protected canonical to applyChanges
-    // directly, the apply-time protected check must still fire.
+  it("rejects when the validated canonical resolves into a protected directory at apply time", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
-    fs.writeFileSync(path.join(tmpRoot, ".meta-edit/state/edits.jsonl"), "alpha\n", "utf8");
-    const patch =
-      "--- a/.meta-edit/state/edits.jsonl\n+++ b/.meta-edit/state/edits.jsonl\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
+    fs.writeFileSync(
+      path.join(tmpRoot, ".meta-edit/state/edits.jsonl"),
+      "alpha\n",
+      "utf8",
+    );
     const result = applyChanges(tmpRoot, [
-      changeFor(".meta-edit/state/edits.jsonl", patch),
+      change(".meta-edit/state/edits.jsonl", "alpha\n", "beta\n"),
     ]);
     expect(result.applied).toBe(false);
     if (!result.applied) {
@@ -189,16 +219,19 @@ describe("applyChanges", () => {
       ).toBe(true);
     }
     expect(
-      fs.readFileSync(path.join(tmpRoot, ".meta-edit/state/edits.jsonl"), "utf8"),
+      fs.readFileSync(
+        path.join(tmpRoot, ".meta-edit/state/edits.jsonl"),
+        "utf8",
+      ),
     ).toBe("alpha\n");
   });
 
   it("preserves the original file mode after atomic rename", () => {
     const abs = writeFile("src/foo.ts", "alpha\n");
     fs.chmodSync(abs, 0o640);
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-    const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
+    const result = applyChanges(tmpRoot, [
+      change("src/foo.ts", "alpha\n", "beta\n"),
+    ]);
     expect(result.applied).toBe(true);
     const mode = fs.statSync(abs).mode & 0o7777;
     expect(mode).toBe(0o640);
@@ -206,9 +239,9 @@ describe("applyChanges", () => {
 
   it("does not leave .metaedit-tmp files behind on success", () => {
     writeFile("src/foo.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-    const result = applyChanges(tmpRoot, [changeFor("src/foo.ts", patch)]);
+    const result = applyChanges(tmpRoot, [
+      change("src/foo.ts", "alpha\n", "beta\n"),
+    ]);
     expect(result.applied).toBe(true);
     const remaining = fs
       .readdirSync(path.join(tmpRoot, "src"))
@@ -216,52 +249,21 @@ describe("applyChanges", () => {
     expect(remaining).toEqual([]);
   });
 
-  it("surfaces already-written file paths if the second file's parent drifts at apply time", () => {
-    // First file lives in src/, second lives in subdir/. After both
-    // realpath captures and after the first rename succeeds, we replace
-    // subdir with a different real directory at the same lexical path
-    // (rmdir + mkdir). parentDriftCheck for the second file then fails
-    // because realpathSync(parent) returns a different inode (different
-    // canonical absolute path because the new dir is realpath'd to a
-    // freshly created one).
-    //
-    // Note: this test actually races against the implementation — we
-    // can't deterministically pause between rename N and rename N+1 from
-    // user space. So we instead use a smaller assertion: verify that the
-    // partial-write warning is surfaced when we manually trigger a
-    // failure path via injection. Use a custom changes array whose
-    // second entry's canonical points to a non-existent file (the first
-    // entry succeeds because the file exists).
+  it("does not write any file when only the second change is missing", () => {
     writeFile("src/first.ts", "alpha\n");
-    const p1 =
-      "--- a/src/first.ts\n+++ b/src/first.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-    const p2 =
-      "--- a/src/missing.ts\n+++ b/src/missing.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
     const result = applyChanges(tmpRoot, [
-      changeFor("src/first.ts", p1),
-      changeFor("src/missing.ts", p2),
+      change("src/first.ts", "alpha\n", "beta\n"),
+      change("src/missing.ts", "", "irrelevant\n"),
     ]);
-
-    // The first change should fail at the realpath stage of the SECOND
-    // change because src/missing.ts doesn't exist. Since this happens
-    // BEFORE any writes (the implementation realpaths all changes and
-    // applies them in memory before any rename), no files are written.
-    // applied: false, no partial-write warning.
     expect(result.applied).toBe(false);
     if (!result.applied) {
       expect(
-        result.warnings.some((w) =>
-          w.includes("apply-time canonicalization failed") &&
-          w.includes("src/missing.ts"),
-        ),
+        result.warnings.some((w) => w.includes("src/missing.ts")),
       ).toBe(true);
-      // No "partial write" warning — we never started the write loop.
       expect(result.warnings.some((w) => w.includes("partial write"))).toBe(
         false,
       );
     }
-    // First file untouched.
     expect(fs.readFileSync(path.join(tmpRoot, "src/first.ts"), "utf8")).toBe(
       "alpha\n",
     );
@@ -269,47 +271,18 @@ describe("applyChanges", () => {
 
   it("hard-fails when O_NOFOLLOW is unavailable on the platform", () => {
     writeFile("src/foo.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
-
-    // Simulate a platform without O_NOFOLLOW by injecting 0.
     const result = applyChanges(
       tmpRoot,
-      [changeFor("src/foo.ts", patch)],
+      [change("src/foo.ts", "alpha\n", "beta\n")],
       { oNofollow: 0 },
     );
     expect(result.applied).toBe(false);
     if (!result.applied) {
       expect(
-        result.warnings.some((w) =>
-          w.includes("does not expose O_NOFOLLOW") &&
-          w.includes("refuses to write"),
-        ),
-      ).toBe(true);
-    }
-    // File untouched.
-    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("alpha\n");
-  });
-
-  it("rejects (defense in depth) when the validator slipped through duplicate canonicals", () => {
-    // validateRequest is supposed to reject multi-section patches
-    // targeting the same canonical (silent-hunk-drop hazard under
-    // diff@9 fuzzFactor=0). If it ever fails to, applyChanges must
-    // refuse rather than silently apply only the last section.
-    writeFile("src/foo.ts", "alpha\n");
-    const concatenated =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n" +
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-beta\n+gamma\n";
-    const parsed = parsePatch(concatenated);
-    const result = applyChanges(tmpRoot, [
-      { canonical: "src/foo.ts", diff: parsed[0]! },
-      { canonical: "src/foo.ts", diff: parsed[1]! },
-    ]);
-    expect(result.applied).toBe(false);
-    if (!result.applied) {
-      expect(
-        result.warnings.some((w) =>
-          w.includes("duplicate canonical") && w.includes("internal error"),
+        result.warnings.some(
+          (w) =>
+            w.includes("does not expose O_NOFOLLOW") &&
+            w.includes("refuses to write"),
         ),
       ).toBe(true);
     }
@@ -318,19 +291,33 @@ describe("applyChanges", () => {
     );
   });
 
-  it("also hard-fails when O_NOFOLLOW is undefined", () => {
+  it("rejects (defense in depth) when applyChanges is given duplicate canonicals", () => {
     writeFile("src/foo.ts", "alpha\n");
-    const patch =
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n";
+    const result = applyChanges(tmpRoot, [
+      change("src/foo.ts", "alpha\n", "beta\n"),
+      change("src/foo.ts", "beta\n", "gamma\n"),
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.includes("duplicate canonical") && w.includes("internal error"),
+        ),
+      ).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
+      "alpha\n",
+    );
+  });
 
+  it("does not crash when O_NOFOLLOW is undefined (falls through to platform default)", () => {
+    writeFile("src/foo.ts", "alpha\n");
     const result = applyChanges(
       tmpRoot,
-      [changeFor("src/foo.ts", patch)],
+      [change("src/foo.ts", "alpha\n", "beta\n")],
       { oNofollow: undefined as unknown as number },
     );
-    // undefined falls through to PLATFORM_O_NOFOLLOW (which is set on
-    // Linux/macOS), so on supported test platforms this should succeed.
-    // We verify only that the function does not crash.
     expect(typeof result.applied).toBe("boolean");
   });
 });

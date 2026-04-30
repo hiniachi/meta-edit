@@ -1,9 +1,8 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { applyPatch } from "diff";
 import { isProtectedPath, normalizeRepoRelative } from "../state/protected-paths.js";
-import type { PatchChange } from "./common.js";
+import type { ContentChange } from "./common.js";
 
 // Apply modify-only patches to a repository.
 //
@@ -55,7 +54,7 @@ export type ApplyResult =
 
 export function applyChanges(
   repoRoot: string,
-  changes: PatchChange[],
+  changes: ContentChange[],
   options: ApplyOptions = {},
 ): ApplyResult {
   const warnings: string[] = [];
@@ -186,16 +185,25 @@ export function applyChanges(
       original = fs.readFileSync(realAbs, "utf8");
     } catch (e) {
       const code = (e as NodeJS.ErrnoException | undefined)?.code;
-      warnings.push(
-        `failed to read "${ch.canonical}" for patch application: ${code ?? "ERR"}`,
-      );
+      // ENOENT means the file does not exist. The content-pair shape is
+      // modify-only — there is no representation for file creation, so a
+      // missing file at apply time is always a request error rather than
+      // an instruction to create the file.
+      if (code === "ENOENT") {
+        warnings.push(
+          `change.file "${ch.canonical}" does not exist; modify-only requires the file already exist`,
+        );
+      } else {
+        warnings.push(
+          `failed to read "${ch.canonical}" for change application: ${code ?? "ERR"}`,
+        );
+      }
       return { applied: false, warnings };
     }
 
-    const result = applyPatch(original, ch.diff);
-    if (result === false) {
+    if (original !== ch.oldContent) {
       warnings.push(
-        `patch did not apply cleanly to "${ch.canonical}" (context mismatch)`,
+        `stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`,
       );
       return { applied: false, warnings };
     }
@@ -204,44 +212,61 @@ export function applyChanges(
       canonical: ch.canonical,
       absolute: realAbs,
       parent: realParent,
-      output: result,
+      output: ch.newContent,
       mode: originalMode,
     });
   }
 
-  // All patches applied in memory. Now write each file atomically: write a
-  // temp sibling with O_CREAT|O_EXCL|O_NOFOLLOW, fsync, then rename over
-  // the target. The rename is atomic on POSIX, so neither O_TRUNC race
-  // (eliminated: we never truncate) nor partial-write race can truncate
-  // the destination on a write error.
+  // All preconditions cleared. Two-phase commit: write every sibling
+  // temp file first; only after every write succeeds do we run the
+  // renames. This keeps multi-file batches atomic on the write
+  // failure case — a temp-write error in change N leaves no target
+  // modified, regardless of how many earlier renames had already
+  // committed (zero, by construction). Rename failures part-way are
+  // still possible (rename is essentially atomic on POSIX, so this
+  // should be vanishingly rare) and are surfaced as a partial-write
+  // warning.
   //
   // To shrink the parent-directory TOCTOU window between staging and
   // write, we re-realpath the parent immediately before each filesystem
   // operation that resolves a pathname. If the parent's canonical path
   // has drifted, we refuse and abort. This does not eliminate the race
   // (Node's high-level fs API has no openat), but it tightens the window
-  // to the kernel call's own scheduling boundary.
-  const touchedAbsolutePaths: string[] = [];
-  for (const w of staged) {
-    const parentDriftCheck = (op: string):
-      | { ok: true }
-      | { ok: false; reason: string } => {
-      let nowReal: string;
-      try {
-        nowReal = fs.realpathSync(w.parent);
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException | undefined)?.code;
-        return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
-      }
-      if (nowReal !== w.parent) {
-        return {
-          ok: false,
-          reason: `parent canonical drifted from "${w.parent}" to "${nowReal}" before ${op}`,
-        };
-      }
-      return { ok: true };
-    };
+  // to the kernel call's own scheduling boundary. NOTE: drift-string
+  // equality only catches drift to a different canonical *string* —
+  // bind mounts or symlink layouts that yield the same realpath but
+  // a different inode are out of scope.
+  const parentDriftCheck = (
+    parent: string,
+    op: string,
+  ): { ok: true } | { ok: false; reason: string } => {
+    let nowReal: string;
+    try {
+      nowReal = fs.realpathSync(parent);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
+    }
+    if (nowReal !== parent) {
+      return {
+        ok: false,
+        reason: `parent canonical drifted from "${parent}" to "${nowReal}" before ${op}`,
+      };
+    }
+    return { ok: true };
+  };
 
+  // Phase 2 — write every sibling temp file. If any fails, cleanup all
+  // temps written so far and bail without modifying any target.
+  type Pending = { w: Staged; tempPath: string };
+  const pending: Pending[] = [];
+  const cleanupAllPending = (): void => {
+    for (const p of pending) {
+      cleanupTemp(p.tempPath);
+    }
+  };
+
+  for (const w of staged) {
     const tempName =
       path.basename(w.absolute) +
       "." +
@@ -249,11 +274,12 @@ export function applyChanges(
       ".metaedit-tmp";
     const tempPath = path.join(w.parent, tempName);
 
-    let preDrift = parentDriftCheck("temp open");
-    if (!preDrift.ok) {
+    const driftBeforeOpen = parentDriftCheck(w.parent, "temp open");
+    if (!driftBeforeOpen.ok) {
       warnings.push(
-        `parent directory TOCTOU detected for "${w.canonical}": ${preDrift.reason}`,
+        `parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeOpen.reason}`,
       );
+      cleanupAllPending();
       return { applied: false, warnings };
     }
 
@@ -273,6 +299,7 @@ export function applyChanges(
         `failed to stage temp file for "${w.canonical}": ${code ?? "ERR"}`,
       );
       cleanupTemp(tempPath);
+      cleanupAllPending();
       return { applied: false, warnings };
     } finally {
       if (fd !== null) {
@@ -284,32 +311,59 @@ export function applyChanges(
       }
     }
 
-    try {
-      // Apply the mode we captured at read time (NOT a fresh stat — that
-      // would be vulnerable to a swap-and-chmod race exposing
-      // attacker-chosen permissions on the new content).
-      if (w.mode !== null) {
-        try {
-          fs.chmodSync(tempPath, w.mode);
-        } catch {
-          // best effort; leave at 0o600
-        }
-      }
-
-      preDrift = parentDriftCheck("rename");
-      if (!preDrift.ok) {
+    // Apply the mode we captured at read time (NOT a fresh stat — that
+    // would be vulnerable to a swap-and-chmod race exposing
+    // attacker-chosen permissions on the new content). chmod is
+    // intentionally best-effort: if it fails (e.g. EPERM under a
+    // restricted user), the new content lands with the temp's 0o600.
+    // We surface the fall-back as a warning so callers know the mode
+    // was tightened from whatever the original was, but do NOT abort
+    // — failing here would force an otherwise-valid edit through a
+    // best-effort permission carry-over, and the resulting 0o600
+    // mode is conservative (more restrictive, never more permissive).
+    if (w.mode !== null) {
+      try {
+        fs.chmodSync(tempPath, w.mode);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException | undefined)?.code;
         warnings.push(
-          `parent directory TOCTOU detected for "${w.canonical}": ${preDrift.reason}`,
+          `failed to restore original mode 0o${w.mode.toString(8)} on "${w.canonical}" (${code ?? "ERR"}); new content will land at 0o600`,
         );
-        cleanupTemp(tempPath);
-        if (touchedAbsolutePaths.length > 0) {
-          warnings.push(
-            `partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,
-          );
-        }
-        return { applied: false, warnings };
       }
+    }
 
+    pending.push({ w, tempPath });
+  }
+
+  // Phase 3 — commit every rename. If a rename fails after some have
+  // already committed, surface a partial-write warning that names the
+  // files. Rename is essentially atomic on POSIX so this branch is
+  // vanishingly rare in practice; the diagnostic is for human recovery
+  // (VCS revert, follow-up edit_* call).
+  const touchedAbsolutePaths: string[] = [];
+  for (let idx = 0; idx < pending.length; idx++) {
+    const { w, tempPath } = pending[idx]!;
+
+    const driftBeforeRename = parentDriftCheck(w.parent, "rename");
+    if (!driftBeforeRename.ok) {
+      warnings.push(
+        `parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeRename.reason}`,
+      );
+      // Cleanup remaining unrenamed temps; renamed targets stay (we
+      // cannot atomically roll back a rename without re-recording the
+      // original content, which we don't capture for that purpose).
+      for (let j = idx; j < pending.length; j++) {
+        cleanupTemp(pending[j]!.tempPath);
+      }
+      if (touchedAbsolutePaths.length > 0) {
+        warnings.push(
+          `partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,
+        );
+      }
+      return { applied: false, warnings };
+    }
+
+    try {
       fs.renameSync(tempPath, w.absolute);
     } catch (e) {
       const code = (e as NodeJS.ErrnoException | undefined)?.code;
@@ -317,10 +371,9 @@ export function applyChanges(
         `failed to atomically rename temp into "${w.canonical}": ${code ?? "ERR"}`,
       );
       cleanupTemp(tempPath);
-      // Phase 3 MVP does not implement multi-file rollback. Earlier
-      // renames in this batch already landed on disk and we surface
-      // exactly which files those are so the caller can decide how to
-      // recover (manual revert via VCS, follow-up edit_* call, etc.).
+      for (let j = idx + 1; j < pending.length; j++) {
+        cleanupTemp(pending[j]!.tempPath);
+      }
       if (touchedAbsolutePaths.length > 0) {
         warnings.push(
           `partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,

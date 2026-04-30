@@ -13,15 +13,12 @@ import {
 
 const inputSchema = {
   type: "object",
-  required: ["target_file", "patch", "rationale", "risk_level", "test_files"],
+  required: ["target_file", "rationale", "risk_level", "test_files", "changes"],
   properties: {
     target_file: {
       type: "string",
-      description: "Repository-relative path to the file being edited.",
-    },
-    patch: {
-      type: "string",
-      description: "Unified diff to apply. Must be a modify-only patch.",
+      description:
+        "Repository-relative path to the primary file being edited. When changes touch multiple files, this is the principal file the edit is about.",
     },
     rationale: {
       type: "string",
@@ -37,6 +34,35 @@ const inputSchema = {
       items: { type: "string" },
       description:
         "Paths of test files relevant to this edit. Required (non-empty) for all tools except edit_refactor_only, edit_test_only_change, and edit_docs_only. Must be empty for edit_test_only_change.",
+    },
+    changes: {
+      type: "array",
+      minItems: 1,
+      maxItems: 100,
+      description:
+        "One or more content-pair changes. The server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. Modify-only — no create / delete / rename.",
+      items: {
+        type: "object",
+        required: ["file", "old_content", "new_content"],
+        properties: {
+          file: {
+            type: "string",
+            description:
+              "Repository-relative path of the file to modify. Must already exist on disk.",
+          },
+          old_content: {
+            type: "string",
+            description:
+              "Exact current content of the file. The server compares byte-for-byte at apply time and rejects the call if disk content differs.",
+          },
+          new_content: {
+            type: "string",
+            description:
+              "New content to write to the file. Atomically replaces the file on success.",
+          },
+        },
+        additionalProperties: false,
+      },
     },
   },
   additionalProperties: false,

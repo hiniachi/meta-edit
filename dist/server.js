@@ -17113,558 +17113,914 @@ General principles (apply to every edit):
 // src/tools/common.ts
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+// node_modules/diff/libesm/diff/base.js
+class Diff {
+  diff(oldStr, newStr, options = {}) {
+    let callback;
+    if (typeof options === "function") {
+      callback = options;
+      options = {};
+    } else if ("callback" in options) {
+      callback = options.callback;
+    }
+    const oldString = this.castInput(oldStr, options);
+    const newString = this.castInput(newStr, options);
+    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
+    const newTokens = this.removeEmpty(this.tokenize(newString, options));
+    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
+  }
+  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
+    var _a;
+    const done = (value) => {
+      value = this.postProcess(value, options);
+      if (callback) {
+        setTimeout(function() {
+          callback(value);
+        }, 0);
+        return;
+      } else {
+        return value;
+      }
+    };
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let editLength = 1;
+    let maxEditLength = newLen + oldLen;
+    if (options.maxEditLength != null) {
+      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+    }
+    const maxExecutionTime = (_a = options.timeout) !== null && _a !== undefined ? _a : Infinity;
+    const abortAfterTimestamp = Date.now() + maxExecutionTime;
+    const bestPath = [{ oldPos: -1, lastComponent: undefined }];
+    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
+    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
+    }
+    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+    const execEditLength = () => {
+      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength);diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+        let basePath;
+        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+        if (removePath) {
+          bestPath[diagonalPath - 1] = undefined;
+        }
+        let canAdd = false;
+        if (addPath) {
+          const addPathNewPos = addPath.oldPos - diagonalPath;
+          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+        }
+        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
+        if (!canAdd && !canRemove) {
+          bestPath[diagonalPath] = undefined;
+          continue;
+        }
+        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+          basePath = this.addToPath(addPath, true, false, 0, options);
+        } else {
+          basePath = this.addToPath(removePath, false, true, 1, options);
+        }
+        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
+        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
+        } else {
+          bestPath[diagonalPath] = basePath;
+          if (basePath.oldPos + 1 >= oldLen) {
+            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+          }
+          if (newPos + 1 >= newLen) {
+            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+          }
+        }
+      }
+      editLength++;
+    };
+    if (callback) {
+      (function exec() {
+        setTimeout(function() {
+          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+            return callback(undefined);
+          }
+          if (!execEditLength()) {
+            exec();
+          }
+        }, 0);
+      })();
+    } else {
+      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+        const ret = execEditLength();
+        if (ret) {
+          return ret;
+        }
+      }
+    }
+  }
+  addToPath(path, added, removed, oldPosInc, options) {
+    const last = path.lastComponent;
+    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+      return {
+        oldPos: path.oldPos + oldPosInc,
+        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
+      };
+    } else {
+      return {
+        oldPos: path.oldPos + oldPosInc,
+        lastComponent: { count: 1, added, removed, previousComponent: last }
+      };
+    }
+  }
+  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
+      newPos++;
+      oldPos++;
+      commonCount++;
+      if (options.oneChangePerToken) {
+        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
+      }
+    }
+    if (commonCount && !options.oneChangePerToken) {
+      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
+    }
+    basePath.oldPos = oldPos;
+    return newPos;
+  }
+  equals(left, right, options) {
+    if (options.comparator) {
+      return options.comparator(left, right);
+    } else {
+      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+    }
+  }
+  removeEmpty(array3) {
+    const ret = [];
+    for (let i = 0;i < array3.length; i++) {
+      if (array3[i]) {
+        ret.push(array3[i]);
+      }
+    }
+    return ret;
+  }
+  castInput(value, options) {
+    return value;
+  }
+  tokenize(value, options) {
+    return Array.from(value);
+  }
+  join(chars) {
+    return chars.join("");
+  }
+  postProcess(changeObjects, options) {
+    return changeObjects;
+  }
+  get useLongestToken() {
+    return false;
+  }
+  buildValues(lastComponent, newTokens, oldTokens) {
+    const components = [];
+    let nextComponent;
+    while (lastComponent) {
+      components.push(lastComponent);
+      nextComponent = lastComponent.previousComponent;
+      delete lastComponent.previousComponent;
+      lastComponent = nextComponent;
+    }
+    components.reverse();
+    const componentLen = components.length;
+    let componentPos = 0, newPos = 0, oldPos = 0;
+    for (;componentPos < componentLen; componentPos++) {
+      const component = components[componentPos];
+      if (!component.removed) {
+        if (!component.added && this.useLongestToken) {
+          let value = newTokens.slice(newPos, newPos + component.count);
+          value = value.map(function(value2, i) {
+            const oldValue = oldTokens[oldPos + i];
+            return oldValue.length > value2.length ? oldValue : value2;
+          });
+          component.value = this.join(value);
+        } else {
+          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
+        }
+        newPos += component.count;
+        if (!component.added) {
+          oldPos += component.count;
+        }
+      } else {
+        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
+        oldPos += component.count;
+      }
+    }
+    return components;
+  }
+}
+
+// node_modules/diff/libesm/diff/character.js
+class CharacterDiff extends Diff {
+}
+var characterDiff = new CharacterDiff;
+
 // node_modules/diff/libesm/util/string.js
-function hasOnlyWinLineEndings(string4) {
-  return string4.includes(`\r
-`) && !string4.startsWith(`
-`) && !string4.match(/[^\r]\n/);
+function longestCommonPrefix(str1, str2) {
+  let i;
+  for (i = 0;i < str1.length && i < str2.length; i++) {
+    if (str1[i] != str2[i]) {
+      return str1.slice(0, i);
+    }
+  }
+  return str1.slice(0, i);
 }
-function hasOnlyUnixLineEndings(string4) {
-  return !string4.includes(`\r
-`) && string4.includes(`
+function longestCommonSuffix(str1, str2) {
+  let i;
+  if (!str1 || !str2 || str1[str1.length - 1] != str2[str2.length - 1]) {
+    return "";
+  }
+  for (i = 0;i < str1.length && i < str2.length; i++) {
+    if (str1[str1.length - (i + 1)] != str2[str2.length - (i + 1)]) {
+      return str1.slice(-i);
+    }
+  }
+  return str1.slice(-i);
+}
+function replacePrefix(string4, oldPrefix, newPrefix) {
+  if (string4.slice(0, oldPrefix.length) != oldPrefix) {
+    throw Error(`string ${JSON.stringify(string4)} doesn't start with prefix ${JSON.stringify(oldPrefix)}; this is a bug`);
+  }
+  return newPrefix + string4.slice(oldPrefix.length);
+}
+function replaceSuffix(string4, oldSuffix, newSuffix) {
+  if (!oldSuffix) {
+    return string4 + newSuffix;
+  }
+  if (string4.slice(-oldSuffix.length) != oldSuffix) {
+    throw Error(`string ${JSON.stringify(string4)} doesn't end with suffix ${JSON.stringify(oldSuffix)}; this is a bug`);
+  }
+  return string4.slice(0, -oldSuffix.length) + newSuffix;
+}
+function removePrefix(string4, oldPrefix) {
+  return replacePrefix(string4, oldPrefix, "");
+}
+function removeSuffix(string4, oldSuffix) {
+  return replaceSuffix(string4, oldSuffix, "");
+}
+function maximumOverlap(string1, string22) {
+  return string22.slice(0, overlapCount(string1, string22));
+}
+function overlapCount(a, b) {
+  let startA = 0;
+  if (a.length > b.length) {
+    startA = a.length - b.length;
+  }
+  let endB = b.length;
+  if (a.length < b.length) {
+    endB = a.length;
+  }
+  const map2 = Array(endB);
+  let k = 0;
+  map2[0] = 0;
+  for (let j = 1;j < endB; j++) {
+    if (b[j] == b[k]) {
+      map2[j] = map2[k];
+    } else {
+      map2[j] = k;
+    }
+    while (k > 0 && b[j] != b[k]) {
+      k = map2[k];
+    }
+    if (b[j] == b[k]) {
+      k++;
+    }
+  }
+  k = 0;
+  for (let i = startA;i < a.length; i++) {
+    while (k > 0 && a[i] != b[k]) {
+      k = map2[k];
+    }
+    if (a[i] == b[k]) {
+      k++;
+    }
+  }
+  return k;
+}
+function segment(string4, segmenter) {
+  const parts = [];
+  for (const segmentObj of Array.from(segmenter.segment(string4))) {
+    const segment2 = segmentObj.segment;
+    if (parts.length && /\s/.test(parts[parts.length - 1]) && /\s/.test(segment2)) {
+      parts[parts.length - 1] += segment2;
+    } else {
+      parts.push(segment2);
+    }
+  }
+  return parts;
+}
+function trailingWs(string4, segmenter) {
+  if (segmenter) {
+    return leadingAndTrailingWs(string4, segmenter)[1];
+  }
+  let i;
+  for (i = string4.length - 1;i >= 0; i--) {
+    if (!string4[i].match(/\s/)) {
+      break;
+    }
+  }
+  return string4.substring(i + 1);
+}
+function leadingWs(string4, segmenter) {
+  if (segmenter) {
+    return leadingAndTrailingWs(string4, segmenter)[0];
+  }
+  const match = string4.match(/^\s*/);
+  return match ? match[0] : "";
+}
+function leadingAndTrailingWs(string4, segmenter) {
+  if (!segmenter) {
+    return [leadingWs(string4), trailingWs(string4)];
+  }
+  if (segmenter.resolvedOptions().granularity != "word") {
+    throw new Error('The segmenter passed must have a granularity of "word"');
+  }
+  const segments = segment(string4, segmenter);
+  const firstSeg = segments[0];
+  const lastSeg = segments[segments.length - 1];
+  const head = /\s/.test(firstSeg) ? firstSeg : "";
+  const tail = /\s/.test(lastSeg) ? lastSeg : "";
+  return [head, tail];
+}
+
+// node_modules/diff/libesm/diff/word.js
+var extendedWordChars = "a-zA-Z0-9_\\u{AD}\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2C6}\\u{2C8}-\\u{2D7}\\u{2DE}-\\u{2FF}\\u{1E00}-\\u{1EFF}";
+var tokenizeIncludingWhitespace = new RegExp(`[${extendedWordChars}]+|\\s+|[^${extendedWordChars}]`, "ug");
+
+class WordDiff extends Diff {
+  equals(left, right, options) {
+    if (options.ignoreCase) {
+      left = left.toLowerCase();
+      right = right.toLowerCase();
+    }
+    return left.trim() === right.trim();
+  }
+  tokenize(value, options = {}) {
+    let parts;
+    if (options.intlSegmenter) {
+      const segmenter = options.intlSegmenter;
+      if (segmenter.resolvedOptions().granularity != "word") {
+        throw new Error('The segmenter passed must have a granularity of "word"');
+      }
+      parts = segment(value, segmenter);
+    } else {
+      parts = value.match(tokenizeIncludingWhitespace) || [];
+    }
+    const tokens = [];
+    let prevPart = null;
+    parts.forEach((part) => {
+      if (/\s/.test(part)) {
+        if (prevPart == null) {
+          tokens.push(part);
+        } else {
+          tokens.push(tokens.pop() + part);
+        }
+      } else if (prevPart != null && /\s/.test(prevPart)) {
+        if (tokens[tokens.length - 1] == prevPart) {
+          tokens.push(tokens.pop() + part);
+        } else {
+          tokens.push(prevPart + part);
+        }
+      } else {
+        tokens.push(part);
+      }
+      prevPart = part;
+    });
+    return tokens;
+  }
+  join(tokens) {
+    return tokens.map((token, i) => {
+      if (i == 0) {
+        return token;
+      } else {
+        return token.replace(/^\s+/, "");
+      }
+    }).join("");
+  }
+  postProcess(changes, options) {
+    if (!changes || options.oneChangePerToken) {
+      return changes;
+    }
+    let lastKeep = null;
+    let insertion = null;
+    let deletion = null;
+    changes.forEach((change) => {
+      if (change.added) {
+        insertion = change;
+      } else if (change.removed) {
+        deletion = change;
+      } else {
+        if (insertion || deletion) {
+          dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, change, options.intlSegmenter);
+        }
+        lastKeep = change;
+        insertion = null;
+        deletion = null;
+      }
+    });
+    if (insertion || deletion) {
+      dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, null, options.intlSegmenter);
+    }
+    return changes;
+  }
+}
+var wordDiff = new WordDiff;
+function dedupeWhitespaceInChangeObjects(startKeep, deletion, insertion, endKeep, segmenter) {
+  if (deletion && insertion) {
+    const [oldWsPrefix, oldWsSuffix] = leadingAndTrailingWs(deletion.value, segmenter);
+    const [newWsPrefix, newWsSuffix] = leadingAndTrailingWs(insertion.value, segmenter);
+    if (startKeep) {
+      const commonWsPrefix = longestCommonPrefix(oldWsPrefix, newWsPrefix);
+      startKeep.value = replaceSuffix(startKeep.value, newWsPrefix, commonWsPrefix);
+      deletion.value = removePrefix(deletion.value, commonWsPrefix);
+      insertion.value = removePrefix(insertion.value, commonWsPrefix);
+    }
+    if (endKeep) {
+      const commonWsSuffix = longestCommonSuffix(oldWsSuffix, newWsSuffix);
+      endKeep.value = replacePrefix(endKeep.value, newWsSuffix, commonWsSuffix);
+      deletion.value = removeSuffix(deletion.value, commonWsSuffix);
+      insertion.value = removeSuffix(insertion.value, commonWsSuffix);
+    }
+  } else if (insertion) {
+    if (startKeep) {
+      const ws = leadingWs(insertion.value, segmenter);
+      insertion.value = insertion.value.substring(ws.length);
+    }
+    if (endKeep) {
+      const ws = leadingWs(endKeep.value, segmenter);
+      endKeep.value = endKeep.value.substring(ws.length);
+    }
+  } else if (startKeep && endKeep) {
+    const newWsFull = leadingWs(endKeep.value, segmenter), [delWsStart, delWsEnd] = leadingAndTrailingWs(deletion.value, segmenter);
+    const newWsStart = longestCommonPrefix(newWsFull, delWsStart);
+    deletion.value = removePrefix(deletion.value, newWsStart);
+    const newWsEnd = longestCommonSuffix(removePrefix(newWsFull, newWsStart), delWsEnd);
+    deletion.value = removeSuffix(deletion.value, newWsEnd);
+    endKeep.value = replacePrefix(endKeep.value, newWsFull, newWsEnd);
+    startKeep.value = replaceSuffix(startKeep.value, newWsFull, newWsFull.slice(0, newWsFull.length - newWsEnd.length));
+  } else if (endKeep) {
+    const endKeepWsPrefix = leadingWs(endKeep.value, segmenter);
+    const deletionWsSuffix = trailingWs(deletion.value, segmenter);
+    const overlap = maximumOverlap(deletionWsSuffix, endKeepWsPrefix);
+    deletion.value = removeSuffix(deletion.value, overlap);
+  } else if (startKeep) {
+    const startKeepWsSuffix = trailingWs(startKeep.value, segmenter);
+    const deletionWsPrefix = leadingWs(deletion.value, segmenter);
+    const overlap = maximumOverlap(startKeepWsSuffix, deletionWsPrefix);
+    deletion.value = removePrefix(deletion.value, overlap);
+  }
+}
+
+class WordsWithSpaceDiff extends Diff {
+  tokenize(value) {
+    const regex = new RegExp(`(\\r?\\n)|[${extendedWordChars}]+|[^\\S\\n\\r]+|[^${extendedWordChars}]`, "ug");
+    return value.match(regex) || [];
+  }
+}
+var wordsWithSpaceDiff = new WordsWithSpaceDiff;
+
+// node_modules/diff/libesm/diff/line.js
+class LineDiff extends Diff {
+  constructor() {
+    super(...arguments);
+    this.tokenize = tokenize;
+  }
+  equals(left, right, options) {
+    if (options.ignoreWhitespace) {
+      if (!options.newlineIsToken || !left.includes(`
+`)) {
+        left = left.trim();
+      }
+      if (!options.newlineIsToken || !right.includes(`
+`)) {
+        right = right.trim();
+      }
+    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+      if (left.endsWith(`
+`)) {
+        left = left.slice(0, -1);
+      }
+      if (right.endsWith(`
+`)) {
+        right = right.slice(0, -1);
+      }
+    }
+    return super.equals(left, right, options);
+  }
+}
+var lineDiff = new LineDiff;
+function diffLines(oldStr, newStr, options) {
+  return lineDiff.diff(oldStr, newStr, options);
+}
+function tokenize(value, options) {
+  if (options.stripTrailingCr) {
+    value = value.replace(/\r\n/g, `
 `);
+  }
+  const retLines = [], linesAndNewlines = value.split(/(\n|\r\n)/);
+  if (!linesAndNewlines[linesAndNewlines.length - 1]) {
+    linesAndNewlines.pop();
+  }
+  for (let i = 0;i < linesAndNewlines.length; i++) {
+    const line = linesAndNewlines[i];
+    if (i % 2 && !options.newlineIsToken) {
+      retLines[retLines.length - 1] += line;
+    } else {
+      retLines.push(line);
+    }
+  }
+  return retLines;
 }
 
-// node_modules/diff/libesm/patch/line-endings.js
-function unixToWin(patch) {
-  if (Array.isArray(patch)) {
-    return patch.map((p) => unixToWin(p));
-  }
-  return Object.assign(Object.assign({}, patch), { hunks: patch.hunks.map((hunk) => Object.assign(Object.assign({}, hunk), { lines: hunk.lines.map((line, i) => {
-    var _a;
-    return line.startsWith("\\") || line.endsWith("\r") || ((_a = hunk.lines[i + 1]) === null || _a === undefined ? undefined : _a.startsWith("\\")) ? line : line + "\r";
-  }) })) });
-}
-function winToUnix(patch) {
-  if (Array.isArray(patch)) {
-    return patch.map((p) => winToUnix(p));
-  }
-  return Object.assign(Object.assign({}, patch), { hunks: patch.hunks.map((hunk) => Object.assign(Object.assign({}, hunk), { lines: hunk.lines.map((line) => line.endsWith("\r") ? line.substring(0, line.length - 1) : line) })) });
-}
-function isUnix(patch) {
-  if (!Array.isArray(patch)) {
-    patch = [patch];
-  }
-  return !patch.some((index) => index.hunks.some((hunk) => hunk.lines.some((line) => !line.startsWith("\\") && line.endsWith("\r"))));
-}
-function isWin(patch) {
-  if (!Array.isArray(patch)) {
-    patch = [patch];
-  }
-  return patch.some((index) => index.hunks.some((hunk) => hunk.lines.some((line) => line.endsWith("\r")))) && patch.every((index) => index.hunks.every((hunk) => hunk.lines.every((line, i) => {
-    var _a;
-    return line.startsWith("\\") || line.endsWith("\r") || ((_a = hunk.lines[i + 1]) === null || _a === undefined ? undefined : _a.startsWith("\\"));
-  })));
+// node_modules/diff/libesm/diff/sentence.js
+function isSentenceEndPunct(char) {
+  return char == "." || char == "!" || char == "?";
 }
 
-// node_modules/diff/libesm/patch/parse.js
-function parsePatch(uniDiff) {
-  const diffstr = uniDiff.split(/\n/), list = [];
-  let i = 0;
-  function isGitDiffHeader(line) {
-    return /^diff --git /.test(line);
-  }
-  function isDiffHeader(line) {
-    return isGitDiffHeader(line) || /^Index:\s/.test(line) || /^diff(?: -r \w+)+\s/.test(line);
-  }
-  function isFileHeader(line) {
-    return /^(---|\+\+\+)\s/.test(line);
-  }
-  function isHunkHeader(line) {
-    return /^@@\s/.test(line);
-  }
-  function parseIndex() {
+class SentenceDiff extends Diff {
+  tokenize(value) {
     var _a;
-    const index = {};
-    index.hunks = [];
-    list.push(index);
-    let seenDiffHeader = false;
-    while (i < diffstr.length) {
-      const line = diffstr[i];
-      if (isFileHeader(line) || isHunkHeader(line)) {
+    const result = [];
+    let tokenStartI = 0;
+    for (let i = 0;i < value.length; i++) {
+      if (i == value.length - 1) {
+        result.push(value.slice(tokenStartI));
         break;
       }
-      if (isGitDiffHeader(line)) {
-        if (seenDiffHeader) {
-          return;
-        }
-        seenDiffHeader = true;
-        index.isGit = true;
-        const paths = parseGitDiffHeader(line);
-        if (paths) {
-          index.oldFileName = paths.oldFileName;
-          index.newFileName = paths.newFileName;
-        }
-        i++;
-        while (i < diffstr.length) {
-          const extLine = diffstr[i];
-          if (isFileHeader(extLine) || isHunkHeader(extLine) || isDiffHeader(extLine)) {
-            break;
-          }
-          const renameFromMatch = /^rename from (.*)/.exec(extLine);
-          if (renameFromMatch) {
-            index.oldFileName = "a/" + unquoteIfQuoted(renameFromMatch[1]);
-            index.isRename = true;
-          }
-          const renameToMatch = /^rename to (.*)/.exec(extLine);
-          if (renameToMatch) {
-            index.newFileName = "b/" + unquoteIfQuoted(renameToMatch[1]);
-            index.isRename = true;
-          }
-          const copyFromMatch = /^copy from (.*)/.exec(extLine);
-          if (copyFromMatch) {
-            index.oldFileName = "a/" + unquoteIfQuoted(copyFromMatch[1]);
-            index.isCopy = true;
-          }
-          const copyToMatch = /^copy to (.*)/.exec(extLine);
-          if (copyToMatch) {
-            index.newFileName = "b/" + unquoteIfQuoted(copyToMatch[1]);
-            index.isCopy = true;
-          }
-          const newFileModeMatch = /^new file mode (\d+)/.exec(extLine);
-          if (newFileModeMatch) {
-            index.isCreate = true;
-            index.newMode = newFileModeMatch[1];
-          }
-          const deletedFileModeMatch = /^deleted file mode (\d+)/.exec(extLine);
-          if (deletedFileModeMatch) {
-            index.isDelete = true;
-            index.oldMode = deletedFileModeMatch[1];
-          }
-          const oldModeMatch = /^old mode (\d+)/.exec(extLine);
-          if (oldModeMatch) {
-            index.oldMode = oldModeMatch[1];
-          }
-          const newModeMatch = /^new mode (\d+)/.exec(extLine);
-          if (newModeMatch) {
-            index.newMode = newModeMatch[1];
-          }
-          if (/^Binary files /.test(extLine)) {
-            index.isBinary = true;
-          }
+      if (isSentenceEndPunct(value[i]) && value[i + 1].match(/\s/)) {
+        result.push(value.slice(tokenStartI, i + 1));
+        i = tokenStartI = i + 1;
+        while ((_a = value[i + 1]) === null || _a === undefined ? undefined : _a.match(/\s/)) {
           i++;
         }
-        continue;
-      } else if (isDiffHeader(line)) {
-        if (seenDiffHeader) {
-          return;
-        }
-        seenDiffHeader = true;
-        const headerMatch = /^(?:Index:|diff(?: -r \w+)+)\s+/.exec(line);
-        if (headerMatch) {
-          index.index = line.substring(headerMatch[0].length).trim();
-        }
+        result.push(value.slice(tokenStartI, i + 1));
+        tokenStartI = i + 1;
       }
-      i++;
     }
-    parseFileHeader(index);
-    parseFileHeader(index);
-    if (index.oldFileName === undefined !== (index.newFileName === undefined)) {
-      throw new Error("Missing " + (index.oldFileName !== undefined ? '"+++ ..."' : '"--- ..."') + " file header for " + ((_a = index.oldFileName) !== null && _a !== undefined ? _a : index.newFileName));
-    }
-    while (i < diffstr.length) {
-      const line = diffstr[i];
-      if (isDiffHeader(line) || isFileHeader(line) || /^===================================================================/.test(line)) {
-        break;
-      } else if (isHunkHeader(line)) {
-        index.hunks.push(parseHunk());
-      } else {
-        i++;
-      }
+    return result;
+  }
+}
+var sentenceDiff = new SentenceDiff;
+
+// node_modules/diff/libesm/diff/css.js
+class CssDiff extends Diff {
+  tokenize(value) {
+    return value.split(/([{}:;,]|\s+)/);
+  }
+}
+var cssDiff = new CssDiff;
+
+// node_modules/diff/libesm/diff/json.js
+class JsonDiff extends Diff {
+  constructor() {
+    super(...arguments);
+    this.tokenize = tokenize;
+  }
+  get useLongestToken() {
+    return true;
+  }
+  castInput(value, options) {
+    const { undefinedReplacement, stringifyReplacer = (k, v) => typeof v === "undefined" ? undefinedReplacement : v } = options;
+    return typeof value === "string" ? value : JSON.stringify(canonicalize(value, null, null, stringifyReplacer), null, "  ");
+  }
+  equals(left, right, options) {
+    return super.equals(left.replace(/,([\r\n])/g, "$1"), right.replace(/,([\r\n])/g, "$1"), options);
+  }
+}
+var jsonDiff = new JsonDiff;
+function canonicalize(obj, stack, replacementStack, replacer, key) {
+  stack = stack || [];
+  replacementStack = replacementStack || [];
+  if (replacer) {
+    obj = replacer(key === undefined ? "" : key, obj);
+  }
+  let i;
+  for (i = 0;i < stack.length; i += 1) {
+    if (stack[i] === obj) {
+      return replacementStack[i];
     }
   }
-  function parseGitDiffHeader(line) {
-    const rest = line.substring("diff --git ".length);
-    if (rest.startsWith('"')) {
-      const oldPath = parseQuotedFileName(rest);
-      if (oldPath === null) {
-        return null;
-      }
-      const afterOld = rest.substring(oldPath.rawLength + 1);
-      let newFileName;
-      if (afterOld.startsWith('"')) {
-        const newPath = parseQuotedFileName(afterOld);
-        if (newPath === null) {
-          return null;
-        }
-        newFileName = newPath.fileName;
-      } else {
-        newFileName = afterOld;
-      }
-      return {
-        oldFileName: oldPath.fileName,
-        newFileName
-      };
+  let canonicalizedObj;
+  if (Object.prototype.toString.call(obj) === "[object Array]") {
+    stack.push(obj);
+    canonicalizedObj = new Array(obj.length);
+    replacementStack.push(canonicalizedObj);
+    for (i = 0;i < obj.length; i += 1) {
+      canonicalizedObj[i] = canonicalize(obj[i], stack, replacementStack, replacer, String(i));
     }
-    const quoteIdx = rest.indexOf('"');
-    if (quoteIdx > 0) {
-      const oldFileName = rest.substring(0, quoteIdx - 1);
-      const newPath = parseQuotedFileName(rest.substring(quoteIdx));
-      if (newPath === null) {
-        return null;
-      }
-      return {
-        oldFileName,
-        newFileName: newPath.fileName
-      };
-    }
-    if (rest.startsWith("a/")) {
-      const splits = [];
-      let idx = 0;
-      while (true) {
-        idx = rest.indexOf(" b/", idx + 1);
-        if (idx === -1) {
-          break;
-        }
-        splits.push(idx);
-      }
-      if (splits.length > 0) {
-        const mid = splits[Math.floor(splits.length / 2)];
-        return {
-          oldFileName: rest.substring(0, mid),
-          newFileName: rest.substring(mid + 1)
-        };
-      }
-    }
-    return null;
+    stack.pop();
+    replacementStack.pop();
+    return canonicalizedObj;
   }
-  function unquoteIfQuoted(s) {
-    if (s.startsWith('"')) {
-      const parsed = parseQuotedFileName(s);
-      if (parsed) {
-        return parsed.fileName;
+  if (obj && obj.toJSON) {
+    obj = obj.toJSON();
+  }
+  if (typeof obj === "object" && obj !== null) {
+    stack.push(obj);
+    canonicalizedObj = {};
+    replacementStack.push(canonicalizedObj);
+    const sortedKeys = [];
+    let key2;
+    for (key2 in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key2)) {
+        sortedKeys.push(key2);
       }
     }
+    sortedKeys.sort();
+    for (i = 0;i < sortedKeys.length; i += 1) {
+      key2 = sortedKeys[i];
+      canonicalizedObj[key2] = canonicalize(obj[key2], stack, replacementStack, replacer, key2);
+    }
+    stack.pop();
+    replacementStack.pop();
+  } else {
+    canonicalizedObj = obj;
+  }
+  return canonicalizedObj;
+}
+
+// node_modules/diff/libesm/diff/array.js
+class ArrayDiff extends Diff {
+  tokenize(value) {
+    return value.slice();
+  }
+  join(value) {
+    return value;
+  }
+  removeEmpty(value) {
+    return value;
+  }
+}
+var arrayDiff = new ArrayDiff;
+
+// node_modules/diff/libesm/patch/create.js
+function needsQuoting(s) {
+  for (let i = 0;i < s.length; i++) {
+    if (s[i] < " " || s[i] > "~" || s[i] === '"' || s[i] === "\\") {
+      return true;
+    }
+  }
+  return false;
+}
+function quoteFileNameIfNeeded(s) {
+  if (!needsQuoting(s)) {
     return s;
   }
-  function parseQuotedFileName(s) {
-    if (!s.startsWith('"')) {
-      return null;
+  let result = '"';
+  const bytes = new TextEncoder().encode(s);
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    if (b === 7) {
+      result += "\\a";
+    } else if (b === 8) {
+      result += "\\b";
+    } else if (b === 9) {
+      result += "\\t";
+    } else if (b === 10) {
+      result += "\\n";
+    } else if (b === 11) {
+      result += "\\v";
+    } else if (b === 12) {
+      result += "\\f";
+    } else if (b === 13) {
+      result += "\\r";
+    } else if (b === 34) {
+      result += "\\\"";
+    } else if (b === 92) {
+      result += "\\\\";
+    } else if (b >= 32 && b <= 126) {
+      result += String.fromCharCode(b);
+    } else {
+      result += "\\" + b.toString(8).padStart(3, "0");
     }
-    let result = "";
-    let j = 1;
-    while (j < s.length) {
-      if (s[j] === '"') {
-        return { fileName: result, rawLength: j + 1 };
-      }
-      if (s[j] === "\\" && j + 1 < s.length) {
-        j++;
-        switch (s[j]) {
-          case "a":
-            result += "\x07";
-            break;
-          case "b":
-            result += "\b";
-            break;
-          case "f":
-            result += "\f";
-            break;
-          case "n":
-            result += `
-`;
-            break;
-          case "r":
-            result += "\r";
-            break;
-          case "t":
-            result += "\t";
-            break;
-          case "v":
-            result += "\v";
-            break;
-          case "\\":
-            result += "\\";
-            break;
-          case '"':
-            result += '"';
-            break;
-          case "0":
-          case "1":
-          case "2":
-          case "3":
-          case "4":
-          case "5":
-          case "6":
-          case "7": {
-            if (j + 2 >= s.length || s[j + 1] < "0" || s[j + 1] > "7" || s[j + 2] < "0" || s[j + 2] > "7") {
-              return null;
-            }
-            const bytes = [parseInt(s.substring(j, j + 3), 8)];
-            j += 3;
-            while (s[j] === "\\" && s[j + 1] >= "0" && s[j + 1] <= "7") {
-              if (j + 3 >= s.length || s[j + 2] < "0" || s[j + 2] > "7" || s[j + 3] < "0" || s[j + 3] > "7") {
-                return null;
-              }
-              bytes.push(parseInt(s.substring(j + 1, j + 4), 8));
-              j += 4;
-            }
-            result += new TextDecoder("utf-8").decode(new Uint8Array(bytes));
-            continue;
-          }
-          default:
-            return null;
-        }
-      } else {
-        result += s[j];
-      }
-      j++;
-    }
-    return null;
+    i++;
   }
-  function parseFileHeader(index) {
-    const fileHeaderMatch = /^(---|\+\+\+)\s+/.exec(diffstr[i]);
-    if (fileHeaderMatch) {
-      const prefix = fileHeaderMatch[1], data = diffstr[i].substring(3).trim().split("\t", 2), header = (data[1] || "").trim();
-      let fileName = data[0];
-      if (fileName.startsWith('"')) {
-        fileName = unquoteIfQuoted(fileName);
-      } else {
-        fileName = fileName.replace(/\\\\/g, "\\");
-      }
-      if (prefix === "---") {
-        index.oldFileName = fileName;
-        index.oldHeader = header;
-      } else {
-        index.newFileName = fileName;
-        index.newHeader = header;
-      }
-      i++;
-    }
-  }
-  function parseHunk() {
-    var _a;
-    const chunkHeaderIndex = i, chunkHeaderLine = diffstr[i++], chunkHeader = chunkHeaderLine.split(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    const hunk = {
-      oldStart: +chunkHeader[1],
-      oldLines: typeof chunkHeader[2] === "undefined" ? 1 : +chunkHeader[2],
-      newStart: +chunkHeader[3],
-      newLines: typeof chunkHeader[4] === "undefined" ? 1 : +chunkHeader[4],
-      lines: []
-    };
-    if (hunk.oldLines === 0) {
-      hunk.oldStart += 1;
-    }
-    if (hunk.newLines === 0) {
-      hunk.newStart += 1;
-    }
-    let addCount = 0, removeCount = 0;
-    for (;i < diffstr.length && (removeCount < hunk.oldLines || addCount < hunk.newLines || ((_a = diffstr[i]) === null || _a === undefined ? undefined : _a.startsWith("\\"))); i++) {
-      const operation = diffstr[i].length == 0 && i != diffstr.length - 1 ? " " : diffstr[i][0];
-      if (operation === "+" || operation === "-" || operation === " " || operation === "\\") {
-        hunk.lines.push(diffstr[i]);
-        if (operation === "+") {
-          addCount++;
-        } else if (operation === "-") {
-          removeCount++;
-        } else if (operation === " ") {
-          addCount++;
-          removeCount++;
-        }
-      } else {
-        throw new Error(`Hunk at line ${chunkHeaderIndex + 1} contained invalid line ${diffstr[i]}`);
-      }
-    }
-    if (!addCount && hunk.newLines === 1) {
-      hunk.newLines = 0;
-    }
-    if (!removeCount && hunk.oldLines === 1) {
-      hunk.oldLines = 0;
-    }
-    if (addCount !== hunk.newLines) {
-      throw new Error("Added line count did not match for hunk at line " + (chunkHeaderIndex + 1));
-    }
-    if (removeCount !== hunk.oldLines) {
-      throw new Error("Removed line count did not match for hunk at line " + (chunkHeaderIndex + 1));
-    }
-    if (i < diffstr.length && diffstr[i] && /^[+ -]/.test(diffstr[i]) && !isFileHeader(diffstr[i])) {
-      throw new Error("Hunk at line " + (chunkHeaderIndex + 1) + " has more lines than expected (expected " + hunk.oldLines + " old lines and " + hunk.newLines + " new lines)");
-    }
-    return hunk;
-  }
-  while (i < diffstr.length) {
-    parseIndex();
-  }
-  return list;
+  result += '"';
+  return result;
 }
-
-// node_modules/diff/libesm/util/distance-iterator.js
-function distance_iterator_default(start, minLine, maxLine) {
-  let wantForward = true, backwardExhausted = false, forwardExhausted = false, localOffset = 1;
-  return function iterator() {
-    if (wantForward && !forwardExhausted) {
-      if (backwardExhausted) {
-        localOffset++;
-      } else {
-        wantForward = false;
-      }
-      if (start + localOffset <= maxLine) {
-        return start + localOffset;
-      }
-      forwardExhausted = true;
-    }
-    if (!backwardExhausted) {
-      if (!forwardExhausted) {
-        wantForward = true;
-      }
-      if (minLine <= start - localOffset) {
-        return start - localOffset++;
-      }
-      backwardExhausted = true;
-      return iterator();
-    }
-    return;
-  };
-}
-
-// node_modules/diff/libesm/patch/apply.js
-function applyPatch(source, patch, options = {}) {
-  let patches;
-  if (typeof patch === "string") {
-    patches = parsePatch(patch);
-  } else if (Array.isArray(patch)) {
-    patches = patch;
+var INCLUDE_HEADERS = {
+  includeIndex: true,
+  includeUnderline: true,
+  includeFileHeaders: true
+};
+function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  let optionsObj;
+  if (!options) {
+    optionsObj = {};
+  } else if (typeof options === "function") {
+    optionsObj = { callback: options };
   } else {
-    patches = [patch];
+    optionsObj = options;
   }
-  if (patches.length > 1) {
-    throw new Error("applyPatch only works with a single input.");
+  if (typeof optionsObj.context === "undefined") {
+    optionsObj.context = 4;
   }
-  return applyStructuredPatch(source, patches[0], options);
-}
-function applyStructuredPatch(source, patch, options = {}) {
-  if (options.autoConvertLineEndings || options.autoConvertLineEndings == null) {
-    if (hasOnlyWinLineEndings(source) && isUnix(patch)) {
-      patch = unixToWin(patch);
-    } else if (hasOnlyUnixLineEndings(source) && isWin(patch)) {
-      patch = winToUnix(patch);
+  const context = optionsObj.context;
+  if (optionsObj.newlineIsToken) {
+    throw new Error("newlineIsToken may not be used with patch-generation functions, only with diffing functions");
+  }
+  if (!optionsObj.callback) {
+    return diffLinesResultToPatch(diffLines(oldStr, newStr, optionsObj));
+  } else {
+    const { callback } = optionsObj;
+    diffLines(oldStr, newStr, Object.assign(Object.assign({}, optionsObj), { callback: (diff) => {
+      const patch = diffLinesResultToPatch(diff);
+      callback(patch);
+    } }));
+  }
+  function diffLinesResultToPatch(diff) {
+    if (!diff) {
+      return;
     }
-  }
-  const lines = source.split(`
-`), hunks = patch.hunks, compareLine = options.compareLine || ((lineNumber, line, operation, patchContent) => line === patchContent), fuzzFactor = options.fuzzFactor || 0;
-  let minLine = 0;
-  if (fuzzFactor < 0 || !Number.isInteger(fuzzFactor)) {
-    throw new Error("fuzzFactor must be a non-negative integer");
-  }
-  if (!hunks.length) {
-    return source;
-  }
-  let prevLine = "", removeEOFNL = false, addEOFNL = false;
-  for (let i = 0;i < hunks[hunks.length - 1].lines.length; i++) {
-    const line = hunks[hunks.length - 1].lines[i];
-    if (line[0] == "\\") {
-      if (prevLine[0] == "+") {
-        removeEOFNL = true;
-      } else if (prevLine[0] == "-") {
-        addEOFNL = true;
-      }
+    diff.push({ value: "", lines: [] });
+    function contextLines(lines) {
+      return lines.map(function(entry) {
+        return " " + entry;
+      });
     }
-    prevLine = line;
-  }
-  if (removeEOFNL) {
-    if (addEOFNL) {
-      if (!fuzzFactor && lines[lines.length - 1] == "") {
-        return false;
-      }
-    } else if (lines[lines.length - 1] == "") {
-      lines.pop();
-    } else if (!fuzzFactor) {
-      return false;
-    }
-  } else if (addEOFNL) {
-    if (lines[lines.length - 1] != "") {
-      lines.push("");
-    } else if (!fuzzFactor) {
-      return false;
-    }
-  }
-  function applyHunk(hunkLines, toPos, maxErrors, hunkLinesI = 0, lastContextLineMatched = true, patchedLines = [], patchedLinesLength = 0) {
-    let nConsecutiveOldContextLines = 0;
-    let nextContextLineMustMatch = false;
-    for (;hunkLinesI < hunkLines.length; hunkLinesI++) {
-      const hunkLine = hunkLines[hunkLinesI], operation = hunkLine.length > 0 ? hunkLine[0] : " ", content = hunkLine.length > 0 ? hunkLine.substr(1) : hunkLine;
-      if (operation === "-") {
-        if (compareLine(toPos + 1, lines[toPos], operation, content)) {
-          toPos++;
-          nConsecutiveOldContextLines = 0;
-        } else {
-          if (!maxErrors || lines[toPos] == null) {
-            return null;
+    const hunks = [];
+    let oldRangeStart = 0, newRangeStart = 0, curRange = [], oldLine = 1, newLine = 1;
+    for (let i = 0;i < diff.length; i++) {
+      const current = diff[i], lines = current.lines || splitLines(current.value);
+      current.lines = lines;
+      if (current.added || current.removed) {
+        if (!oldRangeStart) {
+          const prev = diff[i - 1];
+          oldRangeStart = oldLine;
+          newRangeStart = newLine;
+          if (prev) {
+            curRange = context > 0 ? contextLines(prev.lines.slice(-context)) : [];
+            oldRangeStart -= curRange.length;
+            newRangeStart -= curRange.length;
           }
-          patchedLines[patchedLinesLength] = lines[toPos];
-          return applyHunk(hunkLines, toPos + 1, maxErrors - 1, hunkLinesI, false, patchedLines, patchedLinesLength + 1);
         }
-      }
-      if (operation === "+") {
-        if (!lastContextLineMatched) {
-          return null;
+        for (const line of lines) {
+          curRange.push((current.added ? "+" : "-") + line);
         }
-        patchedLines[patchedLinesLength] = content;
-        patchedLinesLength++;
-        nConsecutiveOldContextLines = 0;
-        nextContextLineMustMatch = true;
-      }
-      if (operation === " ") {
-        nConsecutiveOldContextLines++;
-        patchedLines[patchedLinesLength] = lines[toPos];
-        if (compareLine(toPos + 1, lines[toPos], operation, content)) {
-          patchedLinesLength++;
-          lastContextLineMatched = true;
-          nextContextLineMustMatch = false;
-          toPos++;
+        if (current.added) {
+          newLine += lines.length;
         } else {
-          if (nextContextLineMustMatch || !maxErrors) {
-            return null;
+          oldLine += lines.length;
+        }
+      } else {
+        if (oldRangeStart) {
+          if (lines.length <= context * 2 && i < diff.length - 2) {
+            for (const line of contextLines(lines)) {
+              curRange.push(line);
+            }
+          } else {
+            const contextSize = Math.min(lines.length, context);
+            for (const line of contextLines(lines.slice(0, contextSize))) {
+              curRange.push(line);
+            }
+            const hunk = {
+              oldStart: oldRangeStart,
+              oldLines: oldLine - oldRangeStart + contextSize,
+              newStart: newRangeStart,
+              newLines: newLine - newRangeStart + contextSize,
+              lines: curRange
+            };
+            hunks.push(hunk);
+            oldRangeStart = 0;
+            newRangeStart = 0;
+            curRange = [];
           }
-          return lines[toPos] && (applyHunk(hunkLines, toPos + 1, maxErrors - 1, hunkLinesI + 1, false, patchedLines, patchedLinesLength + 1) || applyHunk(hunkLines, toPos + 1, maxErrors - 1, hunkLinesI, false, patchedLines, patchedLinesLength + 1)) || applyHunk(hunkLines, toPos, maxErrors - 1, hunkLinesI + 1, false, patchedLines, patchedLinesLength);
+        }
+        oldLine += lines.length;
+        newLine += lines.length;
+      }
+    }
+    for (const hunk of hunks) {
+      for (let i = 0;i < hunk.lines.length; i++) {
+        if (hunk.lines[i].endsWith(`
+`)) {
+          hunk.lines[i] = hunk.lines[i].slice(0, -1);
+        } else {
+          hunk.lines.splice(i + 1, 0, "\\ No newline at end of file");
+          i++;
         }
       }
     }
-    patchedLinesLength -= nConsecutiveOldContextLines;
-    toPos -= nConsecutiveOldContextLines;
-    patchedLines.length = patchedLinesLength;
     return {
-      patchedLines,
-      oldLineLastI: toPos - 1
+      oldFileName,
+      newFileName,
+      oldHeader,
+      newHeader,
+      hunks
     };
   }
-  const resultLines = [];
-  let prevHunkOffset = 0;
-  for (let i = 0;i < hunks.length; i++) {
-    const hunk = hunks[i];
-    let hunkResult;
-    const maxLine = lines.length - hunk.oldLines + fuzzFactor;
-    let toPos;
-    for (let maxErrors = 0;maxErrors <= fuzzFactor; maxErrors++) {
-      toPos = hunk.oldStart + prevHunkOffset - 1;
-      const iterator = distance_iterator_default(toPos, minLine, maxLine);
-      for (;toPos !== undefined; toPos = iterator()) {
-        hunkResult = applyHunk(hunk.lines, toPos, maxErrors);
-        if (hunkResult) {
-          break;
-        }
-      }
-      if (hunkResult) {
-        break;
-      }
-    }
-    if (!hunkResult) {
-      return false;
-    }
-    for (let i2 = minLine;i2 < toPos; i2++) {
-      resultLines.push(lines[i2]);
-    }
-    for (let i2 = 0;i2 < hunkResult.patchedLines.length; i2++) {
-      const line = hunkResult.patchedLines[i2];
-      resultLines.push(line);
-    }
-    minLine = hunkResult.oldLineLastI + 1;
-    prevHunkOffset = toPos + 1 - hunk.oldStart;
+}
+function formatPatch(patch, headerOptions) {
+  var _a, _b, _c, _d, _e, _f;
+  if (!headerOptions) {
+    headerOptions = INCLUDE_HEADERS;
   }
-  for (let i = minLine;i < lines.length; i++) {
-    resultLines.push(lines[i]);
-  }
-  return resultLines.join(`
+  if (Array.isArray(patch)) {
+    if (patch.length > 1 && !headerOptions.includeFileHeaders && !patch.every((p) => p.isGit)) {
+      throw new Error("Cannot omit file headers on a multi-file patch. " + "(The result would be unparseable; how would a tool trying to apply " + "the patch know which changes are to which file?)");
+    }
+    return patch.map((p) => formatPatch(p, headerOptions)).join(`
 `);
+  }
+  const ret = [];
+  if (patch.isGit) {
+    headerOptions = INCLUDE_HEADERS;
+    if (!patch.oldFileName) {
+      throw new Error("oldFileName must be specified for Git patches");
+    }
+    if (!patch.newFileName) {
+      throw new Error("newFileName must be specified for Git patches");
+    }
+    let gitOldName = patch.oldFileName;
+    let gitNewName = patch.newFileName;
+    if (patch.isCreate && gitOldName === "/dev/null") {
+      gitOldName = gitNewName.replace(/^b\//, "a/");
+    } else if (patch.isDelete && gitNewName === "/dev/null") {
+      gitNewName = gitOldName.replace(/^a\//, "b/");
+    }
+    ret.push("diff --git " + quoteFileNameIfNeeded(gitOldName) + " " + quoteFileNameIfNeeded(gitNewName));
+    if (patch.isDelete) {
+      ret.push("deleted file mode " + ((_a = patch.oldMode) !== null && _a !== undefined ? _a : "100644"));
+    }
+    if (patch.isCreate) {
+      ret.push("new file mode " + ((_b = patch.newMode) !== null && _b !== undefined ? _b : "100644"));
+    }
+    if (patch.oldMode && patch.newMode && !patch.isDelete && !patch.isCreate) {
+      ret.push("old mode " + patch.oldMode);
+      ret.push("new mode " + patch.newMode);
+    }
+    if (patch.isRename) {
+      ret.push("rename from " + quoteFileNameIfNeeded(((_c = patch.oldFileName) !== null && _c !== undefined ? _c : "").replace(/^a\//, "")));
+      ret.push("rename to " + quoteFileNameIfNeeded(((_d = patch.newFileName) !== null && _d !== undefined ? _d : "").replace(/^b\//, "")));
+    }
+    if (patch.isCopy) {
+      ret.push("copy from " + quoteFileNameIfNeeded(((_e = patch.oldFileName) !== null && _e !== undefined ? _e : "").replace(/^a\//, "")));
+      ret.push("copy to " + quoteFileNameIfNeeded(((_f = patch.newFileName) !== null && _f !== undefined ? _f : "").replace(/^b\//, "")));
+    }
+  } else {
+    if (headerOptions.includeIndex && patch.oldFileName == patch.newFileName && patch.oldFileName !== undefined) {
+      ret.push("Index: " + patch.oldFileName);
+    }
+    if (headerOptions.includeUnderline) {
+      ret.push("===================================================================");
+    }
+  }
+  const hasHunks = patch.hunks.length > 0;
+  if (headerOptions.includeFileHeaders && patch.oldFileName !== undefined && patch.newFileName !== undefined && (!patch.isGit || hasHunks)) {
+    ret.push("--- " + quoteFileNameIfNeeded(patch.oldFileName) + (patch.oldHeader ? "\t" + patch.oldHeader : ""));
+    ret.push("+++ " + quoteFileNameIfNeeded(patch.newFileName) + (patch.newHeader ? "\t" + patch.newHeader : ""));
+  }
+  for (let i = 0;i < patch.hunks.length; i++) {
+    const hunk = patch.hunks[i];
+    const oldStart = hunk.oldLines === 0 ? hunk.oldStart - 1 : hunk.oldStart;
+    const newStart = hunk.newLines === 0 ? hunk.newStart - 1 : hunk.newStart;
+    ret.push("@@ -" + oldStart + "," + hunk.oldLines + " +" + newStart + "," + hunk.newLines + " @@");
+    for (const line of hunk.lines) {
+      ret.push(line);
+    }
+  }
+  return ret.join(`
+`) + `
+`;
+}
+function createTwoFilesPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  if (typeof options === "function") {
+    options = { callback: options };
+  }
+  if (!(options === null || options === undefined ? undefined : options.callback)) {
+    const patchObj = structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options);
+    if (!patchObj) {
+      return;
+    }
+    return formatPatch(patchObj, options === null || options === undefined ? undefined : options.headerOptions);
+  } else {
+    const { callback } = options;
+    structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, Object.assign(Object.assign({}, options), { callback: (patchObj) => {
+      if (!patchObj) {
+        callback(undefined);
+      } else {
+        callback(formatPatch(patchObj, options.headerOptions));
+      }
+    } }));
+  }
+}
+function splitLines(text) {
+  const hasTrailingNl = text.endsWith(`
+`);
+  const result = text.split(`
+`).map((line) => line + `
+`);
+  if (hasTrailingNl) {
+    result.pop();
+  } else {
+    result.push(result.pop().slice(0, -1));
+  }
+  return result;
 }
 // src/state/protected-paths.ts
 var PROTECTED_PREFIXES = [
@@ -17689,24 +18045,20 @@ function isProtectedPath(p) {
 
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
+var ChangeSchema = exports_external.object({
+  file: exports_external.string().min(1),
+  old_content: exports_external.string(),
+  new_content: exports_external.string()
+});
+var MAX_CHANGES_PER_REQUEST = 100;
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
-  patch: exports_external.string().min(1),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
-  test_files: exports_external.array(exports_external.string())
+  test_files: exports_external.array(exports_external.string()),
+  changes: exports_external.array(ChangeSchema).min(1).max(MAX_CHANGES_PER_REQUEST)
 });
-var MAX_PATCH_BYTES = 1048576;
-var FORBIDDEN_EXTENDED_HEADERS = [
-  { name: "rename from", pattern: /^rename from /m },
-  { name: "rename to", pattern: /^rename to /m },
-  { name: "copy from", pattern: /^copy from /m },
-  { name: "copy to", pattern: /^copy to /m },
-  { name: "new file mode", pattern: /^new file mode /m },
-  { name: "deleted file mode", pattern: /^deleted file mode /m },
-  { name: "similarity index", pattern: /^similarity index /m },
-  { name: "dissimilarity index", pattern: /^dissimilarity index /m }
-];
+var MAX_CHANGE_BYTES = 1048576;
 function validateRequest(toolName, request, ctx) {
   const warnings = [];
   if (request.rationale.trim().length === 0) {
@@ -17734,57 +18086,44 @@ function validateRequest(toolName, request, ctx) {
       testFileCanonicals.push(c.canonical);
     }
   }
-  const patchCheck = preValidatePatchInput(request.patch);
-  if (!patchCheck.ok) {
-    warnings.push(...patchCheck.errors);
+  if (request.changes.length === 0) {
+    warnings.push("changes must contain at least one entry");
     return { ok: false, warnings };
   }
-  let parsed;
-  try {
-    parsed = parsePatch(request.patch);
-  } catch (err) {
-    warnings.push(`patch could not be parsed as a unified diff: ${err.message}`);
+  if (request.changes.length > MAX_CHANGES_PER_REQUEST) {
+    warnings.push(`changes contains ${request.changes.length} entries; exceeds the ${MAX_CHANGES_PER_REQUEST}-entry limit`);
     return { ok: false, warnings };
   }
-  if (parsed.length === 0) {
-    warnings.push("patch did not contain any file headers");
+  let totalBytes = 0;
+  for (const c of request.changes) {
+    totalBytes += Buffer.byteLength(c.old_content, "utf8") + Buffer.byteLength(c.new_content, "utf8");
+  }
+  if (totalBytes > MAX_CHANGE_BYTES) {
+    warnings.push(`changes total payload is ${totalBytes} bytes; exceeds the ${MAX_CHANGE_BYTES}-byte limit`);
     return { ok: false, warnings };
   }
   const touched = [];
   const changes = [];
-  for (const p of parsed) {
-    if (!p.oldFileName && !p.newFileName) {
-      warnings.push("patch entry has no file header; input is not a valid unified diff");
+  for (const c of request.changes) {
+    if (c.old_content.includes("\x00")) {
+      warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-    if (!p.hunks || p.hunks.length === 0) {
-      warnings.push(`patch entry for "${p.oldFileName ?? p.newFileName}" has no hunks`);
+    if (c.new_content.includes("\x00")) {
+      warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-    const cls = classifyPatchFile(p.oldFileName, p.newFileName);
-    if (cls.kind === "invalid") {
-      warnings.push("patch entry has no usable file header");
-      continue;
-    }
-    if (cls.kind === "creation") {
-      warnings.push("patch contains a file creation (/dev/null source); modify-only patches are required");
-      continue;
-    }
-    if (cls.kind === "deletion") {
-      warnings.push(`patch contains a file deletion (${cls.filename}); modify-only patches are required`);
-      continue;
-    }
-    if (cls.kind === "rename") {
-      warnings.push(`patch contains a rename (${cls.from} -> ${cls.to}); modify-only patches are required`);
-      continue;
-    }
-    const safe = checkPathSafety(cls.filename, ctx.repoRoot);
+    const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
-      warnings.push(`patch path "${cls.filename}": ${safe.error}`);
+      warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
     touched.push(safe.canonical);
-    changes.push({ canonical: safe.canonical, diff: p });
+    changes.push({
+      canonical: safe.canonical,
+      oldContent: c.old_content,
+      newContent: c.new_content
+    });
   }
   const allowed = new Set;
   if (targetCheck.ok) {
@@ -17798,13 +18137,13 @@ function validateRequest(toolName, request, ctx) {
   for (const t of touched) {
     if (!allowed.has(t)) {
       const allowedList = [...allowed].join(", ");
-      warnings.push(`patch modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`);
+      warnings.push(`change modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`);
     }
   }
   const seenCanonical = new Set;
   for (const t of touched) {
     if (seenCanonical.has(t)) {
-      warnings.push(`patch contains multiple sections targeting "${t}". Submit each as its own edit_* call so hunks are not silently dropped.`);
+      warnings.push(`changes contain multiple entries targeting "${t}". Submit each as its own edit_* call so changes are not silently dropped.`);
     } else {
       seenCanonical.add(t);
     }
@@ -17839,7 +18178,6 @@ function makeApplyingHandler(deps) {
   return async (toolName, args) => {
     const ts = now();
     const editId = log.nextEditId(ts);
-    const patchSize = Buffer.byteLength(args.patch, "utf8");
     const baseEntry = {
       edit_id: editId,
       timestamp: isoTimestampForHandler(ts),
@@ -17847,13 +18185,13 @@ function makeApplyingHandler(deps) {
       target_file: args.target_file,
       rationale: args.rationale,
       risk_level: args.risk_level,
-      test_files: args.test_files,
-      patch_size_bytes: patchSize
+      test_files: args.test_files
     };
     const validation = validateRequest(toolName, args, ctx);
     if (!validation.ok) {
       const finalWarnings2 = appendLogSafely(log, {
         ...baseEntry,
+        patch_size_bytes: 0,
         applied: false,
         warnings: validation.warnings
       });
@@ -17863,9 +18201,15 @@ function makeApplyingHandler(deps) {
         warnings: finalWarnings2
       };
     }
+    let synthesized = "";
+    for (const c of args.changes) {
+      synthesized += createTwoFilesPatch(c.file, c.file, c.old_content, c.new_content, "old", "new");
+    }
+    const patchSize = Buffer.byteLength(synthesized, "utf8");
     const result = applyChanges(ctx.repoRoot, validation.changes);
     const finalWarnings = appendLogSafely(log, {
       ...baseEntry,
+      patch_size_bytes: patchSize,
       applied: result.applied,
       warnings: result.warnings
     });
@@ -17897,71 +18241,6 @@ function isoTimestampForHandler(d) {
   const offH = pad(Math.floor(offAbs / 60));
   const offM = pad(offAbs % 60);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` + `${sign}${offH}:${offM}`;
-}
-function preValidatePatchInput(patch) {
-  const errors4 = [];
-  const byteLength = Buffer.byteLength(patch, "utf8");
-  if (byteLength > MAX_PATCH_BYTES) {
-    errors4.push(`patch is ${byteLength} bytes; exceeds the ${MAX_PATCH_BYTES}-byte limit`);
-    return { ok: false, errors: errors4 };
-  }
-  if (patch.includes("\x00")) {
-    errors4.push("patch contains NUL byte; rejected");
-    return { ok: false, errors: errors4 };
-  }
-  for (const { name, pattern } of FORBIDDEN_EXTENDED_HEADERS) {
-    if (pattern.test(patch)) {
-      errors4.push(`patch contains git extended header "${name}"; modify-only patches are required`);
-    }
-  }
-  if (errors4.length > 0) {
-    return { ok: false, errors: errors4 };
-  }
-  return { ok: true };
-}
-function classifyPatchFile(oldName, newName) {
-  const oldT = trimDiffHeader(oldName);
-  const newT = trimDiffHeader(newName);
-  if (oldT === null && newT === null) {
-    return { kind: "invalid" };
-  }
-  if (oldT === null && newT !== null) {
-    return { kind: "creation" };
-  }
-  if (newT === null && oldT !== null) {
-    return { kind: "deletion", filename: oldT };
-  }
-  if (oldT === newT) {
-    return { kind: "modify", filename: oldT };
-  }
-  const oldS = stripSingleCharPrefix(oldT);
-  const newS = stripSingleCharPrefix(newT);
-  if (oldS !== null && newS !== null && oldS === newS) {
-    return { kind: "modify", filename: oldS };
-  }
-  return {
-    kind: "rename",
-    from: oldS ?? oldT,
-    to: newS ?? newT
-  };
-}
-function trimDiffHeader(name) {
-  if (name === undefined || name === null) {
-    return null;
-  }
-  const tabIndex = name.indexOf("\t");
-  const trimmed = (tabIndex >= 0 ? name.slice(0, tabIndex) : name).trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  if (trimmed === "/dev/null") {
-    return null;
-  }
-  return trimmed;
-}
-function stripSingleCharPrefix(p) {
-  const m = /^[^\s/]\/(.+)$/.exec(p);
-  return m && typeof m[1] === "string" ? m[1] : null;
 }
 function checkPathSafety(p, repoRoot) {
   if (path.isAbsolute(p)) {
@@ -18041,15 +18320,11 @@ function realpathOfDeepestExisting(p) {
 // src/tools/registry.ts
 var inputSchema = {
   type: "object",
-  required: ["target_file", "patch", "rationale", "risk_level", "test_files"],
+  required: ["target_file", "rationale", "risk_level", "test_files", "changes"],
   properties: {
     target_file: {
       type: "string",
-      description: "Repository-relative path to the file being edited."
-    },
-    patch: {
-      type: "string",
-      description: "Unified diff to apply. Must be a modify-only patch."
+      description: "Repository-relative path to the primary file being edited. When changes touch multiple files, this is the principal file the edit is about."
     },
     rationale: {
       type: "string",
@@ -18064,6 +18339,31 @@ var inputSchema = {
       type: "array",
       items: { type: "string" },
       description: "Paths of test files relevant to this edit. Required (non-empty) for all tools except edit_refactor_only, edit_test_only_change, and edit_docs_only. Must be empty for edit_test_only_change."
+    },
+    changes: {
+      type: "array",
+      minItems: 1,
+      maxItems: 100,
+      description: "One or more content-pair changes. The server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. Modify-only — no create / delete / rename.",
+      items: {
+        type: "object",
+        required: ["file", "old_content", "new_content"],
+        properties: {
+          file: {
+            type: "string",
+            description: "Repository-relative path of the file to modify. Must already exist on disk."
+          },
+          old_content: {
+            type: "string",
+            description: "Exact current content of the file. The server compares byte-for-byte at apply time and rejects the call if disk content differs."
+          },
+          new_content: {
+            type: "string",
+            description: "New content to write to the file. Atomically replaces the file on success."
+          }
+        },
+        additionalProperties: false
+      }
     }
   },
   additionalProperties: false
@@ -18187,45 +18487,54 @@ function applyChanges(repoRoot, changes, options = {}) {
       original = fs2.readFileSync(realAbs, "utf8");
     } catch (e) {
       const code = e?.code;
-      warnings.push(`failed to read "${ch.canonical}" for patch application: ${code ?? "ERR"}`);
+      if (code === "ENOENT") {
+        warnings.push(`change.file "${ch.canonical}" does not exist; modify-only requires the file already exist`);
+      } else {
+        warnings.push(`failed to read "${ch.canonical}" for change application: ${code ?? "ERR"}`);
+      }
       return { applied: false, warnings };
     }
-    const result = applyPatch(original, ch.diff);
-    if (result === false) {
-      warnings.push(`patch did not apply cleanly to "${ch.canonical}" (context mismatch)`);
+    if (original !== ch.oldContent) {
+      warnings.push(`stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`);
       return { applied: false, warnings };
     }
     staged.push({
       canonical: ch.canonical,
       absolute: realAbs,
       parent: realParent,
-      output: result,
+      output: ch.newContent,
       mode: originalMode
     });
   }
-  const touchedAbsolutePaths = [];
+  const parentDriftCheck = (parent, op) => {
+    let nowReal;
+    try {
+      nowReal = fs2.realpathSync(parent);
+    } catch (e) {
+      const code = e?.code;
+      return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
+    }
+    if (nowReal !== parent) {
+      return {
+        ok: false,
+        reason: `parent canonical drifted from "${parent}" to "${nowReal}" before ${op}`
+      };
+    }
+    return { ok: true };
+  };
+  const pending = [];
+  const cleanupAllPending = () => {
+    for (const p of pending) {
+      cleanupTemp(p.tempPath);
+    }
+  };
   for (const w of staged) {
-    const parentDriftCheck = (op) => {
-      let nowReal;
-      try {
-        nowReal = fs2.realpathSync(w.parent);
-      } catch (e) {
-        const code = e?.code;
-        return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
-      }
-      if (nowReal !== w.parent) {
-        return {
-          ok: false,
-          reason: `parent canonical drifted from "${w.parent}" to "${nowReal}" before ${op}`
-        };
-      }
-      return { ok: true };
-    };
     const tempName = path2.basename(w.absolute) + "." + crypto.randomBytes(8).toString("hex") + ".metaedit-tmp";
     const tempPath = path2.join(w.parent, tempName);
-    let preDrift = parentDriftCheck("temp open");
-    if (!preDrift.ok) {
-      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${preDrift.reason}`);
+    const driftBeforeOpen = parentDriftCheck(w.parent, "temp open");
+    if (!driftBeforeOpen.ok) {
+      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeOpen.reason}`);
+      cleanupAllPending();
       return { applied: false, warnings };
     }
     let fd = null;
@@ -18237,6 +18546,7 @@ function applyChanges(repoRoot, changes, options = {}) {
       const code = e?.code;
       warnings.push(`failed to stage temp file for "${w.canonical}": ${code ?? "ERR"}`);
       cleanupTemp(tempPath);
+      cleanupAllPending();
       return { applied: false, warnings };
     } finally {
       if (fd !== null) {
@@ -18245,26 +18555,39 @@ function applyChanges(repoRoot, changes, options = {}) {
         } catch {}
       }
     }
+    if (w.mode !== null) {
+      try {
+        fs2.chmodSync(tempPath, w.mode);
+      } catch (e) {
+        const code = e?.code;
+        warnings.push(`failed to restore original mode 0o${w.mode.toString(8)} on "${w.canonical}" (${code ?? "ERR"}); new content will land at 0o600`);
+      }
+    }
+    pending.push({ w, tempPath });
+  }
+  const touchedAbsolutePaths = [];
+  for (let idx = 0;idx < pending.length; idx++) {
+    const { w, tempPath } = pending[idx];
+    const driftBeforeRename = parentDriftCheck(w.parent, "rename");
+    if (!driftBeforeRename.ok) {
+      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeRename.reason}`);
+      for (let j = idx;j < pending.length; j++) {
+        cleanupTemp(pending[j].tempPath);
+      }
+      if (touchedAbsolutePaths.length > 0) {
+        warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
+      }
+      return { applied: false, warnings };
+    }
     try {
-      if (w.mode !== null) {
-        try {
-          fs2.chmodSync(tempPath, w.mode);
-        } catch {}
-      }
-      preDrift = parentDriftCheck("rename");
-      if (!preDrift.ok) {
-        warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${preDrift.reason}`);
-        cleanupTemp(tempPath);
-        if (touchedAbsolutePaths.length > 0) {
-          warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
-        }
-        return { applied: false, warnings };
-      }
       fs2.renameSync(tempPath, w.absolute);
     } catch (e) {
       const code = e?.code;
       warnings.push(`failed to atomically rename temp into "${w.canonical}": ${code ?? "ERR"}`);
       cleanupTemp(tempPath);
+      for (let j = idx + 1;j < pending.length; j++) {
+        cleanupTemp(pending[j].tempPath);
+      }
       if (touchedAbsolutePaths.length > 0) {
         warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
       }
@@ -18534,4 +18857,4 @@ export {
   createServer
 };
 
-//# debugId=4ACC67A52005189A64756E2164756E21
+//# debugId=D08E84BF9D523F4764756E2164756E21
