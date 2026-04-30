@@ -235,6 +235,43 @@ describe("evaluateBashCommand — prefix-only deny verbs", () => {
     const r = evaluateBashCommand("exec 2>&1");
     expect(r.decision).toBe("allow");
   });
+
+  it("strips leading env assignments before prefix matching (FOO=bar mv ...)", () => {
+    const r = evaluateBashCommand("FOO=bar mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("strips multiple env assignments before prefix matching", () => {
+    const r = evaluateBashCommand("FOO=bar BAZ=qux cp src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cp");
+  });
+
+  it("strips quoted env assignment values", () => {
+    const r = evaluateBashCommand('LANG="en US.UTF-8" mv src/a.ts src/b.ts');
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("does not strip past a real command (FOO=bar followed by allowed cmd)", () => {
+    const r = evaluateBashCommand("FOO=bar cargo fmt");
+    expect(r.decision).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — protected paths without trailing slash", () => {
+  it("denies a write to .meta-edit/state (no trailing slash)", () => {
+    const r = evaluateBashCommand("cat > .meta-edit/state");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies a write to .meta-edit/tmp (no trailing slash)", () => {
+    const r = evaluateBashCommand("cat > .meta-edit/tmp");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
 });
 
 describe("evaluateBashCommand — backslash-escape bypass", () => {

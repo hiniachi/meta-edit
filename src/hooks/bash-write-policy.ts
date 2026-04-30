@@ -68,9 +68,16 @@ export const DENY_PREFIX_PATTERNS: readonly string[] = [
   "patch\t",
 ];
 
+// Match the protected directory roots regardless of whether the command
+// uses a trailing slash. `cat > .meta-edit/state` (no slash, treating
+// the path as a literal file or about-to-be-created sibling) must trip
+// the same gate as `cat > .meta-edit/state/edits.jsonl`. Acceptable
+// over-rejection: legitimate paths that happen to embed `.meta-edit/state`
+// as a literal substring inside an argument are vanishingly rare in
+// agent-driven shell commands.
 const PROTECTED_PATH_NEEDLES: readonly string[] = [
-  ".meta-edit/state/",
-  ".meta-edit/tmp/",
+  ".meta-edit/state",
+  ".meta-edit/tmp",
 ];
 
 export function evaluateBashCommand(command: string): HookDecision {
@@ -139,8 +146,12 @@ function evaluateSegment(rawSegment: string): HookDecision {
 
   // Prefix-style patterns (mv, cp, patch) are matched only at the start
   // of the trimmed segment so a substring like " mv " inside an argument
-  // string does not falsely deny.
-  const trimmed = normalized.trimStart();
+  // string does not falsely deny. We also strip leading shell variable
+  // assignments such as `FOO=bar mv a b` so `FOO=bar mv` is treated as
+  // `mv` for the purposes of prefix matching. Stripping is greedy: any
+  // chain of `NAME=value` (each assignment separated by whitespace) is
+  // peeled off until the next non-assignment token.
+  const trimmed = stripLeadingEnvAssignments(normalized.trimStart());
   for (const prefix of DENY_PREFIX_PATTERNS) {
     if (trimmed.startsWith(prefix)) {
       return {
@@ -247,6 +258,77 @@ function denyReason(pattern: string): string {
     `or codegen needs to run, route it through the allowlist (see ` +
     `docs/SPEC.md §5.2).`
   );
+}
+
+// Strip a chain of leading `NAME=value` shell variable assignments.
+// Examples:
+//   "FOO=bar mv a b"          -> "mv a b"
+//   "FOO=bar BAZ=qux mv a b"  -> "mv a b"
+//   "FOO=$(date) mv a b"      -> "mv a b"  (value extends to next space outside quotes)
+// We deliberately accept simple double-/single-quoted values so
+// `LANG="en US.UTF-8" mv a b` is also stripped to `mv a b`.
+function stripLeadingEnvAssignments(s: string): string {
+  let i = 0;
+  while (i < s.length) {
+    // Skip leading whitespace between assignments.
+    while (i < s.length && (s[i] === " " || s[i] === "\t")) {
+      i++;
+    }
+    // Try to consume a NAME=value token. NAME is [A-Za-z_][A-Za-z0-9_]*.
+    const nameStart = i;
+    if (
+      i < s.length &&
+      ((s[i]! >= "A" && s[i]! <= "Z") ||
+        (s[i]! >= "a" && s[i]! <= "z") ||
+        s[i] === "_")
+    ) {
+      i++;
+      while (
+        i < s.length &&
+        ((s[i]! >= "A" && s[i]! <= "Z") ||
+          (s[i]! >= "a" && s[i]! <= "z") ||
+          (s[i]! >= "0" && s[i]! <= "9") ||
+          s[i] === "_")
+      ) {
+        i++;
+      }
+      if (s[i] !== "=") {
+        // Not an assignment; rewind and stop stripping.
+        return s.slice(nameStart);
+      }
+      i++; // consume '='
+      // Consume the value: until whitespace at top level, respecting
+      // single/double quotes.
+      let inSingle = false;
+      let inDouble = false;
+      while (i < s.length) {
+        const c = s[i];
+        if (!inSingle && c === "\\" && i + 1 < s.length) {
+          i += 2;
+          continue;
+        }
+        if (c === "'" && !inDouble) {
+          inSingle = !inSingle;
+          i++;
+          continue;
+        }
+        if (c === '"' && !inSingle) {
+          inDouble = !inDouble;
+          i++;
+          continue;
+        }
+        if (!inSingle && !inDouble && (c === " " || c === "\t")) {
+          break;
+        }
+        i++;
+      }
+      // Continue the outer loop to try another assignment.
+      continue;
+    }
+    // Current position isn't a name start; we're done stripping.
+    return s.slice(i);
+  }
+  return "";
 }
 
 function touchesProtectedPath(command: string): boolean {
