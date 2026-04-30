@@ -22,7 +22,7 @@ async function main(argv: string[]): Promise<number> {
 
     case "--version":
     case "-v":
-      out.write("meta-edit 0.1.0\n");
+      out.write("meta-edit 0.1.1\n");
       return 0;
 
     case "serve":
@@ -83,7 +83,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 function printHelp(): void {
-  process.stdout.write(`meta-edit 0.1.0
+  process.stdout.write(`meta-edit 0.1.1
 
 Usage:
   meta-edit serve                          Run the MCP stdio server.

@@ -18356,7 +18356,7 @@ function createServer(options = {}) {
   });
   const server = new Server({
     name: "meta-edit",
-    version: "0.1.0"
+    version: "0.1.1"
   }, {
     capabilities: {
       tools: {}
@@ -18385,4 +18385,4 @@ export {
   createServer
 };
 
-//# debugId=755334E6B28537E964756E2164756E21
+//# debugId=4789D3BD643974D864756E2164756E21

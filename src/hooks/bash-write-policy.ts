@@ -112,16 +112,29 @@ function evaluateSegment(rawSegment: string): HookDecision {
   // same protected-path needles as the canonical form.
   const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
 
-  // Protected-path edits are denied unconditionally — even when the
-  // surrounding command otherwise matches a documented allowlist entry.
+  // Protected-path edits are denied — even when the surrounding command
+  // otherwise matches a documented allowlist entry. Carve-out: a small
+  // set of well-known read-only utilities (`tail`, `cat`, `head`, `wc`,
+  // `grep`, ...) is allowed to inspect protected paths so that debugging
+  // sessions don't have to disable the hook. The carve-out is withdrawn
+  // when the command ALSO contains a `>` / `>>` redirect whose target is
+  // a protected path — in that case the command is writing to protected,
+  // even though its leading verb is a read tool. See
+  // OBSERVED-FAILURES.md "LOW: Read-only commands referencing protected
+  // paths are blocked".
   if (touchesProtectedPath(normalized)) {
-    return {
-      decision: "deny",
-      reason:
-        "command touches a protected meta-edit path " +
-        "(.meta-edit/state/** or .meta-edit/tmp/**); writes to these " +
-        "paths must go through an edit_policy_change tool call.",
-    };
+    const verb = extractCommandVerb(normalized.trimStart());
+    const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
+    const writeTargetsProtected = redirectsToProtected(normalized);
+    if (!isReadOnly || writeTargetsProtected) {
+      return {
+        decision: "deny",
+        reason:
+          "command would write to a protected meta-edit path " +
+          "(.meta-edit/state/** or .meta-edit/tmp/**); writes to these " +
+          "paths must go through an edit_policy_change tool call.",
+      };
+    }
   }
 
   // Deny patterns are checked unconditionally; we deliberately do NOT
@@ -282,6 +295,138 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
 
 // Verbs whose mere invocation is denied.
 const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
+
+// Common read-only inspection utilities. When the leading verb (after
+// wrapper / env-assignment / absolute-path stripping) is one of these
+// AND the command has no `>` / `>>` redirect targeting a protected path,
+// references to `.meta-edit/state/**` / `.meta-edit/tmp/**` are allowed
+// so that debugging sessions can inspect the edit log without disabling
+// the hook.
+//
+// Verbs are added here ONLY when their default invocation reads from
+// stdin / files and writes to stdout, AND have no documented mode that
+// spawns a subprocess or shells out. Verbs that have any non-redirect
+// write-side-effect are deliberately omitted so they fall through to
+// the unconditional protected-path deny:
+//
+//   - `find`     has `-delete` / `-fprint FILE` / `-fprintf FILE`
+//   - `sort`     has `-o OUTFILE` / `--output=OUTFILE`
+//   - `uniq`     accepts a second positional arg as output file
+//   - `xxd`      has `-r` (binary write back) and an output positional
+//   - `yq`       (mikefarah/yq) has `-i` / `--inplace` for file mutation
+//   - `less`     has `-O OUTFILE` / `--LOG-FILE=OUTFILE` (logs piped input)
+//   - `more`     has `!command` shell escape and `v` editor startup;
+//                MORESECURE / PAGERSECURE are required to disable them
+//   - `rg`       has `--pre=COMMAND` which spawns an arbitrary shell
+//                command per input path (full filesystem access)
+//   - `file`     has `-C` / `--compile` (writes `magic.mgc` to cwd)
+//   - `awk`      has `print > "..."` and `printf > "..."` (in-script
+//                redirection — invisible to a leading-verb check)
+//   - `sed`      has `-i` (already in DENY_SUBSTRINGS) and `w` command
+//   - `dd`       has `of=...`
+//   - `tee`      writes to both stdout and the named file; already
+//                covered by DENY_SUBSTRINGS — do not add to this set
+//
+// `jq` (the original) is intentionally retained: it has no in-place
+// flag and always writes to stdout. Any future verb tempted into this
+// set should be checked for an `-i` / `--inplace` / `--write` /
+// `--output FILE` / second-positional-output / `--compile` /
+// `--LOG-FILE` / `--pre=COMMAND` / shell-escape mode FIRST. When in
+// doubt, omit.
+//
+// If a future verb is found that should read-but-also-might-write, the
+// rule is: omit it. False negatives (a debug command needing a Read
+// fallback) are cheap; false positives (silent writes through the
+// carve-out) are not.
+const READ_ONLY_VERBS: ReadonlySet<string> = new Set([
+  "tail",
+  "head",
+  "cat",
+  "grep",
+  "egrep",
+  "fgrep",
+  "wc",
+  "cut",
+  "tr",
+  "od",
+  "hexdump",
+  "stat",
+  "ls",
+  "du",
+  "df",
+  "jq",
+  "diff",
+  "cmp",
+]);
+
+// Detect whether the command contains a `>` or `>>` write redirect
+// (outside quoted regions, NOT a `>&` / `2>&1` fd duplication) whose
+// target token references a protected path. Used to withdraw the
+// read-only-verb carve-out when a read tool is ALSO redirecting its
+// output into the protected directory.
+function redirectsToProtected(s: string): boolean {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    // c is `>` outside quotes. Skip fd-duplication (`>&`).
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    // Skip past the redirect operator (one or two `>`s).
+    let j = i + 1;
+    if (s[j] === ">") j++;
+    // Skip whitespace after the operator.
+    while (j < s.length && (s[j] === " " || s[j] === "\t")) j++;
+    // Read the target token until the next shell delimiter.
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (
+        tc === " " ||
+        tc === "\t" ||
+        tc === ";" ||
+        tc === "|" ||
+        tc === "&" ||
+        tc === "\n" ||
+        tc === ">" ||
+        tc === "<"
+      ) {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (target.includes(needle)) {
+        return true;
+      }
+    }
+    i = j;
+  }
+  return false;
+}
 
 function collapsePathDoublings(s: string): string {
   let prev: string;

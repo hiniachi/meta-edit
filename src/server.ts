@@ -25,7 +25,7 @@ export function createServer(options: CreateServerOptions = {}): Server {
   const server = new Server(
     {
       name: "meta-edit",
-      version: "0.1.0",
+      version: "0.1.1",
     },
     {
       capabilities: {

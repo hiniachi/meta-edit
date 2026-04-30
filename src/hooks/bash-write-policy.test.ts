@@ -477,3 +477,233 @@ describe("constants", () => {
     expect(DENY_PREFIX_PATTERNS).toContain("cp ");
   });
 });
+
+describe("evaluateBashCommand — read-only access to protected paths is allowed", () => {
+  // Regression for OBSERVED-FAILURES.md "LOW: Read-only commands referencing
+  // protected paths are blocked". Before the fix, ANY mention of the
+  // protected substring tripped the deny — even read-only inspections
+  // necessary for debugging (`tail`, `cat`, `wc`, `head`, `grep`, ...).
+  // The fix carves out a small set of common read-only utilities so they
+  // can inspect protected paths, while writes via these same verbs (using
+  // a `>` / `>>` redirect whose target is protected) remain denied.
+
+  it("allows tail of .meta-edit/state/edits.jsonl", () => {
+    expect(evaluateBashCommand("tail -2 .meta-edit/state/edits.jsonl")).toEqual({
+      decision: "allow",
+    });
+  });
+
+  it("allows cat of a protected log", () => {
+    expect(
+      evaluateBashCommand("cat .meta-edit/state/edits.jsonl").decision,
+    ).toBe("allow");
+  });
+
+  it("allows wc -l of a protected log", () => {
+    expect(
+      evaluateBashCommand("wc -l .meta-edit/state/edits.jsonl").decision,
+    ).toBe("allow");
+  });
+
+  it("allows head of a protected tmp file", () => {
+    expect(
+      evaluateBashCommand("head .meta-edit/tmp/scratch.txt").decision,
+    ).toBe("allow");
+  });
+
+  it("allows grep against a protected log", () => {
+    expect(
+      evaluateBashCommand("grep edit_docs_only .meta-edit/state/edits.jsonl")
+        .decision,
+    ).toBe("allow");
+  });
+
+  it("allows jq against a protected log", () => {
+    expect(
+      evaluateBashCommand("jq . .meta-edit/state/edits.jsonl").decision,
+    ).toBe("allow");
+  });
+
+  it("allows ls of a protected directory", () => {
+    expect(evaluateBashCommand("ls -la .meta-edit/state/").decision).toBe(
+      "allow",
+    );
+  });
+
+  it("allows tail piped into wc when both verbs are read-only", () => {
+    expect(
+      evaluateBashCommand("tail .meta-edit/state/edits.jsonl | wc -l").decision,
+    ).toBe("allow");
+  });
+
+  it("allows redirecting a protected-path read into a non-protected target", () => {
+    // Intent: "read protected, write somewhere safe". The redirect target
+    // is /tmp, not a protected path, so this is allowed.
+    expect(
+      evaluateBashCommand(
+        "tail -1 .meta-edit/state/edits.jsonl > /tmp/mine.log",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("allows wrapper-prefixed read of protected (sudo cat ...)", () => {
+    expect(
+      evaluateBashCommand("sudo cat .meta-edit/state/edits.jsonl").decision,
+    ).toBe("allow");
+  });
+
+  it("allows env-prefixed read of protected (env tail ...)", () => {
+    expect(
+      evaluateBashCommand("env tail .meta-edit/state/edits.jsonl").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — writes to protected paths still denied", () => {
+  // Pin down that the read-only carve-out does NOT loosen write detection.
+
+  it("denies bare > redirect to .meta-edit/state/", () => {
+    const r = evaluateBashCommand(
+      "printf '%s' x > .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies bare >> append redirect to .meta-edit/state/", () => {
+    const r = evaluateBashCommand(
+      "printf '%s' x >> .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies a read-only verb that redirects its output to a protected path", () => {
+    // tail itself is read-only but the redirect TARGET is protected, so
+    // this is a write attempt and must be denied.
+    const r = evaluateBashCommand(
+      "tail /etc/hostname > .meta-edit/state/exfil.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies dd of=protected (non-read-only verb is still denied unconditionally)", () => {
+    const r = evaluateBashCommand(
+      "dd if=/etc/hostname of=.meta-edit/state/exfil",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies a read-only verb when redirect target is an absolute path containing protected", () => {
+    const r = evaluateBashCommand(
+      "cat /etc/hostname > /tmp/work/.meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies prettier --write targeting a protected path (preserved from earlier hardening)", () => {
+    // Regression guard: prettier is not in READ_ONLY_VERBS, so the
+    // protected-path deny still fires unconditionally. This used to be
+    // "even allowlisted commands are denied"; with the new gate the same
+    // outcome is reached by the !isReadOnly path.
+    const r = evaluateBashCommand(
+      "prettier --write .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  // The following verbs LOOK read-only but have non-redirect write modes
+  // (-delete, -o OUTFILE, second-positional output, -r reverse). Codex
+  // adversarial review flagged them as a HIGH bypass risk if added to
+  // READ_ONLY_VERBS. They are deliberately NOT in READ_ONLY_VERBS, so
+  // the protected-path deny fires via the !isReadOnly path.
+
+  it("denies find -delete on a protected directory", () => {
+    const r = evaluateBashCommand("find .meta-edit/state -name '*.jsonl' -delete");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies sort -o targeting a protected path", () => {
+    const r = evaluateBashCommand(
+      "sort /etc/hostname -o .meta-edit/state/exfil.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies uniq with positional output to a protected path", () => {
+    const r = evaluateBashCommand(
+      "uniq /etc/hostname .meta-edit/state/exfil.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies xxd -r (binary write-back) targeting a protected path", () => {
+    const r = evaluateBashCommand(
+      "xxd -r /tmp/hex .meta-edit/state/exfil",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies yq -i in-place mutation of a protected path", () => {
+    // Same class as find -delete / sort -o etc.: a verb that LOOKS
+    // read-only but has a non-redirect write mode (`-i` / `--inplace`
+    // for mikefarah/yq). yq is deliberately NOT in READ_ONLY_VERBS for
+    // this reason.
+    const r = evaluateBashCommand(
+      "yq -i '.applied = false' .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies less -O log-file targeting a protected path", () => {
+    // less has -O / --LOG-FILE that writes piped input to a file
+    // without a `>` redirect. less is deliberately NOT in
+    // READ_ONLY_VERBS for this reason.
+    const r = evaluateBashCommand(
+      "cat /etc/hostname | less -O.meta-edit/state/exfil.log",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies file -C compile targeting a protected path", () => {
+    // file -C / --compile writes a compiled magic file (magic.mgc)
+    // to the filesystem. file is deliberately NOT in READ_ONLY_VERBS
+    // for this reason.
+    const r = evaluateBashCommand(
+      "file -C -m .meta-edit/state/magic",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies rg --pre that could shell out and write to a protected path", () => {
+    // rg --pre=COMMAND spawns an arbitrary shell command per input
+    // path; that subprocess can write anywhere. rg is deliberately NOT
+    // in READ_ONLY_VERBS for this reason.
+    const r = evaluateBashCommand(
+      "rg --pre=cat foo .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies more — has !command shell escape and v editor startup", () => {
+    // more(1) documents `!command` / `:!command` shell execution and
+    // `v` (editor startup); MORESECURE / PAGERSECURE are needed to
+    // disable them. more is deliberately NOT in READ_ONLY_VERBS for
+    // this reason.
+    const r = evaluateBashCommand("more .meta-edit/state/edits.jsonl");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+});

@@ -18357,7 +18357,7 @@ function createServer(options = {}) {
   });
   const server = new Server({
     name: "meta-edit",
-    version: "0.1.0"
+    version: "0.1.1"
   }, {
     capabilities: {
       tools: {}
@@ -18824,7 +18824,7 @@ async function main(argv) {
       return 0;
     case "--version":
     case "-v":
-      out.write(`meta-edit 0.1.0
+      out.write(`meta-edit 0.1.1
 `);
       return 0;
     case "serve":
@@ -18884,7 +18884,7 @@ async function main(argv) {
   }
 }
 function printHelp() {
-  process.stdout.write(`meta-edit 0.1.0
+  process.stdout.write(`meta-edit 0.1.1
 
 Usage:
   meta-edit serve                          Run the MCP stdio server.
@@ -18908,4 +18908,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=039F7789CDFCA9AC64756E2164756E21
+//# debugId=56AE337C2079B22264756E2164756E21
