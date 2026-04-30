@@ -36,6 +36,21 @@ still fire on `sed -i`, `git apply`, etc. Prefix-only verbs (`mv`, `cp`,
 `patch`) inside `$(...)` are not detected. Promote to detection only if
 observed.
 
+### MEDIUM: Wrapper options with value args (`sudo -u USER mv`, `env -u VAR mv`)
+
+The wrapper-option skip in `extractCommandVerb` consumes flag-only
+options (`-X`, `--foo`, `--foo=bar`) but does not know which options
+take a separate value argument. Concretely, `sudo -u root mv a b`
+and `env -u VAR mv a b` peel the wrapper and the leading flag, then
+see `root` / `VAR` as the next word and treat that as the verb,
+missing `mv`. Substring deny patterns (`sed -i`, `git apply`, etc.)
+still fire because they don't depend on segment-start position;
+only prefix-only verbs (`mv`, `cp`, `patch`) slip through.
+
+Promote to detection by adding per-wrapper option grammars (e.g.
+`sudo` short opts that take a value: `-u`, `-g`, `-h`, ...). For
+v0.2.
+
 ### LOW: `cp --no-clobber` / `patch --dry-run` false positive
 
 `DENY_PREFIX_PATTERNS` denies any segment whose trimmed form starts with

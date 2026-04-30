@@ -103,9 +103,37 @@ describe("evaluateBashCommand — python -c / node -e", () => {
     expect(r.reason).toContain("node");
   });
 
+  it("denies node --eval (long form) with writeFileSync", () => {
+    const r = evaluateBashCommand(
+      "node --eval \"require('fs').writeFileSync('src/foo.ts','x')\"",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("node");
+  });
+
+  it("denies node --eval=EXPR (long form with =) with writeFileSync", () => {
+    const r = evaluateBashCommand(
+      "node --eval=\"require('fs').writeFileSync('src/foo.ts','x')\"",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("node");
+  });
+
   it("allows node -e without write keywords", () => {
     expect(
       evaluateBashCommand("node -e 'console.log(1+1)'").decision,
+    ).toBe("allow");
+  });
+
+  it("allows node --eval without write keywords", () => {
+    expect(
+      evaluateBashCommand("node --eval 'console.log(1+1)'").decision,
+    ).toBe("allow");
+  });
+
+  it("allows node --eval=EXPR without write keywords", () => {
+    expect(
+      evaluateBashCommand("node --eval='console.log(1+1)'").decision,
     ).toBe("allow");
   });
 });
@@ -289,6 +317,47 @@ describe("evaluateBashCommand — protected paths without trailing slash", () =>
     const r = evaluateBashCommand("cat > .meta-edit/././state");
     expect(r.decision).toBe("deny");
   });
+
+  it("denies a path that resolves into protected via /../", () => {
+    // .meta-edit/logs/../state/x normalizes to .meta-edit/state/x
+    const r = evaluateBashCommand("cat > .meta-edit/logs/../state/x");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies a deeper /../ traversal into protected", () => {
+    const r = evaluateBashCommand("cat > .meta-edit/a/b/../../state/x");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("does not falsely match unrelated /../ that escapes the repo", () => {
+    // ../../etc/passwd has no preceding segment to collapse with, so
+    // the protected-path needles still don't match.
+    const r = evaluateBashCommand("cat > ../../etc/passwd");
+    // No deny pattern triggers — `cat >` IS a deny substring.
+    // We expect deny here (substring), not the protected branch.
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cat >");
+  });
+
+  it("does NOT trip protected for .meta-edit/../state/x (operationally `./state/x`)", () => {
+    // Verify the collapse regex's behavior is operationally correct:
+    // .meta-edit/../state/x resolves to ./state/x, NOT protected. The
+    // command is denied via the `cat >` substring, not the protected
+    // branch.
+    const r = evaluateBashCommand("cat > .meta-edit/../state/x");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cat >");
+    expect(r.reason).not.toContain("protected");
+  });
+
+  it("DOES trip protected for /abs/path/.meta-edit/state/edits.jsonl", () => {
+    const r = evaluateBashCommand(
+      "cat > /tmp/work/.meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
 });
 
 describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () => {
@@ -331,6 +400,46 @@ describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () =>
   it("does not deny a wrapped allowlist-style verb", () => {
     expect(evaluateBashCommand("sudo cargo fmt").decision).toBe("allow");
     expect(evaluateBashCommand("env prettier --write src/").decision).toBe("allow");
+  });
+
+  it("skips wrapper short-options before the verb (sudo -E mv ...)", () => {
+    const r = evaluateBashCommand("sudo -E mv src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("skips wrapper short-options grouped (env -i mv ...)", () => {
+    const r = evaluateBashCommand("env -i mv src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("skips wrapper long-options (env --ignore-environment mv ...)", () => {
+    const r = evaluateBashCommand("env --ignore-environment mv src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("skips wrapper long-option=value (env --chdir=/tmp mv ...)", () => {
+    const r = evaluateBashCommand("env --chdir=/tmp mv src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("skips multiple flag-only wrapper options before verb", () => {
+    // Flag-only wrapper options (no value arg) are reliably stripped.
+    // Wrappers with required value args (`sudo -u USER`, `env -u VAR`)
+    // would need per-wrapper option grammars to peel correctly; that
+    // is documented in OBSERVED-FAILURES.md as a v0.2 candidate.
+    const r = evaluateBashCommand("sudo -E -n mv src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("skips command -p prefix before verb", () => {
+    const r = evaluateBashCommand("command -p cp src/a src/b");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("cp");
   });
 });
 

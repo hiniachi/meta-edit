@@ -284,15 +284,24 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
 const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
 
 function collapsePathDoublings(s: string): string {
-  let out = s;
-  out = out.replace(/\/(\.\/)+/g, "/");
-  out = out.replace(/\/{2,}/g, "/");
-  return out;
+  let prev: string;
+  let cur = s;
+  do {
+    prev = cur;
+    // /./ runs -> /
+    cur = cur.replace(/\/(\.\/)+/g, "/");
+    // /<segment>/../  -> /  (segment can't be empty, "..", or contain
+    // a slash; stops the regex consuming `../` in `../../etc`)
+    cur = cur.replace(/\/[^/]+\/\.\.(?=\/|$)/g, "");
+    // // -> /
+    cur = cur.replace(/\/{2,}/g, "/");
+  } while (cur !== prev);
+  return cur;
 }
 
 function extractCommandVerb(segment: string): string | null {
   let s = stripLeadingEnvAssignments(segment);
-  for (let safety = 0; safety < 16; safety++) {
+  for (let safety = 0; safety < 32; safety++) {
     s = stripLeadingEnvAssignments(s);
     const m = /^(\S+)/.exec(s);
     if (m === null || m[0] === undefined) return null;
@@ -300,7 +309,15 @@ function extractCommandVerb(segment: string): string | null {
     const baseStart = word.lastIndexOf("/");
     const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
     if (WRAPPER_VERBS.has(base)) {
+      // Skip the wrapper word and any wrapper options that follow
+      // (`-X`, `--foo`, `--foo=bar`). Without this skip, forms like
+      // `env -i mv a b` extract `-i` as the verb and miss `mv`.
       s = s.slice(word.length).replace(/^\s+/, "");
+      while (true) {
+        const optMatch = /^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/.exec(s);
+        if (optMatch === null || optMatch[0] === undefined) break;
+        s = s.slice(optMatch[0].length).replace(/^\s+/, "");
+      }
       continue;
     }
     return base;
@@ -392,12 +409,16 @@ const PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 const NODE_WRITE_RE = /writeFile|writeFileSync/;
 
 function matchesPythonNodeWrite(command: string): boolean {
+  // python -c / python3 -c (long form `--command` does not exist).
   if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(command)) {
     if (PYTHON_WRITE_RE.test(command)) {
       return true;
     }
   }
-  if (/(?:^|[\s;&|(])node\s+-e\b/.test(command)) {
+  // node -e and its long-form equivalent. Node accepts both `-e EXPR`
+  // and `--eval EXPR` / `--eval=EXPR`; without the long-form match a
+  // `node --eval ...` invocation slips past us.
+  if (/(?:^|[\s;&|(])node\s+(?:-e\b|--eval(?:\b|=))/.test(command)) {
     if (NODE_WRITE_RE.test(command)) {
       return true;
     }
