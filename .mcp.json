@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "meta-edit": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.ts", "serve"]
+    }
+  }
+}

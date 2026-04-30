@@ -13,16 +13,13 @@
 
 ## 当前状态
 
-预发布 `0.1.0`。核心功能端到端可用：
+`0.1.0` 预发布版。核心组件已就绪 — 17 个 `edit_*` MCP 工具、两个
+PreToolUse 安全 Hook、追加式编辑日志（`.meta-edit/state/edits.jsonl`），
+以及 CLI。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)，v0.2 候选
+项见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
 
-- 17 个 `edit_*` MCP 工具（说明文逐字复制自 [`SPEC.md` §4](./docs/SPEC.md)）
-- 参数校验：拒绝越界补丁、新建/删除/重命名、traversal 别名、通过符号链接绕过保护路径、大小写别名、git 扩展头、超过 1 MiB 或含 NUL 字节
-- 补丁原子写入：`O_CREAT | O_EXCL | O_NOFOLLOW` 临时文件 + fsync + rename，每次 pathname 系统调用前重新规范化父目录
-- 所有调用都追加到 `.meta-edit/state/edits.jsonl`（成功/失败都记）
-- 两个 PreToolUse Hook (`deny-raw-edit`, `deny-bash-write-bypass`) 以最佳努力方式封堵 raw edit 和 bash 写入旁路
-- CLI: `serve`, `log`, `summary`, `install-hooks`, `uninstall-hooks`
-
-尚未发布到 npm，也未在 Claude Code 插件市场上架。
+本仓库自身就是一个单插件的 Claude Code marketplace；同时也以 npm
+包 `@hiniachi/meta-edit` 形式分发（npm 尚未发布）。
 
 ## 十七个工具
 
@@ -49,13 +46,14 @@ edit_policy_change
 
 ### 方式 A：Claude Code Plugin marketplace
 
-发布后：
+本仓库本身就是一个单插件的 marketplace。先添加一次 marketplace，再安装 meta-edit 插件即可：
 
 ```sh
-/plugin install meta-edit
+/plugin marketplace add hiniachi/meta-edit
+/plugin install meta-edit@meta-edit
 ```
 
-会自动注册 MCP 服务器以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。
+这会自动注册 MCP 服务器（17 个 `edit_*` 工具）以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。运行需要 PATH 中存在 [Bun](https://bun.sh)（插件直接运行 TypeScript 源码，无需构建步骤）。
 
 ### 方式 B：npm 包
 

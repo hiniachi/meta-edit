@@ -14,7 +14,9 @@
   "files": [
     "dist/",
     "docs/SPEC.md",
-    "plugin.json",
+    ".claude-plugin/",
+    ".mcp.json",
+    "hooks/",
     "README.md",
     "LICENSE"
   ],
