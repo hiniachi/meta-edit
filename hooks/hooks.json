@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y -p @hiniachi/meta-edit meta-edit-deny-raw-edit"
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/src/hooks/deny-raw-edit.ts"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y -p @hiniachi/meta-edit meta-edit-deny-bash-write-bypass"
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/src/hooks/deny-bash-write-bypass.ts"
           }
         ]
       }
