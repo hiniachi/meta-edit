@@ -1,0 +1,32 @@
+{
+  "$schema": "https://claude.ai/schemas/claude-code-settings.json",
+  "_comment_meta_edit": "Reference snippet for ~/.claude/settings.json. Phase 5 will ship `meta-edit install-hooks` to splice this into existing settings idempotently. Until then, copy these blocks into your own settings.json by hand. Replace MCP server `command` if you installed meta-edit somewhere other than the global PATH.",
+  "mcpServers": {
+    "meta-edit": {
+      "command": "meta-edit",
+      "args": ["serve"]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meta-edit-deny-raw-edit"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meta-edit-deny-bash-write-bypass"
+          }
+        ]
+      }
+    ]
+  }
+}

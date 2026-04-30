@@ -121,3 +121,31 @@
   - Concurrent server processes on the same repo would both recover the same edit_id counter and assign duplicates. MVP assumes a single server per repo.
   - macOS `fsync` on a directory FD may be a no-op without `F_FULLFSYNC`; durability is best-effort.
 - Spec deviations: none.
+
+## Phase 4: Hooks and Plugin metadata
+
+- Completed: 2026-04-30
+- Trigger: implementation plan Phase 4.
+- What works:
+  - **deny-raw-edit hook**: `src/hooks/raw-edit-policy.ts` (pure) plus `src/hooks/deny-raw-edit.ts` (CLI wrapper). Denies `Edit` / `Write` / `MultiEdit` PreToolUse calls. Reason text references `docs/SPEC.md §4` and tells the agent to choose an `edit_*` tool or stop and ask.
+  - **deny-bash-write-bypass hook**: `src/hooks/bash-write-policy.ts` (pure) plus `src/hooks/deny-bash-write-bypass.ts` (CLI wrapper). Implements SPEC §5.2 best-effort substring filter:
+    - Splits the command on `;`, `&&`, `||`, `|`, bare `&`, `\n` while respecting single- and double-quoted regions so `python -c "import x; ..."` stays a single segment.
+    - For each segment: strip backslashes (defeat `s\ed` style escapes), check protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`) → unconditional deny, then check deny substrings (`sed -i`, `perl -pi`, `cat >`, `tee`, `git apply`, `rsync`), then deny prefixes (`mv `, `cp `, `patch ` — only at segment-start), then `python -c` / `node -e` with `write_text` / `.write(` / `open(..., 'w')` / `writeFile*`.
+    - Allowlist short-circuit removed (per Codex's architectural fix). `ALLOWLIST_PATTERNS` is retained as documentation; none of the current deny patterns match a legitimate formatter or codegen invocation, so the allowlist is a no-op in v0.1.
+  - **`hook-runtime.ts`**: shared stdin reader + reply helpers. Allow = empty stdout (lets downstream hooks contribute their own decision); deny = `{hookSpecificOutput:{permissionDecision:"deny",permissionDecisionReason:"..."}}` JSON on stdout.
+  - **plugin.json**: repo-root Claude Code Plugin manifest declaring the meta-edit MCP server and both hooks via `${CLAUDE_PLUGIN_ROOT}/dist/hooks/...` paths.
+  - **package.json**: added `meta-edit-deny-raw-edit` and `meta-edit-deny-bash-write-bypass` bin entries so npm-direct users get hook commands on PATH.
+  - **examples/settings.user.json**: reference snippet for npm-direct users until Phase 5 ships `install-hooks`.
+- Tests (now 126, all green):
+  - `src/hooks/raw-edit-policy.test.ts`: 5 tests (denies Edit/Write/MultiEdit, allows other tools, exact denied set).
+  - `src/hooks/bash-write-policy.test.ts`: 43 tests covering every SPEC §5.2 deny pattern, allowlist invocations, protected-path override, python/node inline writes, chained-segment bypass (`;`, `&&`, `|`, bare `&`, process substitution `<(...)`, here-string `<<<`, `bash -c "..."` inner compound), backslash-escape bypass, happy path, exact constants.
+- Codex review summary (3 rounds before commit):
+  - Round 1 found 2 HIGH (allowlist short-circuit on chained `;`, backslash-escape bypass).
+  - Round 2 found 3 HIGH (`&` background fork, process substitution / here-string, `bash -c` inner compound — all variants of the same "allowlist short-circuit beats per-segment denies" root cause).
+  - Round 3: ready to commit. Removed the allowlist short-circuit entirely; deny checks now run unconditionally on every segment.
+- Known issues / accepted MVP limitations (documented in `OBSERVED-FAILURES.md`):
+  - Backtick / `$(...)` command substitution: substring denies still fire, but prefix-only deny verbs (`mv`, `cp`, `patch`) inside the substitution are not detected.
+  - `cp --no-clobber` / `patch --dry-run` false positives — conservative deny on no-write variants.
+  - Backslash strip happens uniformly, including inside quoted regions; can produce false positives on commands like `python -c "print(\"write_text\")"`.
+  - Unicode line separators / bare `\r` not used as segment boundaries.
+- Spec deviations: none.
