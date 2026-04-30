@@ -118,10 +118,15 @@ function evaluateBashCommand(command) {
 function evaluateSegment(rawSegment) {
   const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
   if (touchesProtectedPath(normalized)) {
-    return {
-      decision: "deny",
-      reason: "command touches a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**); writes to these " + "paths must go through an edit_policy_change tool call."
-    };
+    const verb2 = extractCommandVerb(normalized.trimStart());
+    const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
+    const writeTargetsProtected = redirectsToProtected(normalized);
+    if (!isReadOnly || writeTargetsProtected) {
+      return {
+        decision: "deny",
+        reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**); writes to these " + "paths must go through an edit_policy_change tool call."
+      };
+    }
   }
   for (const needle of DENY_SUBSTRINGS) {
     if (normalized.includes(needle)) {
@@ -224,6 +229,79 @@ var WRAPPER_VERBS = new Set([
   "taskset"
 ]);
 var DENY_VERBS = new Set(["mv", "cp", "patch"]);
+var READ_ONLY_VERBS = new Set([
+  "tail",
+  "head",
+  "cat",
+  "grep",
+  "egrep",
+  "fgrep",
+  "wc",
+  "cut",
+  "tr",
+  "od",
+  "hexdump",
+  "stat",
+  "ls",
+  "du",
+  "df",
+  "jq",
+  "diff",
+  "cmp"
+]);
+function redirectsToProtected(s) {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    let j = i + 1;
+    if (s[j] === ">")
+      j++;
+    while (j < s.length && (s[j] === " " || s[j] === "\t"))
+      j++;
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (tc === " " || tc === "\t" || tc === ";" || tc === "|" || tc === "&" || tc === `
+` || tc === ">" || tc === "<") {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (target.includes(needle)) {
+        return true;
+      }
+    }
+    i = j;
+  }
+  return false;
+}
 function collapsePathDoublings(s) {
   let prev;
   let cur = s;
@@ -348,4 +426,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=761DFD22DEAD11B164756E2164756E21
+//# debugId=4DCAAAF8DBF0235B64756E2164756E21

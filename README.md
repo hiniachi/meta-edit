@@ -9,18 +9,15 @@
 
 > An MCP server that replaces a coding agent's generic file-edit tool with **eighteen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
 
-The bet: tool design — not detection, not verification — is what changes AI editing behavior. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification.
+## Why typed edits?
 
-## Status
+Instructions in `CLAUDE.md` decay across turns. Skills only fire when the agent decides to invoke them. Both rely on text the model *might* re-read — neither has structural force at the moment of action.
 
-`0.1.0` — pre-release. All core components are in place: eighteen
-`edit_*` MCP tools, two PreToolUse safety hooks, append-only edit log
-at `.meta-edit/state/edits.jsonl`, and the CLI. See
-[`docs/SPEC.md`](./docs/SPEC.md) for the contract and
-[`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for known v0.2 work.
+Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers "add boundary tests", `meta-edit` splits the single `Edit` primitive into eighteen kind-specific tools, each carrying — in its own description — when to use it, when not to use it, what tests must accompany the edit, and when to stop and ask the user.
 
-Distributed as a single-plugin Claude Code marketplace (this repo) and
-as the `@hiniachi/meta-edit` npm package. Not yet published to npm.
+The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification, and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the v0.2 backlog.
+
+Status: `0.1.1` pre-release. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
 
 ## The eighteen tools
 
@@ -43,6 +40,20 @@ Each tool description specifies:
 - which tests must accompany the edit,
 - when to stop and ask the user.
 
+## Observed: the agent stops and asks
+
+The first time `meta-edit` was self-applied to its own repository, with the conversation context already ~80% full, an `OBSERVED-FAILURES.md` append was requested. None of the (then) seventeen tools cleanly matched a documentation-only edit. Instead of stretching one to fit, the agent paused:
+
+> OBSERVED-FAILURES.md is a docs file and matches none of the seventeen `edit_*` tools strictly (descriptions assume "production code" / "test files" / "policy/governance"). CLAUDE.md §9 says "no edit_* tool fits, stop and ask." Two options: (a) stretch `edit_refactor_only` — its MUST-NOT list (operator / guard / return-shape) trivially passes for prose, and the "no observable behavior change" intent is satisfied; (b) `/plugin disable meta-edit` and use raw `Edit`. Which do you prefer?
+
+Three things worth noting:
+
+1. The "stop and ask" instruction was honoured at 80% context — exactly when `CLAUDE.md`-style instructions normally decay.
+2. The agent identified the spec gap in its own terms ("seventeen tools don't cover docs files").
+3. It produced the v0.2 entry that subsequently became the eighteenth tool, `edit_docs_only`.
+
+Tool-shaped instructions read at every call won out over text-shaped instructions read once at session start. (This very README was rewritten through `edit_docs_only`.)
+
 ## Install
 
 ### Option A: Claude Code Plugin marketplace
@@ -57,9 +68,9 @@ install meta-edit:
 
 That auto-registers the meta-edit MCP server (the eighteen `edit_*`
 tools) and the two safety hooks (`deny-raw-edit`,
-`deny-bash-write-bypass`). Requires [Bun](https://bun.sh) on PATH —
-the plugin runs the TypeScript sources directly without a build
-step.
+`deny-bash-write-bypass`). The plugin runs prebuilt JavaScript shipped
+under `dist/` — Node 20+ is the only runtime requirement; no Bun, no
+`npm install`, no build step on the consumer side.
 
 ### Option B: npm package
 
@@ -86,12 +97,11 @@ Add the server to your Claude Code MCP configuration:
 }
 ```
 
-## Runtime
+## Runtime requirements
 
-Source is published as TypeScript and runs unchanged on:
-
-- Bun 1.x (preferred, used in development and CI)
-- Node 20 LTS (`node` invokes the dist build; `bun` runs the source directly)
+- **Node 20 LTS or newer** on the consumer side. The plugin and the npm bin both invoke `node` against the prebuilt `dist/cli.js` shipped in the package.
+- POSIX shell environment for the bash-write-bypass hook. Windows is not currently a target.
+- Bun is used only for development and CI (`bun run build`, `bun test`); consumers do not need it installed.
 
 ## Commands
 

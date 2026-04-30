@@ -85,6 +85,28 @@ edit_* tool — but the deny reason is misleading. If observed, tighten
 the prefix matcher to look for the verb followed by an argument list
 that does not contain `--dry-run` / `--no-clobber`.
 
+### LOW: Protected-path matching uses substring, not path component
+
+`touchesProtectedPath` and `redirectsToProtected` both use
+`String.prototype.includes()` to match `.meta-edit/state` /
+`.meta-edit/tmp` against the segment text and the redirect target
+respectively. This is conservative — it catches absolute paths like
+`/tmp/work/.meta-edit/state/edits.jsonl` (correct) — but it also flags
+non-path-component substrings like `/tmp/x-with-.meta-edit/state-in-name`
+where `x-with-.meta-edit` is just a directory name happening to contain
+the protected prefix as a substring.
+
+False positives only — never false negatives. The realistic frequency
+is near zero; a path component named `x-with-.meta-edit` is vanishingly
+rare in agent-driven workflows. Documented for promotion if observed.
+
+Promote to detection by treating the target as a path: split on `/`,
+look for `.meta-edit` followed immediately by `state` or `tmp` as
+adjacent components (allowing for a leading `/`). Or by anchoring
+the substring search on path-component boundaries:
+`target === needle || target.startsWith(needle + "/") ||
+ target.includes("/" + needle + "/") || target.endsWith("/" + needle)`.
+
 ### LOW: Backslash-strip inside quoted regions
 
 `evaluateSegment` strips ALL backslashes from the command text before
@@ -103,29 +125,51 @@ on the deny patterns that appear literally; only prefix-only verbs would
 slip through, and only when the user deliberately separates commands
 with exotic Unicode line terminators. Document only.
 
-### LOW: Read-only commands referencing protected paths are blocked
+## Phase 3 (validation) tool-surface DX gaps
 
-`evaluateBashCommand` substring-matches the protected-path patterns
-(`.meta-edit/state/**`, `.meta-edit/tmp/**`) against the entire command
-text, regardless of whether the surrounding command is read or write.
-Concretely, observed during the meta-edit smoke test (Phase 6 self-app):
+### MEDIUM: Hand-crafted unified diffs are brittle for multi-line additions
 
-    tail -2 /home/.../.meta-edit/state/edits.jsonl
+`EditToolRequestSchema` accepts only a `patch: string` field, validated
+server-side by `jsdiff`'s `parsePatch`. The parser is strict: every body
+line must begin with `' '`, `'-'`, `'+'`, or `'\'`. Empty body lines
+(produced by paragraph breaks in additions) trigger
+`Hunk at line N contained invalid line ` (trailing space — the line is
+empty). The error message names neither the offending line nor the
+missing prefix, so diagnosis takes several round-trips.
 
-is denied with "command touches a protected meta-edit path; writes to
-these paths must go through an edit_policy_change tool call". The
-denial is misleading — `tail` only reads. The block is conservative
-but adds friction for legitimate inspection during debugging; agents
-have to fall back to `Read` for the same content.
+Concretely, observed during Phase 7 + Phase 8 self-application sessions:
+any attempt to add a multi-section block (e.g., two new `describe(...)`
+blocks at the end of `bash-write-policy.test.ts`) by hand-crafting the
+`patch` parameter requires meticulous prefixing of every blank line as
+`' '` (context blank) or `'+'` (add blank). LLM-generated diff strings
+routinely emit raw `\n\n` between paragraphs and fail validation.
 
-Same pattern applies to `cat`, `head`, `wc`, `grep`, `less`, `jq`, etc.
-when given a path under the protected directories.
+The realistic workaround — write new content to `/tmp/x` via Bash, run
+`diff -u`, copy output back into the `patch` parameter — is itself
+fragile: heredoc content that mentions `.meta-edit/state/...` literally
+trips the `deny-bash-write-bypass` protected-path check (see the LOW
+entry above). Layered workarounds compound the friction.
 
-Promote to detection by either (a) limiting the protected-path check
-to the same prefix-verb / inline-write detectors used elsewhere
-(i.e. "this command would WRITE here"), or (b) keeping the conservative
-block but rephrasing the deny reason to clarify that any access — read
-or write — is blocked. Option (b) is the safer floor.
+Promotion options for v0.2 (in increasing order of invasiveness):
+
+- **(A) Server-side normalization.** In `preValidatePatchInput`, re-prefix
+  empty body lines with a single space before passing to `parsePatch`.
+  Tiny diff. Doesn't change semantics for valid input. Catches the most
+  common LLM/human mistake.
+- **(B) Alternate request shape.** Accept an `old_content` + `new_content`
+  pair (mutually exclusive with `patch`); server computes the diff
+  internally via `jsdiff.createTwoFilesPatch`. Higher DX ceiling — agents
+  submit the new file content as a string, no diff math needed. Schema
+  change; `EditToolRequest` would become a discriminated union. **This is
+  the option the project author flagged as the right answer for v0.2.**
+- **(C) Better validation errors.** Keep the surface as-is but emit
+  "blank context lines must begin with ` ` (space); offending line: N"
+  instead of "invalid line ". Reduces diagnosis time without solving the
+  underlying authorability problem.
+
+Trigger for promotion: observed in **every** Phase 7+ session that needed
+to add a non-trivial block of test or doc content. Friction is not
+hypothetical; it is structurally on the dogfooding path.
 
 ---
 
@@ -137,3 +181,13 @@ or write — is blocked. Option (b) is the safer floor.
   self-application. Promoted from coverage-gap entry to a full SPEC §4
   description; see `docs/SPEC.md` §3 (validation, patch scope) and §4
   (`edit_docs_only`).
+- **Read-only commands referencing protected paths now allowed** (v0.1.1).
+  `evaluateBashCommand` previously denied any segment whose text contained
+  `.meta-edit/state/` or `.meta-edit/tmp/`, even when the surrounding
+  command was read-only (`tail`, `cat`, `head`, `wc`, `grep`, ...). The
+  fix carves out a small `READ_ONLY_VERBS` set; protected paths are still
+  denied for any verb outside that set, and for read-only verbs that
+  redirect their output (`>` / `>>`) to a protected target. See
+  `src/hooks/bash-write-policy.ts` (`READ_ONLY_VERBS`,
+  `redirectsToProtected`). Resolves the prior MEDIUM "Read-only commands
+  referencing protected paths are blocked" entry.

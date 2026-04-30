@@ -13,7 +13,7 @@
 
 ## 状態
 
-`0.1.0` プレリリース。コア構成は揃っています — 18 個の `edit_*` MCP
+`0.1.1` プレリリース。コア構成は揃っています — 18 個の `edit_*` MCP
 ツール、2 つの PreToolUse 安全フック、`.meta-edit/state/edits.jsonl`
 への追記専用ログ、CLI。仕様は [`docs/SPEC.md`](./docs/SPEC.md)、
 v0.2 候補は [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照。
@@ -54,7 +54,7 @@ edit_policy_change            edit_docs_only
 /plugin install meta-edit@meta-edit
 ```
 
-これだけで MCP サーバ（18 個の `edit_*` ツール）と、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。実行に [Bun](https://bun.sh) が必要です（TypeScript ソースを直接動かすためビルドは不要）。
+これだけで MCP サーバ（18 個の `edit_*` ツール）と、安全フック（`deny-raw-edit` と `deny-bash-write-bypass`）の両方が自動で有効になります。プラグインは `dist/` に同梱済みのビルド済み JavaScript を `node` で実行するため、**Node 20+ のみ必須**です（Bun も `npm install` も不要）。
 
 ### B. npm パッケージ
 
@@ -81,12 +81,11 @@ Claude Code の MCP 設定に追加:
 }
 ```
 
-## ランタイム
+## ランタイム要件
 
-ソースは TypeScript のまま npm に publish され、以下で動作します。
-
-- Bun 1.x（開発・CI で使用、推奨）
-- Node 20 LTS（`node` は `dist/` のビルド出力を実行、`bun` はソースを直接実行）
+- **Node 20 LTS 以降**（消費者側）。プラグインも npm bin もパッケージ同梱の `dist/cli.js` を `node` で起動します。
+- POSIX 互換シェル環境（`deny-bash-write-bypass` フック用）。Windows は対象外です。
+- Bun は開発・CI のみで使用（`bun run build` / `bun test`）。利用者側でのインストールは不要です。
 
 ## コマンド
 

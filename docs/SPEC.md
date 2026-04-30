@@ -861,7 +861,12 @@ The allowlist exists because formatters and code generators are part of normal d
 
 Allowlist applies only when the command's effect is bounded to formatting or codegen, never to arbitrary file rewrites.
 
-Writes to `.meta-edit/state/**` are denied even if the command otherwise matches the allowlist.
+Writes to `.meta-edit/state/**` and `.meta-edit/tmp/**` are denied even if the command otherwise matches the allowlist. The hook decides "would write" along two axes:
+
+1. **Verb is not in the read-only carve-out.** The hook maintains a small set of common read-only inspection utilities (`tail`, `head`, `cat`, `grep` / `egrep` / `fgrep`, `wc`, `cut`, `tr`, `od`, `hexdump`, `stat`, `ls`, `du`, `df`, `jq`, `diff`, `cmp`). If the command's leading verb (after wrapper / env-assignment / absolute-path normalization) is **not** in that set, any reference to a protected path is denied.
+2. **`>` / `>>` redirect target is protected.** Even when the leading verb is read-only, if the command has a write redirect whose target token references a protected path (substring match, after backslash strip and path-doubling collapse, ignoring `>&` fd-duplications and quoted regions), the deny still fires.
+
+This carve-out exists so debugging workflows like `tail -2 .meta-edit/state/edits.jsonl` or `jq . .meta-edit/state/edits.jsonl` work without disabling the hook. Any verb that has a non-redirect write side-effect — including in-place mutation, an output flag, an output positional, a shell-escape mode, or a subprocess-spawning option — is deliberately omitted from the read-only set so the protected-path deny still fires when targeting protected directories. Examples: `find -delete`, `sort -o OUT`, `uniq IN OUT`, `xxd -r`, `yq -i`, `less -O OUT`, `more !command`, `rg --pre=CMD`, `file -C`, `awk 'print > "..."'`, `dd of=...`.
 
 When in doubt, the hook denies and asks the AI to use an `edit_*` tool.
 

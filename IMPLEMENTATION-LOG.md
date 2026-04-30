@@ -262,3 +262,113 @@
   The other v0.2 candidates (deny-bash-write-bypass detection
   refinements, summary schema validation) are robustness improvements
   that do not block any observable workflow; they remain in the queue.
+
+## Phase 8: v0.1.1 — fix protected-path read false-positive + README rewrite
+
+- Completed: 2026-04-30
+- Trigger: dogfooding observation. The `deny-bash-write-bypass` hook
+  was denying read-only inspections of `.meta-edit/state/edits.jsonl`
+  (`tail`, `cat`, `wc`, `head`, ...), forcing the use of the in-tool
+  Read primitive for the same content. Documented in
+  `OBSERVED-FAILURES.md` as a LOW; promoted to v0.1.1 because the
+  friction was hitting on every Phase 7+ self-application session.
+- What changed:
+  - **`src/hooks/bash-write-policy.ts`** — replaced the unconditional
+    `touchesProtectedPath` deny with a verb-aware gate:
+    1. New constant `READ_ONLY_VERBS` enumerating `tail`, `head`, `cat`,
+       `less`, `more`, `grep` / `egrep` / `fgrep` / `rg`, `wc`, `sort`,
+       `uniq`, `cut`, `tr`, `od`, `xxd`, `hexdump`, `file`, `stat`,
+       `ls`, `find`, `du`, `df`, `jq`, `yq`, `diff`, `cmp`. Verbs that
+       can write (e.g., `sed`, `awk` with print-redirection, `dd`) are
+       deliberately excluded so they fall through to the protected-path
+       deny.
+    2. New helper `redirectsToProtected(s)` walks the segment outside
+       quoted regions, finds `>` or `>>` operators (skipping `>&`
+       fd-duplication), reads the redirect target token, and matches it
+       against `PROTECTED_PATH_NEEDLES` via substring (so absolute paths
+       like `/tmp/work/.meta-edit/state/edits.jsonl` still trip the
+       check).
+    3. The protected-path branch now denies only when
+       `!isReadOnly || writeTargetsProtected`. So `tail
+       .meta-edit/state/edits.jsonl` allows; `tail /etc/x >
+       .meta-edit/state/y` denies (read-only verb but redirect target
+       is protected); `prettier --write
+       .meta-edit/state/edits.jsonl` denies (verb not in the read-only
+       set).
+    4. Deny reason text changed from "command touches a protected
+       meta-edit path" to "command would write to a protected
+       meta-edit path" to better match the new semantics. Existing
+       `expect(reason).toContain("protected")` assertions still pass.
+  - **`src/hooks/bash-write-policy.test.ts`** — 17 new tests across two
+    new describe blocks: 11 for read-only-allow (tail / cat / wc / head /
+    grep / jq / ls / pipe-of-two-read-only-verbs /
+    redirect-to-non-protected / sudo wrapper / env wrapper) and 6 for
+    write-still-denied (printf > / printf >> / read-only-verb-with-
+    redirect-to-protected / dd of=protected / absolute-path-containing-
+    protected-as-redirect-target / prettier --write protected
+    regression-guard). All earlier deny tests (`prettier --write
+    .meta-edit/...`, `eslint --fix .meta-edit/...`, `cat >
+    .meta-edit/...` with all the `/./`, `/../`, double-slash, and
+    no-trailing-slash variants) continue to pass via the
+    `!isReadOnly` path.
+  - **`OBSERVED-FAILURES.md`** — the LOW "Read-only commands referencing
+    protected paths are blocked" entry is removed and replaced with a
+    one-line resolved pointer in the "Resolved (promoted to MVP)"
+    section. A new MEDIUM entry "Hand-crafted unified diffs are brittle
+    for multi-line additions" is added in a new "Phase 3 (validation)
+    tool-surface DX gaps" section, naming the v0.2 promotion options A
+    (server-side empty-line normalization), B (`old_content` +
+    `new_content` request shape — flagged as the right answer), and C
+    (better validation error message). The friction is observed on
+    every dogfooding session that needs to add a non-trivial block of
+    test or doc content.
+  - **`README.md`** (also includes the rewrite started in Phase 7) —
+    "Why typed edits?" pitch, "Observed: the agent stops and asks"
+    anecdote, install instructions corrected from "Requires Bun on
+    PATH" to "Node 20+ is the only runtime requirement"; the plugin
+    runs prebuilt `dist/cli.js` under `node`. Status updated to 0.1.1.
+  - **Version bump** — `package.json` 0.1.0 → 0.1.1, `src/server.ts`
+    MCP server identity 0.1.0 → 0.1.1, `.claude-plugin/plugin.json`
+    0.1.0 → 0.1.1, `src/cli.ts` `--version` / help banner 0.1.0 →
+    0.1.1, `README.{md,ja.md,zh-CN.md}` status block.
+- Tests: 282 pass / 0 fail (was 265 in Phase 7, +17 here).
+- Spec deviations: SPEC §5.2 still describes the protected-path check
+  conservatively. The hook implementation now relaxes it for the
+  read-only carve-out; SPEC §5.2 should be updated in a follow-up so
+  the spec and the hook remain in lockstep. Not done in this PR to
+  keep the diff focused; tracked as a v0.1.2 housekeeping task.
+- Out of scope (deliberately): no schema change, no detection logic
+  beyond what the existing protected-path check needed to become
+  read-aware. The patch-format DX issue identified during this
+  session (B option above) is recorded in OBSERVED-FAILURES.md but
+  not implemented — implementing it during this same PR would
+  conflate the read-only-fix question with the schema-evolution
+  question.
+- Codex MCP review summary (2 rounds before commit):
+  - Round 1: HIGH `find -delete` / `sort -o` / `uniq IN OUT` / `xxd -r`
+    write-mode verbs in `READ_ONLY_VERBS` would silently bypass the
+    protected-path deny. MEDIUM SPEC §5.2 stale (described unconditional
+    deny). MEDIUM localized READMEs (ja, zh-CN) still claimed Bun on
+    PATH was required. LOW substring-not-path-component matching in
+    `redirectsToProtected` and `touchesProtectedPath`.
+  - Round 2: clean. HIGH addressed (verbs removed, regression-guard
+    tests added). MEDIUMs addressed (SPEC §5.2 rewritten, localized
+    READMEs corrected). LOW promoted to a new OBSERVED-FAILURES.md
+    entry as a v0.2 candidate (not in scope for v0.1.1).
+- Claude code-reviewer subagent (1 round before commit):
+  - HIGH `yq -i` (mikefarah/yq) is the same class as round 1's HIGH —
+    a verb that looks read-only but has a non-redirect write mode.
+    Removed from `READ_ONLY_VERBS`; regression-guard test added; SPEC
+    §5.2 verb list updated.
+  - MEDIUM localized READMEs are missing the English-only "Observed:
+    the agent stops and asks" section. **Pre-existing tech debt**
+    (the section was added in PR #24 to `README.md` only); this PR
+    does not regress that asymmetry. Tracked as a follow-up: a future
+    v0.1.x patch should translate the Observed section into JA and
+    ZH-CN. Not in scope for this PR — the MEDIUM is informational
+    rather than a regression introduced here.
+  - MEDIUM informational: `sed -i` targeting a protected path now
+    fires the protected-path branch's "would write" reason rather
+    than the `sed -i` deny-substring branch's reason. No semantic
+    change; downstream consumers parsing reason strings should be
+    aware. Documented for posterity, no fix.

@@ -13,7 +13,7 @@
 
 ## 当前状态
 
-`0.1.0` 预发布版。核心组件已就绪 — 18 个 `edit_*` MCP 工具、两个
+`0.1.1` 预发布版。核心组件已就绪 — 18 个 `edit_*` MCP 工具、两个
 PreToolUse 安全 Hook、追加式编辑日志（`.meta-edit/state/edits.jsonl`），
 以及 CLI。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)，v0.2 候选
 项见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
@@ -53,7 +53,7 @@ edit_policy_change            edit_docs_only
 /plugin install meta-edit@meta-edit
 ```
 
-这会自动注册 MCP 服务器（18 个 `edit_*` 工具）以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。运行需要 PATH 中存在 [Bun](https://bun.sh)（插件直接运行 TypeScript 源码，无需构建步骤）。
+这会自动注册 MCP 服务器（18 个 `edit_*` 工具）以及两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）。插件运行随仓库分发的 `dist/` 预构建 JavaScript（通过 `node` 启动），**唯一的运行时要求是 Node 20+**，无需 Bun，无需 `npm install`，使用者侧也不需要构建步骤。
 
 ### 方式 B：npm 包
 
@@ -82,10 +82,9 @@ meta-edit install-hooks --scope project
 
 ## 运行环境
 
-源代码以 TypeScript 形式发布到 npm，可在下列环境无修改运行：
-
-- Bun 1.x（开发与 CI 使用，推荐）
-- Node 20 LTS（`node` 运行 `dist/` 构建产物，`bun` 直接运行源代码）
+- **Node 20 LTS 或更新**（使用者侧）。插件与 npm bin 都以 `node` 运行随包发布的 `dist/cli.js`。
+- POSIX 兼容的 shell 环境（`deny-bash-write-bypass` Hook 需要）。当前不支持 Windows。
+- Bun 仅用于开发与 CI（`bun run build` / `bun test`）；使用者无需安装。
 
 ## 命令
 
