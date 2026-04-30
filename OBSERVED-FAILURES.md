@@ -51,6 +51,29 @@ Promote to detection by adding per-wrapper option grammars (e.g.
 `sudo` short opts that take a value: `-u`, `-g`, `-h`, ...). For
 v0.2.
 
+## Phase 5 (CLI) residual gaps
+
+### MEDIUM: `meta-edit summary` crashes on malformed log entries
+
+`formatSummary` in `src/cli/summary-cmd.ts` assumes every entry's
+`tool_name` and `target_file` are strings. `EditLog.readAll()`
+JSON-parses lines without schema-validating fields, so a hand-edited
+or older `edits.jsonl` line where `tool_name` or `target_file` is
+missing or non-string causes `name.padEnd(...)` / `file.padEnd(...)`
+to throw, crashing the report instead of producing partial output.
+
+This is a robustness gap, not a security boundary issue:
+`edits.jsonl` lives in a meta-edit-protected directory and is only
+written by trusted code paths. Promote to detection only if observed
+in real logs (e.g. after a meta-edit version migration that drops a
+field).
+
+Recommended fix when promoted: zod-validate each entry in
+`EditLog.readAll()` against `EditLogEntry` and skip lines that fail.
+`formatSummary` then never sees malformed data.
+
+## Phase 4 (deny-bash-write-bypass) residual gaps
+
 ### LOW: `cp --no-clobber` / `patch --dry-run` false positive
 
 `DENY_PREFIX_PATTERNS` denies any segment whose trimmed form starts with
