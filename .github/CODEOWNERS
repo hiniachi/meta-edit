@@ -1,0 +1,7 @@
+# meta-edit code owners
+#
+# These owners will be requested for review on every pull request that
+# touches the listed paths. The catch-all keeps the maintainer in the
+# loop for changes anywhere in the repo.
+
+* @hiniachi
