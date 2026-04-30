@@ -15,10 +15,7 @@
         "email": "nia@yukinofurumachi.com"
       },
       "category": "development",
-      "source": {
-        "source": "github",
-        "repo": "hiniachi/meta-edit"
-      },
+      "source": "./",
       "homepage": "https://github.com/hiniachi/meta-edit",
       "license": "MIT",
       "keywords": [
