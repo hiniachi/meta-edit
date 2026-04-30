@@ -18340,7 +18340,9 @@ async function runStdioServer(options = {}) {
   const transport = new StdioServerTransport;
   await server.connect(transport);
   await new Promise((resolve4) => {
+    const previousOnClose = transport.onclose;
     transport.onclose = () => {
+      previousOnClose?.call(transport);
       resolve4();
     };
   });
@@ -18872,4 +18874,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=D758725721C588D264756E2164756E21
+//# debugId=D2ACC30474C7212564756E2164756E21

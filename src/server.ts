@@ -42,7 +42,9 @@ export async function runStdioServer(options: CreateServerOptions = {}): Promise
   const transport = new StdioServerTransport();
   await server.connect(transport);
   await new Promise<void>((resolve) => {
+    const previousOnClose = transport.onclose;
     transport.onclose = () => {
+      previousOnClose?.call(transport);
       resolve();
     };
   });
