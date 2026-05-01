@@ -1,5 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { filterEntries, parseLogArgs } from "./log-cmd.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { filterEntries, parseLogArgs, runLogCommand } from "./log-cmd.js";
+import { EditLog } from "../state/edit-log.js";
 import type { EditLogEntry } from "../state/edit-log.js";
 
 function entry(overrides: Partial<EditLogEntry> = {}): EditLogEntry {
@@ -104,5 +108,81 @@ describe("parseLogArgs", () => {
   it("accepts a valid ISO 8601 timestamp", () => {
     const r = parseLogArgs(["--since", "2026-04-30T12:34:56Z"]);
     expect(r.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// a7-01 — ANSI escape injection in `meta-edit log` output
+// ---------------------------------------------------------------------------
+
+function tmpRepo(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-ansi-"));
+  fs.mkdirSync(path.join(dir, ".meta-edit", "state"), { recursive: true });
+  return dir;
+}
+
+function poisonEntry(repoRoot: string, rationale: string): void {
+  const e: EditLogEntry = {
+    edit_id: "edit_20260501_0001",
+    timestamp: "2026-05-01T12:00:00+09:00",
+    tool_name: "edit_boundary_condition",
+    target_file: "src/foo.ts",
+    rationale,
+    risk_level: "medium",
+    test_files: ["tests/foo.test.ts"],
+    patch_size_bytes: 42,
+    applied: true,
+    warnings: [],
+  };
+  const log = new EditLog(repoRoot);
+  log.append(e);
+}
+
+function captureLogOutput(repoRoot: string): string {
+  const chunks: string[] = [];
+  const out = {
+    write(chunk: string) { chunks.push(chunk); return true; },
+  } as unknown as NodeJS.WritableStream;
+  const err = {
+    write(_chunk: string) { return true; },
+  } as unknown as NodeJS.WritableStream;
+  runLogCommand({ repoRoot, filters: {}, out, err });
+  return chunks.join("");
+}
+
+describe("ANSI escape injection - runLogCommand", () => {
+  it("does NOT emit raw ANSI escape sequences from rationale", () => {
+    const repoRoot = tmpRepo();
+    try {
+      poisonEntry(repoRoot, "\x1b[31mFAKE_ERROR\x1b[0m");
+      const output = captureLogOutput(repoRoot);
+      expect(output).not.toContain("\x1b");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT emit OSC title injection from target_file", () => {
+    const repoRoot = tmpRepo();
+    try {
+      const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
+      const e: EditLogEntry = {
+        edit_id: "edit_20260501_0002",
+        timestamp: "2026-05-01T12:00:00+09:00",
+        tool_name: "edit_boundary_condition",
+        target_file: "\x1b]0;INJECTED_TITLE\x07",
+        rationale: "normal rationale",
+        risk_level: "low",
+        test_files: [],
+        patch_size_bytes: 10,
+        applied: true,
+        warnings: [],
+      };
+      fs.appendFileSync(logPath, JSON.stringify(e) + "\n");
+      const output = captureLogOutput(repoRoot);
+      expect(output).not.toContain("\x1b");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });
