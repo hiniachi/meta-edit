@@ -290,7 +290,8 @@ function evaluateSegment(rawSegment: string): HookDecision {
     return {
       decision: "deny",
       reason:
-        'inline "python -c" / "node -e" with write_text, .write, open(..., \'w\'), or writeFile* is a bash bypass; use an edit_* tool instead.',
+        'inline interpreter write (python -c / node -e / perl -e / ruby -e / php -r) ' +
+        'is a bash bypass; use an edit_* tool instead.',
     };
   }
 
@@ -978,6 +979,23 @@ function touchesProtectedPath(command: string): boolean {
 
 const PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 const NODE_WRITE_RE = /writeFile|writeFileSync/;
+// Perl: `open(... , ">" , ...)`, `open(... , ">>" , ...)`, `print FH ...`
+// to a file handle previously opened for write. Detect the `open` call
+// with a `>` mode arg, which is the canonical write form. Also catch
+// `syswrite`, `IO::File->new(... ">")`, and `Path::Tiny->spew*`.
+const PERL_WRITE_RE =
+  /\bopen\b[^;]*?["']>{1,2}["']|\bsyswrite\b|->\s*spew(?:_raw|_utf8)?\b|IO::File->new\b[^;]*?["']>{1,2}/;
+// Ruby: `File.write`, `File.open(... , "w")`, `IO.write`, `IO.binwrite`.
+const RUBY_WRITE_RE =
+  /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write\b\s*\(\s*['"]/;
+// PHP: `file_put_contents`, `fwrite`, `fputs`, `fputcsv`.
+const PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
+const PERL_INVOCATION_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b/;
+const PERL_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b\s*/;
+const RUBY_INVOCATION_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b/;
+const RUBY_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b\s*/;
+const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
+const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 // Use a single-char class `[e]val` so this source file does not contain
 // the literal substring `eval(`, which trips overzealous heuristic
 // security scanners. The regex meaning is unchanged: it still matches
@@ -1024,6 +1042,44 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
         return true;
       }
     } else if (PYTHON_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // perl -e / perl -E: detect open(..., ">", ...), syswrite, etc.
+  // Unlike python/node, perl's writer signal (the `>` mode arg) IS
+  // inside a string literal, so we scan the UNMASKED arg.
+  if (PERL_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PERL_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PERL_WRITE_RE.test(arg)) return true;
+      if (arg === null && PERL_WRITE_RE.test(normalized)) return true;
+    } else if (PERL_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // ruby -e: detect File.write / File.open(..., "w") / IO.write.
+  if (RUBY_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(RUBY_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && RUBY_WRITE_RE.test(arg)) return true;
+      if (arg === null && RUBY_WRITE_RE.test(normalized)) return true;
+    } else if (RUBY_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // php -r / php -R / php -B: detect file_put_contents / fwrite / fputs.
+  if (PHP_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PHP_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PHP_WRITE_RE.test(arg)) return true;
+      if (arg === null && PHP_WRITE_RE.test(normalized)) return true;
+    } else if (PHP_WRITE_RE.test(normalized)) {
       return true;
     }
   }

@@ -1083,3 +1083,29 @@ describe("evaluateBashCommand — a1-04 find -exec bypass", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-05 perl/ruby/php inline writes", () => {
+  it("denies perl -e with open write (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "perl -e 'open(my $fh, \">\", \"src/foo.ts\"); print $fh \"x\"; close $fh'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies ruby -e with File.write (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "ruby -e 'File.write(\"src/foo.ts\", \"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies php -r with file_put_contents (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "php -r 'file_put_contents(\"src/foo.ts\", \"x\");'",
+      ).decision,
+    ).toBe("deny");
+  });
+});
