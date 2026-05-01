@@ -322,8 +322,111 @@ function splitSegments(cmd: string): string[] {
         result.push(innerSeg);
       }
     }
+    // `find ... -exec CMD \;` / `... -exec CMD +` carries an embedded
+    // command in positional args, not via shell composition operators.
+    // Extract those bodies and re-evaluate them as segments so deny
+    // verbs / substrings inside the body fire.
+    for (const inner of extractFindExecInners(seg)) {
+      for (const innerSeg of splitSegments(inner)) {
+        result.push(innerSeg);
+      }
+    }
   }
   return result;
+}
+
+// Extract the body of every `-exec ... \;` / `-execdir ... \;` /
+// `-exec ... +` / `-execdir ... +` block in `seg`. The body ends at the
+// next `\;` or `+` token (whitespace-bounded). `{}` placeholders are
+// stripped from the body before returning so they don't shadow real
+// verbs. Quoted regions are respected so an `-exec` literal inside a
+// single-quoted string is not misread as the find primary.
+function extractFindExecInners(seg: string): string[] {
+  const inners: string[] = [];
+  // Quick reject: avoid the per-character walk if the segment has no
+  // find primary token at all.
+  if (!/(?:^|\s)-exec(?:dir)?(?:\s|$)/.test(seg)) return inners;
+
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (!inSingle && c === "\\" && i + 1 < seg.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      // Match `-exec` or `-execdir` at a whitespace boundary.
+      if (
+        c === "-" &&
+        (seg.slice(i, i + 5) === "-exec" || seg.slice(i, i + 8) === "-execdir") &&
+        (i === 0 || /\s/.test(seg[i - 1]!))
+      ) {
+        const tokenLen = seg.slice(i, i + 8) === "-execdir" ? 8 : 5;
+        const after = seg[i + tokenLen];
+        if (after === undefined || /\s/.test(after)) {
+          // Skip the primary token + leading whitespace.
+          let j = i + tokenLen;
+          while (j < seg.length && /\s/.test(seg[j]!)) j++;
+          // Read body until `\;` or whitespace-bounded `+`.
+          const bodyStart = j;
+          let bSingle = false;
+          let bDouble = false;
+          while (j < seg.length) {
+            const cj = seg[j];
+            if (!bSingle && cj === "\\" && j + 1 < seg.length) {
+              if (seg[j + 1] === ";") {
+                // Terminator `\;`. Stop body before the backslash.
+                break;
+              }
+              j += 2;
+              continue;
+            }
+            if (cj === "'" && !bDouble) {
+              bSingle = !bSingle;
+              j++;
+              continue;
+            }
+            if (cj === '"' && !bSingle) {
+              bDouble = !bDouble;
+              j++;
+              continue;
+            }
+            if (!bSingle && !bDouble) {
+              // Whitespace-bounded `+` terminator.
+              if (
+                cj === "+" &&
+                (seg[j + 1] === undefined || /\s/.test(seg[j + 1]!)) &&
+                /\s/.test(seg[j - 1] ?? " ")
+              ) {
+                break;
+              }
+            }
+            j++;
+          }
+          let body = seg.slice(bodyStart, j).trim();
+          // Strip lone `{}` placeholders so they don't shadow verbs.
+          body = body.replace(/(^|\s)\{\}(\s|$)/g, "$1$2").trim();
+          if (body.length > 0) inners.push(body);
+          i = j;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+  return inners;
 }
 
 function primarySplitSegments(cmd: string): string[] {

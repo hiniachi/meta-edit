@@ -1065,3 +1065,21 @@ describe("evaluateBashCommand — a1-03 dd of= bypass", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-04 find -exec bypass", () => {
+  it("denies find -exec sed -i (exec bypass via outer find verb)", () => {
+    expect(
+      evaluateBashCommand(
+        "find . -name '*.ts' -exec sed -i 's/x/y/' {} \;",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies find -exec cp (exec bypass via outer find verb)", () => {
+    expect(
+      evaluateBashCommand(
+        "find src/ -name '*.ts' -exec cp {} /tmp/backup \;",
+      ).decision,
+    ).toBe("deny");
+  });
+});
