@@ -1064,6 +1064,24 @@ describe("evaluateBashCommand — a1-03 dd of= bypass", () => {
       evaluateBashCommand("echo 'hello' | dd of=src/foo.ts").decision,
     ).toBe("deny");
   });
+
+  it("allows dd of=/tmp/swap (legitimate scratch-area write)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/zero of=/tmp/swap bs=1M count=128").decision,
+    ).toBe("allow");
+  });
+
+  it("allows dd without of= (no write target)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/zero bs=1 count=0").decision,
+    ).toBe("allow");
+  });
+
+  it("allows dd of=/dev/null (devnull is not in-repo)", () => {
+    expect(
+      evaluateBashCommand("dd if=foo of=/dev/null").decision,
+    ).toBe("allow");
+  });
 });
 
 describe("evaluateBashCommand — a1-04 find -exec bypass", () => {

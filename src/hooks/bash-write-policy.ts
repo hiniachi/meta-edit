@@ -286,6 +286,17 @@ function evaluateSegment(rawSegment: string): HookDecision {
       reason: denyReason(verb),
     };
   }
+  // Scoped deny: `dd of=<in-repo-path>` writes to source. Allow
+  // `dd of=/dev/null`, `dd of=/tmp/swap`, and dd invocations with no
+  // `of=` operand. See codex round-2 review (a1-03).
+  if (matchesDangerousDd(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`dd of=<path>` writes to an arbitrary file when the target is ' +
+        'an in-repo path. Use an edit_* tool instead.',
+    };
+  }
   if (matchesEvalDeferredString(rawSegment)) {
     return {
       decision: "deny",
@@ -645,19 +656,110 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "toybox",
 ]);
 
-// Verbs whose mere invocation is denied. `dd` is included because its
-// `of=...` operand writes to an arbitrary path; there is no read-only
-// invocation of `dd` we want to allow in agent workflows. `tee` is
-// here (rather than DENY_SUBSTRINGS) so unicode whitespace between
-// `tee` and its target file (U+00A0, U+2009, ...) cannot bypass via
-// a literal `"tee "` substring miss.
+// Verbs whose mere invocation is denied. `dd` is NOT in this set: its
+// write side-effect is target-dependent (`dd of=/tmp/swap`,
+// `dd of=/dev/null`, `dd if=foo bs=1 count=0` are legitimate), so it
+// is scoped via matchesDangerousDd below. Codex round-2 review on
+// PR #27 caught the false-positive of unconditionally denying `dd`.
+// `tee` remains here pending a follow-up scope-down (a2-01 round 2).
 const DENY_VERBS: ReadonlySet<string> = new Set([
   "mv",
   "cp",
   "patch",
-  "dd",
   "tee",
 ]);
+
+// Path-classification helper used by dd / tee scoped denies. Conservative:
+// relative paths default to "in-repo" (deny). Absolute paths default to
+// "not-in-repo" (allow) UNLESS they are clearly outside the safe-prefix
+// list. This errs on the side of FALSE-NEGATIVE for absolute paths that
+// happen to be repo paths; that trade-off is acceptable because absolute
+// paths to source trees are rare in agent workflows.
+const SAFE_ABSOLUTE_PREFIXES: readonly string[] = [
+  "/dev/",
+  "/tmp/",
+  "/var/tmp/",
+  "/run/",
+  "/proc/",
+  "/sys/",
+];
+const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
+  "/dev/null",
+  "/dev/stdout",
+  "/dev/stderr",
+  "/dev/zero",
+]);
+
+function isInRepoWriteTarget(target: string): boolean {
+  if (target.length === 0) return false;
+  if (SAFE_EXACT_TARGETS.has(target)) return false;
+  if (target.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  }
+  // Relative path → assume in-repo. This also covers `~/...` (we don't
+  // expand tildes) and bare names (`foo.ts`).
+  return true;
+}
+
+// Tokenize a segment respecting single/double quotes. Backslash-escapes
+// outside single quotes consume the next char into the current token.
+// Used by dd / tee target detection; lighter weight than a full shell
+// parser but quote-aware enough for argument extraction.
+function tokenizeSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let hasContent = false;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]!;
+    if (!inSingle && c === "\\" && i + 1 < segment.length) {
+      buf += segment[i + 1];
+      hasContent = true;
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      hasContent = true;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      hasContent = true;
+      continue;
+    }
+    if (!inSingle && !inDouble && /\s/.test(c)) {
+      if (hasContent) {
+        tokens.push(buf);
+        buf = "";
+        hasContent = false;
+      }
+      continue;
+    }
+    buf += c;
+    hasContent = true;
+  }
+  if (hasContent) tokens.push(buf);
+  return tokens;
+}
+
+// `dd` is denied only when invoked with `of=<in-repo-path>`. Allow
+// `dd of=/dev/null`, `dd of=/tmp/swap`, and `dd` invocations without
+// any `of=` operand. See codex round-2 review (a1-03).
+function matchesDangerousDd(segment: string): boolean {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "dd") return false;
+  const tokens = tokenizeSegment(trimmed);
+  for (const tok of tokens) {
+    if (tok.startsWith("of=")) {
+      const target = tok.slice(3);
+      if (isInRepoWriteTarget(target)) return true;
+    }
+  }
+  return false;
+}
 
 // Per-wrapper short options that take a separate value argument. After
 // peeling a wrapper, `extractCommandVerb` consumes a flag plus its
