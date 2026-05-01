@@ -73,6 +73,28 @@ tools) and the two safety hooks (`deny-raw-edit`,
 under `dist/` — Node 20+ is the only runtime requirement; no Bun, no
 `npm install`, no build step on the consumer side.
 
+#### Refreshing to a newer version
+
+`/plugin install` reuses the marketplace clone Claude Code already has
+on disk. After a new meta-edit release lands on `main`, the local clone
+can lag — `/plugin install meta-edit@meta-edit` will keep installing
+the previous commit's `dist/` until the clone is refreshed. To pick up
+the latest version:
+
+```sh
+git -C ~/.claude/plugins/marketplaces/meta-edit pull origin main
+rm -rf ~/.claude/plugins/cache/meta-edit
+/plugin install meta-edit@meta-edit
+/reload-plugins
+```
+
+Verify by checking
+`~/.claude/plugins/marketplaces/meta-edit/.claude-plugin/plugin.json`'s
+`version` field. (Option B users with the npm-installed binary on
+`PATH` can also run `meta-edit --version`.) Tracked upstream as a
+Claude Code limitation; this section will go away once `/plugin
+install` performs an automatic fetch.
+
 ### Option B: npm package
 
 ```sh
