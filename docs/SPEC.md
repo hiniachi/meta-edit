@@ -30,7 +30,7 @@ The MVP is built to find out whether this works. If AIs systematically misuse `e
 ```
 Claude Code
   │
-  │ built-in Edit / Write / MultiEdit: deny via permissions
+  │ built-in Edit / Write / MultiEdit / NotebookEdit: deny via permissions
   │
   ▼
 Hook layer (minimal, just two)
@@ -888,7 +888,9 @@ Two hooks. No more.
 
 ### 5.1 `deny-raw-edit`
 
-Triggered on `PreToolUse` for `Edit`, `Write`, `MultiEdit`. Always denies.
+Triggered on `PreToolUse` for `Edit`, `Write`, `MultiEdit`, `NotebookEdit`. Always denies.
+
+`NotebookEdit` is included because Jupyter (`.ipynb`) cells contain arbitrary executable code (Python, shell `!cmd`, JavaScript) — edits to them warrant the same kind-specific discipline as edits to `.py` or `.ts` source files. Tool-name comparison is case-insensitive so a host shim that delivers alternate casings (`"edit"`, `"WRITE"`, `"multiedit"`, `"notebookedit"`) cannot bypass the gate.
 
 Response payload:
 
@@ -897,7 +899,7 @@ Response payload:
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "Raw Edit/Write/MultiEdit is disabled. Use one of the edit_* tools (e.g., edit_boundary_condition, edit_refactor_only). See tool descriptions for guidance on which to use."
+    "permissionDecisionReason": "Raw Edit/Write/MultiEdit/NotebookEdit is disabled. Use one of the edit_* tools (e.g., edit_boundary_condition, edit_refactor_only). See tool descriptions for guidance on which to use."
   }
 }
 ```
@@ -1082,7 +1084,7 @@ There is no PASS/WARN/BLOCK return. Judgment is delegated to humans, for now.
 
 What we defend against, in MVP scope:
 
-- **AI uses raw Edit / Write / MultiEdit**: blocked by Claude Code permissions and `deny-raw-edit` hook (defense in depth)
+- **AI uses raw Edit / Write / MultiEdit / NotebookEdit**: blocked by Claude Code permissions and `deny-raw-edit` hook (defense in depth)
 - **AI uses common Bash write patterns to bypass typed tools**: blocked on a best-effort basis by `deny-bash-write-bypass`. The hook uses substring matching and can be bypassed by determined commands (heredocs in alternative languages, encoded payloads, etc.); the goal is to make the obvious bypasses harder than using an `edit_*` tool, not to provide a sandbox
 - **AI rewrites the edit log through `meta-edit` tools or common shell write patterns**: blocked on a best-effort basis by protected-path checks and the bash hook. The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees
 - **AI provides empty `rationale` or empty `test_files` to slip past requirements**: blocked by argument validation
