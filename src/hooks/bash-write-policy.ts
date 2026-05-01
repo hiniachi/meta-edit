@@ -660,17 +660,26 @@ function extractSubstitutionInners(seg: string): string[] {
 }
 
 // Find heredoc redirects in the raw command (`<<DELIM`, `<<-DELIM`,
-// `<<'DELIM'`, `<<"DELIM"`, `<<-'DELIM'`, `<<-"DELIM"`) and remove the
-// quote chars from the delimiter word, leaving the bare identifier in
-// place. This must run BEFORE stripQuotedContent: the round-2 quote
-// stripper would otherwise blank out the identifier inside the quoted
-// delimiter (`<<'EOF'` -> `<<'   '`), masking the heredoc shape from
-// the redirect regex. Ordinary single- and double-quoted string
-// literals elsewhere in the command are untouched, so the round-2
-// false-positive prevention for `grep '<<EOF > src/foo.ts'` is
-// preserved by the subsequent stripQuotedContent pass.
+// `<<'DELIM'`, `<<"DELIM"`, `<<-'DELIM'`, `<<-"DELIM"`, `<<\DELIM`,
+// `<<-\DELIM`) and remove the quote/escape chars from the delimiter
+// word, leaving the bare identifier in place. This must run BEFORE
+// stripQuotedContent: the round-2 quote stripper would otherwise blank
+// out the identifier inside the quoted delimiter (`<<'EOF'` ->
+// `<<'   '`), masking the heredoc shape from the redirect regex.
+// Ordinary single- and double-quoted string literals elsewhere in the
+// command are untouched, so the round-2 false-positive prevention for
+// `grep '<<EOF > src/foo.ts'` is preserved by the subsequent
+// stripQuotedContent pass.
 //
 // Codex round-3 review (a1-01 reopen).
+// Codex round-4 (a1-01 follow-up): also handle the backslash-quoted
+// form `<<\WORD` / `<<-\WORD`. Bash treats a single leading backslash
+// before the delimiter word (no trailing pair) as suppressing variable
+// and command expansion — semantically identical to `<<'WORD'`. The
+// normalization pass already strips backslashes, so this second replace
+// is a belt-and-suspenders defence for any future caller that skips
+// normalization or passes a pre-normalized string containing the
+// backslash literally.
 function unquoteHeredocDelimiters(s: string): string {
   // Match `<<` or `<<-` followed by optional whitespace, then a
   // single- OR double-quoted identifier `<<'NAME'` / `<<"NAME"`. We
@@ -679,10 +688,19 @@ function unquoteHeredocDelimiters(s: string): string {
   // but any spurious unquoting we do there is invisible to downstream
   // analysis because stripQuotedContent will blank that whole region
   // immediately after.
-  return s.replace(
+  let out = s.replace(
     /(<<-?\s*)(['"])([A-Za-z_]\w*)\2/g,
     (_m, prefix, _q, name) => `${prefix}${name}`,
   );
+  // Backslash-quoted form: `<<\WORD` (single leading backslash, no
+  // trailing counterpart). Must NOT match `<<\\WORD` (escaped backslash
+  // — two characters: `\\` then the word) which is not a heredoc
+  // quoting form in standard bash.
+  out = out.replace(
+    /(<<-?\s*)\\([A-Za-z_]\w*)/g,
+    (_m, prefix, name) => `${prefix}${name}`,
+  );
+  return out;
 }
 
 // Replace the *contents* of single- and double-quoted regions with

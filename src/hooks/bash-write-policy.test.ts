@@ -1076,6 +1076,21 @@ describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
       evaluateBashCommand("cat <<-'EOF' > src/foo.ts\n\thello\n\tEOF").decision,
     ).toBe("deny");
   });
+
+  // a1-01 (round 4): backslash-quoted delimiter `<<\EOF` is valid bash — single
+  // leading backslash suppresses variable/command expansion just like `<<'EOF'`.
+  // The prior regex only handled ['"] forms, leaving `<<\EOF` undetected.
+  it("a1-01: backslash-quoted heredoc delimiter still detected as redirect", () => {
+    expect(
+      evaluateBashCommand("cat <<\\EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+
+  it("a1-01: backslash-quoted tab-stripping heredoc redirect: cat <<-\\EOF > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<-\\EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
 });
 
 describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
