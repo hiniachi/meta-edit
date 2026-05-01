@@ -286,6 +286,15 @@ function evaluateSegment(rawSegment: string): HookDecision {
       reason: denyReason(verb),
     };
   }
+  if (matchesEvalDeferredString(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`eval` of a non-literal argument (command substitution / backticks / ' +
+        'variable expansion) executes a payload that cannot be statically ' +
+        'inspected, bypassing every deny pattern. Use an edit_* tool instead.',
+    };
+  }
   if (matchesPythonNodeWrite(normalized, rawSegment)) {
     return {
       decision: "deny",
@@ -820,6 +829,52 @@ const DECODE_AND_EXEC_RE =
 
 function matchesDecodeAndExecute(command: string): boolean {
   return DECODE_AND_EXEC_RE.test(command);
+}
+
+// Detect `eval` (optionally wrapped) followed by a non-literal argument
+// — i.e. an argument that contains a command substitution (`$(`,
+// backticks) or a variable expansion (`$NAME` / `${NAME}`) outside
+// single quotes. Static analysis cannot expand the payload, so we
+// deny. Bare-literal evals (`eval "cat > x"`) are unaffected because
+// the literal still runs through the per-segment scan and is caught
+// by the appropriate deny pattern.
+function matchesEvalDeferredString(rawSegment: string): boolean {
+  const trimmed = rawSegment.replace(/^\s+/, "");
+  // Peel optional wrappers commonly placed before eval (env, sudo, ...).
+  const head = stripLeadingEnvAssignments(trimmed);
+  // Strict prefix match of a literal `eval` token.
+  const m = head.match(/^eval\b\s*/);
+  if (m === null) return false;
+  const arg = head.slice(m[0].length);
+  if (arg.length === 0) return false;
+  // Walk the rest, tracking quote state. Inside single quotes, command
+  // substitution and variable expansion are literal — ignored. Outside
+  // single quotes, `$(` / backtick / `$VAR` make the eval non-literal.
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < arg.length; i++) {
+    const c = arg[i];
+    if (!inSingle && c === "\\" && i + 1 < arg.length) {
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (inSingle) continue;
+    if (c === "$") {
+      const next = arg[i + 1];
+      if (next === "(" || next === "{") return true;
+      if (next !== undefined && /[A-Za-z_]/.test(next)) return true;
+    }
+    if (c === "`") return true;
+  }
+  return false;
 }
 
 // Detect a per-verb safety flag in the segment that means the verb's

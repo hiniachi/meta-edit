@@ -1164,3 +1164,17 @@ describe("evaluateBashCommand — a2-01 unicode whitespace tee bypass", () => {
   });
 });
 
+
+describe("evaluateBashCommand — a2-02 eval deferred-string bypass", () => {
+  it("denies eval with literal cat-redirect string", () => {
+    const r = evaluateBashCommand('eval "cat > src/foo.ts"');
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies eval with base64-encoded cat-redirect (deferred bypass)", () => {
+    const r = evaluateBashCommand(
+      'eval "$(echo Y2F0ID4gc3JjL2Zvby50cwo= | base64 -d)"',
+    );
+    expect(r.decision).toBe("deny");
+  });
+});
