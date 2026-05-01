@@ -194,10 +194,12 @@ export function evaluateBashCommand(
   // Heal redirect-target detachment caused by line-separator whitespace
   // sitting between the redirect operator and its target. Without this,
   // `printf x >\rsrc/foo.ts` splits into `printf x >` (empty target) and
-  // `src/foo.ts` (a separate segment), bypassing the in-repo redirect
-  // deny. Real bash treats bare `\r` as an ordinary filename byte, so
-  // the rewrite is a no-op for genuine CRLF copy-paste artifacts; the
-  // primary-split CR carve-out (line 619) remains for defense in depth.
+  // `src/foo.ts` (a separate segment), bypassing the structural
+  // redirect-target check (warn since v0.1.5; deny on verb-deny /
+  // protected-path forms of the same shape). Real bash treats bare
+  // `\r` as an ordinary filename byte, so the rewrite is a no-op for
+  // genuine CRLF copy-paste artifacts; the primary-split CR carve-out
+  // (line 619) remains for defense in depth.
   // Caught by dogfood-001 self-review.
   command = command.replace(
     new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"),
@@ -1412,9 +1414,10 @@ function redirectsToProtected(
 
 // Walk `s` and yield each `>`/`>>`/`>|` redirect's target token, ignoring
 // `>&` fd duplications and quoted regions. Shared by redirectsToProtected
-// (substring-tests against PROTECTED_PATH_NEEDLES) and the in-repo redirect
-// deny (dogfood-001 / dogfood-005). Returns dequoted, unparsed-token
-// strings — callers apply their own predicate.
+// (substring-tests against PROTECTED_PATH_NEEDLES) and the structural
+// redirect-target check (dogfood-001 / dogfood-005; warn since v0.1.5,
+// see redirectsOutsideSafeSinkAllowlist). Returns dequoted,
+// unparsed-token strings — callers apply their own predicate.
 function* iterRedirectTargets(s: string): IterableIterator<string> {
   let i = 0;
   let inSingle = false;
