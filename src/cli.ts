@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { runStdioServer } from "./server.js";
 import { parseLogArgs, runLogCommand } from "./cli/log-cmd.js";
 import { parseSummaryArgs, runSummaryCommand } from "./cli/summary-cmd.js";
@@ -103,13 +105,27 @@ See docs/SPEC.md for full specification.
 }
 
 // Only run when invoked directly as a script (not when imported by tests).
-// Comparing `import.meta.url` against the resolved `process.argv[1]` is the
 // ESM-equivalent of `if (require.main === module)`.
+//
+// Codex review #36 caught a regression: comparing the raw `process.argv[1]`
+// URL against `import.meta.url` breaks under the standard `npm`/`bun`
+// install layout where `node_modules/.bin/meta-edit` is a symlink pointing
+// at `dist/cli.js`. Node's ESM loader canonicalizes `import.meta.url` to
+// the real path of the loaded module, while `process.argv[1]` retains the
+// symlink path. The strings never match, so `meta-edit --version` (or any
+// other subcommand) silently no-ops on every symlinked invocation — which
+// is precisely the published entry point.
+//
+// Fix: canonicalize both sides via `fs.realpathSync` before comparison.
+// Falls back to false on any error (typically ENOENT during unusual
+// invocation modes — safer to treat as "not main" than to throw out of a
+// top-level guard).
 function isMainModule(): boolean {
   if (!process.argv[1]) return false;
   try {
-    const argv1Url = new URL(`file://${process.argv[1]}`).href;
-    return import.meta.url === argv1Url;
+    const argv1Real = fs.realpathSync(process.argv[1]);
+    const moduleReal = fs.realpathSync(fileURLToPath(import.meta.url));
+    return argv1Real === moduleReal;
   } catch {
     return false;
   }
