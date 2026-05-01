@@ -9,7 +9,7 @@ import {
 } from "./cli/hooks-cmd.js";
 import { VERSION } from "./version.js";
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const [, , subcommand, ...rest] = argv;
   const out = process.stdout;
   const err = process.stderr;
@@ -102,12 +102,27 @@ See docs/SPEC.md for full specification.
 `);
 }
 
-main(process.argv).then(
-  (code) => {
-    process.exit(code);
-  },
-  (err) => {
-    console.error(err);
-    process.exit(1);
-  },
-);
+// Only run when invoked directly as a script (not when imported by tests).
+// Comparing `import.meta.url` against the resolved `process.argv[1]` is the
+// ESM-equivalent of `if (require.main === module)`.
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    const argv1Url = new URL(`file://${process.argv[1]}`).href;
+    return import.meta.url === argv1Url;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main(process.argv).then(
+    (code) => {
+      process.exit(code);
+    },
+    (err) => {
+      console.error(err);
+      process.exit(1);
+    },
+  );
+}

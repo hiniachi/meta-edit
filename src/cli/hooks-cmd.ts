@@ -26,7 +26,12 @@ export const META_EDIT_HOOK_COMMANDS = {
   bashWriteBypass: "meta-edit-deny-bash-write-bypass",
 } as const;
 
-const META_EDIT_RAW_EDIT_MATCHER = "Edit|Write|MultiEdit";
+// Matcher string written into Claude Code's PreToolUse routing config.
+// MUST list every tool the runtime policy in deny-raw-edit.ts denies —
+// otherwise Claude Code never invokes the hook for the missing tool and
+// the deny is silently bypassed end-to-end (the bug fixed in a3-02).
+// Keep this in lockstep with RAW_EDIT_TOOLS in raw-edit-policy.ts.
+export const META_EDIT_RAW_EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 const META_EDIT_BASH_MATCHER = "Bash";
 
 export function settingsPathForScope(
