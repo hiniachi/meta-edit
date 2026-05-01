@@ -243,7 +243,15 @@ function evaluateSegment(
   // We also collapse `//` -> `/` and `/./` -> `/` so path-equivalent
   // spellings (`.meta-edit//state`, `.meta-edit/./state`) reach the
   // same protected-path needles as the canonical form.
-  const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
+  // Codex bash-policy review (PR #42) Bug 2: expand bash ANSI-C quoting
+  // `$'...'` BEFORE backslash-stripping so escape sequences like `\x2d`
+  // resolve to their literal char (`-`). Without this, `sed $'-i'`
+  // reads as `sed $'  '` after stripQuotedContent and the `sed -i`
+  // deny pattern is invisible. The expansion runs on the raw segment;
+  // callers that pass `rawSegment` separately to readShellArg etc.
+  // continue to see the unexpanded text, which is what they need.
+  const ansiExpanded = expandAnsiCQuoting(rawSegment);
+  const normalized = collapsePathDoublings(ansiExpanded.replace(/\\/g, ""));
   // Quote-stripped form for substring scans (DENY_SUBSTRINGS,
   // touchesProtectedPath). dogfood-005: legitimate documentation strings
   // that contain literal trigger phrases inside quoted arguments
@@ -263,7 +271,17 @@ function evaluateSegment(
   // even though its leading verb is a read tool. See
   // OBSERVED-FAILURES.md "LOW: Read-only commands referencing protected
   // paths are blocked".
-  if (touchesProtectedPath(scanText)) {
+  // Codex P1-3 (PR #42): scanning quote-stripped text alone leaves a
+  // bypass open for verbs that take a write path as a quoted operand
+  // (`sort -o "<protected>"`, `prettier --write "<protected>"`, ...).
+  // touchesProtectedPathTokenized examines single-word tokens
+  // post-dequote: a single-word token containing the protected
+  // component is a path; a multi-word token is documentation. This
+  // preserves the dogfood-005 intent (allow `printf 'docs about
+  // .meta-edit/state' > /tmp/x` whose protected reference sits inside
+  // a multi-word quoted string) while closing the quoted-operand
+  // bypass.
+  if (touchesProtectedPathTokenized(rawSegment)) {
     const verb = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -815,6 +833,96 @@ function unquoteHeredocDelimiters(s: string): string {
 // hook in many other ways already; the goal is to stop tripping on
 // agent strings that mention bypass patterns by accident or in docs.
 // See codex round-2 review (a1-01, a1-02).
+// Expand bash's ANSI-C quoting `$'...'` into its decoded literal so the
+// downstream substring scans see the actual characters real bash would
+// execute. Without this expansion, `sed $'-i'` reads as `sed $'  '`
+// after stripQuotedContent (the inner content is blanked along with
+// any other single-quoted region) and the `sed -i` substring escapes
+// detection. Codex bash-policy review (PR #42) Bug 2.
+//
+// We only expand `$'...'` when the `$` sits OUTSIDE any other quoting:
+// inside `'...'` and `"..."` the `$'...'` form has no ANSI-C semantics
+// in POSIX shells and must be left alone.
+//
+// Recognized escapes follow the bash documentation subset most likely
+// to surface in agent commands: \\, \', \", \a, \b, \e, \f, \n, \r,
+// \t, \v, \0, and \xHH (1–2 hex digits). Octal \NNN and \uHHHH are
+// not decoded — they fall back to dropping the leading backslash, so
+// the underlying bytes still survive into the substring scans (which
+// is good enough for deny-pattern detection; we never re-execute the
+// expanded form).
+const ANSI_C_ESCAPE_MAP: Record<string, string> = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  a: "\x07",
+  b: "\b",
+  e: "\x1b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  v: "\v",
+  "0": "\0",
+};
+
+function expandAnsiCQuoting(s: string): string {
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i]!;
+    // `$'...'` only has ANSI-C meaning at top level (outside any other
+    // quoting). Inside single quotes everything is literal; inside
+    // double quotes `$'...'` is `$` then `'...'` (a malformed start of
+    // a single-quoted string).
+    if (!inSingle && !inDouble && c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length && s[j] !== "'") {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          const next = s[j + 1]!;
+          if (next === "x") {
+            let k = j + 2;
+            let hex = "";
+            while (k < s.length && k < j + 4 && /[0-9A-Fa-f]/.test(s[k]!)) {
+              hex += s[k]!;
+              k++;
+            }
+            if (hex.length > 0) {
+              out += String.fromCharCode(parseInt(hex, 16));
+              j = k;
+              continue;
+            }
+          }
+          out += ANSI_C_ESCAPE_MAP[next] ?? next;
+          j += 2;
+          continue;
+        }
+        out += s[j]!;
+        j++;
+      }
+      i = j < s.length ? j + 1 : j;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = !inSingle;
+      out += c;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === '"') {
+      inDouble = !inDouble;
+      out += c;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 function stripQuotedContent(s: string): string {
   let out = "";
   let i = 0;
@@ -1076,6 +1184,24 @@ const WRAPPER_VALUE_OPTS: Record<string, ReadonlySet<string>> = {
   ]),
   doas: new Set(["-u", "-C"]),
   env: new Set(["-u", "-C", "-S"]),
+  // xargs's `-I REPLSTR` / `-J REPLSTR` / `-E EOFSTR` / `-L MAX` /
+  // `-n N` / `-P MAX` / `-s SIZE` / `-d DELIM` / `-a FILE` all take a
+  // separate value argument. Without consuming the value, the wrapper
+  // peel mistakes the value (`{}`) for the inner verb. Codex bash-
+  // policy review (PR #42) Bug 1 caught this for `xargs -I {} eval
+  // "..."`. The `--replace=R` long form is auto-handled via the
+  // `--long=value` regex in extractCommandVerb.
+  xargs: new Set([
+    "-I",
+    "-J",
+    "-E",
+    "-L",
+    "-n",
+    "-P",
+    "-s",
+    "-d",
+    "-a",
+  ]),
 };
 
 // Common read-only inspection utilities. When the leading verb (after
@@ -1638,6 +1764,28 @@ function touchesProtectedPath(command: string): boolean {
   for (const needle of PROTECTED_PATH_NEEDLES) {
     if (containsAsPathComponent(command, needle)) {
       return true;
+    }
+  }
+  return false;
+}
+
+// Tokenize-based protected-path check (Codex P1-3 fix on PR #42).
+// Walks each shell token post-dequote. Single-word tokens that contain
+// a protected-path component count as path references; multi-word
+// tokens (documentation strings inside quotes) are skipped. This
+// preserves the dogfood-005 intent — allow `printf 'docs about
+// .meta-edit/state' > /tmp/x` whose protected reference sits inside a
+// multi-word quoted string — while closing the bypass for write verbs
+// that take a quoted single-token path operand (`sort -o
+// ".meta-edit/state/edits.jsonl"`, `prettier --write
+// ".meta-edit/state/..."`, `uniq <in> ".meta-edit/tmp/..."`).
+function touchesProtectedPathTokenized(rawSegment: string): boolean {
+  for (const tok of tokenizeSegment(rawSegment)) {
+    if (tok.length === 0) continue;
+    if (/\s/.test(tok)) continue;
+    const norm = collapsePathDoublings(tok.replace(/\\/g, ""));
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (containsAsPathComponent(norm, needle)) return true;
     }
   }
   return false;

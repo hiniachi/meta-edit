@@ -1736,4 +1736,128 @@ describe("evaluateBashCommand — Codex PR #42 review fixes", () => {
       expect(r.decision).toBe("deny");
     });
   });
+
+  describe("P1-3: protected-path bypass via quoted write operand", () => {
+    // The dogfood-005 quote-stripping change blanked quoted operands of
+    // verbs that take a write target as a flag arg or positional
+    // (sort -o, prettier --write, uniq, ...). The tokenize-based check
+    // examines single-word tokens post-dequote so the quoted form still
+    // trips the deny without re-introducing the dogfood-005 false-
+    // positive for multi-word documentation strings.
+
+    it("denies sort -o \"<protected>\" /tmp/in (quoted single-token path operand)", () => {
+      const r = evaluateBashCommand(
+        'sort -o ".meta-edit/state/edits.jsonl" /tmp/in',
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected");
+    });
+
+    it("denies sort -o '<protected>' (single-quoted form)", () => {
+      const r = evaluateBashCommand(
+        "sort -o '.meta-edit/state/edits.jsonl' /tmp/in",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sort --output=<protected> (long-form unquoted)", () => {
+      const r = evaluateBashCommand(
+        "sort --output=.meta-edit/state/edits.jsonl /tmp/in",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies prettier --write \"<protected>\" (quoted formatter target)", () => {
+      const r = evaluateBashCommand(
+        'prettier --write ".meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still allows multi-word documentation string mentioning protected path (dogfood-005 case b)", () => {
+      // Quoted body is a multi-word documentation string, not a path
+      // operand. Write redirect target is /tmp (safe sink). Must allow.
+      const r = evaluateBashCommand(
+        "printf 'edits land in .meta-edit/state/edits.jsonl' > /tmp/notes.md",
+      );
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still allows tail of single-word protected path (read-only carve-out)", () => {
+      // Single-word token IS a protected path, but the verb is in the
+      // read-only carve-out and there is no redirect to a protected
+      // target — debugging workflow remains allowed.
+      const r = evaluateBashCommand("tail -2 .meta-edit/state/edits.jsonl");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still denies traversal-aliased single-word path operand", () => {
+      // Path-doubling collapse re-attaches `src/../.meta-edit/state/...`
+      // to the protected component before the check.
+      const r = evaluateBashCommand(
+        'sort -o "src/../.meta-edit/state/edits.jsonl" /tmp/in',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("Bash-policy review: xargs -I {} eval (Bug 1)", () => {
+    // The wrapper-peel loop in extractEvalArg consumed `-I` but not its
+    // value `{}`, so the next iteration treated `{}` as a verb and
+    // failed. xargs's `-I REPLSTR` / `-J REPLSTR` / `--replace[=R]`
+    // options take the next token as their value; without that
+    // peeling, the wrapper-prefixed eval bypass reopens.
+
+    it("denies xargs -I {} eval \"sed -i ...\"", () => {
+      const r = evaluateBashCommand(
+        'xargs -I {} eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs -I{} eval \"sed -i ...\" (glued no-space)", () => {
+      const r = evaluateBashCommand(
+        'xargs -I{} eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs --replace={} eval \"...\"", () => {
+      const r = evaluateBashCommand(
+        'xargs --replace={} eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs -J {} eval \"...\" (-J is xargs's alternate replace flag)", () => {
+      const r = evaluateBashCommand(
+        'xargs -J {} eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("Bash-policy review: ANSI-C \\$'...' decoding (Bug 2)", () => {
+    // stripQuotedContent treated `$'-i'` as `$` + `'-i'`, blanking the
+    // contents. Real bash expands `$'-i'` to literal `-i`. The DENY
+    // substring `sed -i` therefore did not match. Pre-decoding ANSI-C
+    // C-style strings before the substring scans closes the bypass.
+
+    it("denies sed $'-i' s/x/y/ src/foo.ts (ANSI-C wrapping the -i flag)", () => {
+      const r = evaluateBashCommand("sed $'-i' s/x/y/ src/foo.ts");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sed $'\\x2di' s/x/y/ src/foo.ts (hex escape for -)", () => {
+      const r = evaluateBashCommand(
+        "sed $'\\x2di' s/x/y/ src/foo.ts",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies $'cat' > src/foo.ts (ANSI-C verb)", () => {
+      const r = evaluateBashCommand("$'cat' > src/foo.ts");
+      expect(r.decision).toBe("deny");
+    });
+  });
 });
