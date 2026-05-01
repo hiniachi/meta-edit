@@ -18233,6 +18233,7 @@ function validateRequest(toolName, request, ctx) {
   const isCreate = toolName === "edit_create_file";
   const touched = [];
   const changes = [];
+  const seenChangeFileWarning = new Set;
   for (const c of request.changes) {
     if (c.old_content.includes("\x00")) {
       warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
@@ -18258,6 +18259,11 @@ function validateRequest(toolName, request, ctx) {
       if (!targetCheck.ok && c.file === request.target_file && safe.error === targetCheck.error) {
         continue;
       }
+      const dedupKey = `${c.file}\x00${safe.error}`;
+      if (seenChangeFileWarning.has(dedupKey)) {
+        continue;
+      }
+      seenChangeFileWarning.add(dedupKey);
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
@@ -18637,12 +18643,18 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     if (original !== ch.oldContent) {
-      const diskLen = original.length;
-      const oldLen = ch.oldContent.length;
-      if (diskLen !== oldLen) {
-        warnings.push(`old_content for "${ch.canonical}" is ${oldLen} characters but the file on disk is ${diskLen} characters; ` + `old_content must be the EXACT current full file content, not a snippet. ` + `Re-read the file and pass its complete contents.`);
+      const diskBytes = Buffer.byteLength(original, "utf8");
+      const oldBytes = Buffer.byteLength(ch.oldContent, "utf8");
+      const delta = oldBytes - diskBytes;
+      if (delta !== 0) {
+        if (Math.abs(delta) <= 2) {
+          const direction = delta > 0 ? "longer" : "shorter";
+          warnings.push(`old_content for "${ch.canonical}" is ${Math.abs(delta)} byte(s) ` + `${direction} than the file on disk (${oldBytes} vs ${diskBytes} bytes); ` + `likely a trailing-newline or leading-whitespace mismatch. ` + `Re-read the file with the same encoding and pass its complete byte-for-byte contents.`);
+        } else {
+          warnings.push(`old_content for "${ch.canonical}" is ${oldBytes} bytes but the file on disk is ${diskBytes} bytes; ` + `old_content must be the EXACT current full file content, not a snippet. ` + `Re-read the file and pass its complete contents.`);
+        }
       } else {
-        warnings.push(`stale old_content for "${ch.canonical}": same length as disk (${diskLen} characters) but bytes differ; ` + `the file changed between when old_content was captured and now. Re-read the file and retry.`);
+        warnings.push(`stale old_content for "${ch.canonical}": same length as disk (${diskBytes} bytes) but bytes differ; ` + `the file changed since old_content was captured, or old_content used a different encoding/transcoding. ` + `Re-read the file and retry.`);
       }
       return { applied: false, warnings };
     }
@@ -19235,4 +19247,4 @@ export {
   createServer
 };
 
-//# debugId=C8AE9892862035C764756E2164756E21
+//# debugId=E5EED1ECAB499DBE64756E2164756E21

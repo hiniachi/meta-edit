@@ -17,7 +17,7 @@ Tool definitions don't decay. The schema and description of the tool the agent i
 
 The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification, and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the v0.2 backlog.
 
-Status: `0.1.1` pre-release. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
+Status: `0.1.4` pre-release. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
 
 ## The nineteen tools
 

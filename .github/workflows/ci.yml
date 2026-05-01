@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert package.json.version === plugin.json.version
+      - name: Assert package.json/plugin.json version + tool-count description sync
         run: |
           pkg=$(jq -r .version package.json)
           plg=$(jq -r .version .claude-plugin/plugin.json)
@@ -66,3 +66,25 @@ jobs:
             exit 1
           fi
           echo "version sync OK: $pkg"
+
+          # PR #42 self-review: marketplace.json descriptions were missed
+          # by the manual "eighteen" → "nineteen" sweep. Pin tool-count
+          # mentions in the public manifests so a future tool addition
+          # cannot land without updating every consumer-visible string.
+          for f in package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+            if grep -F "eighteen" "$f" >/dev/null 2>&1; then
+              echo "::error::$f mentions 'eighteen' — refresh tool-count description after adding/removing edit_* tools" >&2
+              exit 1
+            fi
+          done
+          # marketplace.json is required for /plugin install discovery —
+          # confirm its plugin entry name matches plugin.json.name.
+          if [ -f .claude-plugin/marketplace.json ]; then
+            mp_name=$(jq -r '.plugins[0].name' .claude-plugin/marketplace.json)
+            plg_name=$(jq -r .name .claude-plugin/plugin.json)
+            if [ "$mp_name" != "$plg_name" ]; then
+              echo "::error::marketplace.json plugins[0].name ($mp_name) != plugin.json.name ($plg_name)" >&2
+              exit 1
+            fi
+          fi
+          echo "manifest description sync OK"

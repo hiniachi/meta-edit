@@ -326,6 +326,57 @@ describe("validateRequest", () => {
       }
     });
 
+    it("dedupes two change.file entries with identical path AND error (PR #42 self-review Bug 1)", () => {
+      // Pre-fix: two changes with the same input path and same failure
+      // reason produced two byte-identical change.file warnings. The
+      // dedup now collapses them to one.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange(".meta-edit/state/edits.jsonl"),
+            makeChange(".meta-edit/state/edits.jsonl"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedChangeFileWarnings = r.warnings.filter(
+          (w) => w.includes("change.file") && w.includes("protected"),
+        );
+        expect(protectedChangeFileWarnings.length).toBe(1);
+      }
+    });
+
+    it("does NOT dedupe change.file warnings with distinct error reasons", () => {
+      // Two changes failing for different reasons must both surface — the
+      // dedup is only on (file + error), not file alone.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            // First fails: protected path.
+            makeChange(".meta-edit/state/edits.jsonl"),
+            // Second fails for a DIFFERENT reason: traversal segment.
+            makeChange("src/../escape.ts"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const changeFileWarnings = r.warnings.filter((w) =>
+          w.includes("change.file"),
+        );
+        expect(changeFileWarnings.length).toBe(2);
+      }
+    });
+
     it("still emits the change.file warning when only the change differs", () => {
       // When target_file is acceptable but a change.file points into a
       // protected path, the change.file warning must still surface; only

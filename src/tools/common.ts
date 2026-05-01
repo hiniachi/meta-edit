@@ -157,6 +157,12 @@ export function validateRequest(
   const isCreate = toolName === "edit_create_file";
   const touched: string[] = [];
   const changes: ContentChange[] = [];
+  // Track (file + error) pairs already surfaced from a change.file
+  // failure so two changes with the identical input path AND failure
+  // reason emit the warning at most once. Combined with the
+  // target_file-vs-change.file dedup below, this collapses arbitrary
+  // N-way duplicates into a single user-actionable message.
+  const seenChangeFileWarning = new Set<string>();
   for (const c of request.changes) {
     if (c.old_content.includes("\0")) {
       warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
@@ -211,6 +217,15 @@ export function validateRequest(
       ) {
         continue;
       }
+      // PR #42 self-review (Bug 1): also dedupe across change.file
+      // entries themselves. If two changes share the same input path
+      // string AND fail with the same reason, the second warning
+      // carries no additional information and just adds noise.
+      const dedupKey = `${c.file}\0${safe.error}`;
+      if (seenChangeFileWarning.has(dedupKey)) {
+        continue;
+      }
+      seenChangeFileWarning.add(dedupKey);
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }

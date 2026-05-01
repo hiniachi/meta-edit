@@ -77,6 +77,26 @@ describe("applyChanges", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/a.ts"), "utf8")).toBe("one\n");
   });
 
+  it("rejects on small-delta old_content with trailing-newline diagnostic (PR #42 self-review)", () => {
+    // |delta| ≤ 2 — most likely a missing trailing newline rather than a
+    // genuine snippet. Surface that hint so the agent stops re-reading.
+    writeFile("src/a.ts", "alpha\n");
+    const result = applyChanges(tmpRoot, [
+      // 5 bytes vs 6 bytes — delta of 1 = trailing newline omission.
+      change("src/a.ts", "alpha", "beta\n"),
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.includes("src/a.ts") &&
+            w.includes("trailing-newline or leading-whitespace mismatch"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("rejects on equal-length stale old_content with TOCTOU diagnostic", () => {
     // When lengths match but bytes differ, the original "file changed
     // since the request was prepared" framing is correct — the caller

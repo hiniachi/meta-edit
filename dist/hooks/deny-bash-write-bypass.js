@@ -338,9 +338,10 @@ function evaluateBashCommand(command, opts = {}) {
   return { decision: "allow" };
 }
 function evaluateSegment(rawSegment, opts = {}) {
-  const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
+  const ansiExpanded = expandAnsiCQuoting(rawSegment);
+  const normalized = collapsePathDoublings(ansiExpanded.replace(/\\/g, ""));
   const scanText = stripQuotedContent(normalized);
-  if (touchesProtectedPath(scanText)) {
+  if (touchesProtectedPathTokenized(rawSegment)) {
     const verb2 = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -659,6 +660,73 @@ function unquoteHeredocDelimiters(s) {
   out = out.replace(/(<<-?\s*)\\([A-Za-z_]\w*)/g, (_m, prefix, name) => `${prefix}${name}`);
   return out;
 }
+var ANSI_C_ESCAPE_MAP = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  a: "\x07",
+  b: "\b",
+  e: "\x1B",
+  f: "\f",
+  n: `
+`,
+  r: "\r",
+  t: "\t",
+  v: "\v",
+  "0": "\x00"
+};
+function expandAnsiCQuoting(s) {
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && !inDouble && c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length && s[j] !== "'") {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          const next = s[j + 1];
+          if (next === "x") {
+            let k = j + 2;
+            let hex = "";
+            while (k < s.length && k < j + 4 && /[0-9A-Fa-f]/.test(s[k])) {
+              hex += s[k];
+              k++;
+            }
+            if (hex.length > 0) {
+              out += String.fromCharCode(parseInt(hex, 16));
+              j = k;
+              continue;
+            }
+          }
+          out += ANSI_C_ESCAPE_MAP[next] ?? next;
+          j += 2;
+          continue;
+        }
+        out += s[j];
+        j++;
+      }
+      i = j < s.length ? j + 1 : j;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = !inSingle;
+      out += c;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === '"') {
+      inDouble = !inDouble;
+      out += c;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
 function stripQuotedContent(s) {
   let out = "";
   let i = 0;
@@ -852,7 +920,18 @@ var WRAPPER_VALUE_OPTS = {
     "-U"
   ]),
   doas: new Set(["-u", "-C"]),
-  env: new Set(["-u", "-C", "-S"])
+  env: new Set(["-u", "-C", "-S"]),
+  xargs: new Set([
+    "-I",
+    "-J",
+    "-E",
+    "-L",
+    "-n",
+    "-P",
+    "-s",
+    "-d",
+    "-a"
+  ])
 };
 var READ_ONLY_VERBS = new Set([
   "tail",
@@ -1191,10 +1270,16 @@ function stripLeadingEnvAssignments(s) {
   }
   return "";
 }
-function touchesProtectedPath(command) {
-  for (const needle of PROTECTED_PATH_NEEDLES) {
-    if (containsAsPathComponent(command, needle)) {
-      return true;
+function touchesProtectedPathTokenized(rawSegment) {
+  for (const tok of tokenizeSegment(rawSegment)) {
+    if (tok.length === 0)
+      continue;
+    if (/\s/.test(tok))
+      continue;
+    const norm = collapsePathDoublings(tok.replace(/\\/g, ""));
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (containsAsPathComponent(norm, needle))
+        return true;
     }
   }
   return false;
@@ -1494,4 +1579,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=E26DD0AD2F3B257B64756E2164756E21
+//# debugId=3235C159A30AA00664756E2164756E21
