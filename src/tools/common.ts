@@ -346,6 +346,14 @@ export function makeApplyingHandler(
     // duplicate edits. appendLogSafely surfaces the log failure on a
     // structured `audit_error` field — distinct from the `warnings`
     // channel that carries routine validation notices.
+    //
+    // Round-4 (defect 1): `audit_error` propagates regardless of
+    // `result.applied`. applyChanges can return `applied: false` for
+    // recoverable causes (e.g. stale old_content at apply.ts:204,208) —
+    // the attempt is still audited, and a log-write failure here still
+    // leaves the audit trail incomplete. Callers inspect `applied`
+    // separately to determine whether bytes hit disk; `audit_error`
+    // means only "the audit trail is incomplete for this edit_id".
     const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
       ...baseEntry,
       patch_size_bytes: patchSize,

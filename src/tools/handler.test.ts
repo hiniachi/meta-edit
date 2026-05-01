@@ -127,6 +127,56 @@ describe("makeApplyingHandler", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DRIFTED\n");
   });
 
+  it("surfaces audit_error post-apply even when applyChanges returns applied=false", async () => {
+    // Round-4 (defect 1): the runtime always appends an audit record after
+    // applyChanges runs, regardless of result.applied (stale old_content
+    // returns applied:false but the attempt is still meaningful and
+    // audited). If that post-apply append fails, callers MUST get the
+    // audit_error signal — `applied` alone does not gate audit-trail
+    // completeness.
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "DRIFTED\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tests/foo.test.ts"), "test\n", "utf8");
+
+    const failingLog = {
+      nextEditId: () => "edit_20260430_0001",
+      append: () => {
+        const err = new Error("simulated EROFS") as NodeJS.ErrnoException;
+        err.code = "EROFS";
+        throw err;
+      },
+    };
+
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log: failingLog,
+      applyChanges,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "stale content + audit failure",
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+      changes: [
+        // Stale: disk has "DRIFTED\n" but request says "alpha\n".
+        // applyChanges returns applied:false, then log.append throws.
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("EROFS");
+    expect(result.audit_error).toContain("edit_20260430_0001");
+    // Disk untouched (apply rejected on stale check) — but audit_error fires.
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
+      "DRIFTED\n",
+    );
+  });
+
   it("does not throw if log.append fails after a successful apply", async () => {
     fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "alpha\n", "utf8");
