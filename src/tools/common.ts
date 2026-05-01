@@ -157,6 +157,12 @@ export function validateRequest(
   const isCreate = toolName === "edit_create_file";
   const touched: string[] = [];
   const changes: ContentChange[] = [];
+  // Track (file + error) pairs already surfaced from a change.file
+  // failure so two changes with the identical input path AND failure
+  // reason emit the warning at most once. Combined with the
+  // target_file-vs-change.file dedup below, this collapses arbitrary
+  // N-way duplicates into a single user-actionable message.
+  const seenChangeFileWarning = new Set<string>();
   for (const c of request.changes) {
     if (c.old_content.includes("\0")) {
       warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
@@ -197,6 +203,29 @@ export function validateRequest(
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
+      // Dedupe with the target_file-level failure for the same path: when
+      // target_file === change.file (the common single-file edit shape)
+      // and both failed for the identical reason, the agent reading two
+      // near-identical warnings tries to fix two things when there is
+      // one. Prefer the target_file form because it is the field the
+      // agent declared first; the change.file form is its echo. See
+      // dogfood-004.
+      if (
+        !targetCheck.ok &&
+        c.file === request.target_file &&
+        safe.error === targetCheck.error
+      ) {
+        continue;
+      }
+      // PR #42 self-review (Bug 1): also dedupe across change.file
+      // entries themselves. If two changes share the same input path
+      // string AND fail with the same reason, the second warning
+      // carries no additional information and just adds noise.
+      const dedupKey = `${c.file}\0${safe.error}`;
+      if (seenChangeFileWarning.has(dedupKey)) {
+        continue;
+      }
+      seenChangeFileWarning.add(dedupKey);
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
@@ -375,7 +404,8 @@ export function makeApplyingHandler(
     //
     // Round-4 (defect 1): `audit_error` propagates regardless of
     // `result.applied`. applyChanges can return `applied: false` for
-    // recoverable causes (e.g. stale old_content at apply.ts:204,208) —
+    // recoverable causes (e.g. stale old_content / snippet-shaped
+    // old_content; see the length-aware mismatch branch in apply.ts) —
     // the attempt is still audited, and a log-write failure here still
     // leaves the audit trail incomplete. Callers inspect `applied`
     // separately to determine whether bytes hit disk; `audit_error`
@@ -439,6 +469,20 @@ function checkPathSafety(
     return {
       ok: false,
       error: `path "${p}" is absolute; must be repository-relative`,
+    };
+  }
+  // Reject `..` traversal segments. `path.resolve` (used downstream) would
+  // silently collapse `a/../b` to `b`, producing a canonical that no
+  // longer reflects what the caller asked for. Subsequent stale-content
+  // check then quotes the rebased path, leaving the caller wondering
+  // why the wrong file was touched. See dogfood-003. Pure cosmetic
+  // normalizations (leading `./`, doubled slashes, backslashes) remain
+  // accepted because they collapse to the same on-disk file regardless.
+  if (containsParentTraversal(p)) {
+    return {
+      ok: false,
+      error:
+        `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`,
     };
   }
   let norm: string;
@@ -523,4 +567,15 @@ function realpathOrSelf(p: string): string {
   } catch {
     return p;
   }
+}
+
+// Return true iff any path segment of `p` is exactly `..`. Splits on
+// both forward and backslashes so Windows-style spellings are covered.
+// Only `..` segments count: a name like `..foo` or `foo..` is a
+// legitimate filename and is left alone.
+function containsParentTraversal(p: string): boolean {
+  for (const seg of p.split(/[\\/]/)) {
+    if (seg === "..") return true;
+  }
+  return false;
 }

@@ -182,6 +182,70 @@ function isProtectedPath(p, options = {}) {
   }
   return false;
 }
+// package.json
+var package_default = {
+  name: "@hiniachi/meta-edit",
+  version: "0.1.4",
+  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
+  license: "MIT",
+  author: "nia <nia@yukinofurumachi.com>",
+  type: "module",
+  bin: {
+    "meta-edit": "dist/cli.js",
+    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+  },
+  main: "./dist/server.js",
+  files: [
+    "dist/",
+    "docs/SPEC.md",
+    ".claude-plugin/",
+    "hooks/",
+    "README.md",
+    "LICENSE"
+  ],
+  scripts: {
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    test: "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    typecheck: "tsc --noEmit",
+    start: "bun run src/cli.ts"
+  },
+  engines: {
+    node: ">=20"
+  },
+  dependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    diff: "^9",
+    zod: "^3.23.0"
+  },
+  devDependencies: {
+    "@types/bun": "^1.3.13",
+    "@types/diff": "^8",
+    "@types/node": "^22.0.0",
+    typescript: "^5.6.0"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hiniachi/meta-edit.git"
+  },
+  keywords: [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+};
+
+// src/version.ts
+var VERSION = package_default.version;
+
+// src/docs-urls.ts
+var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
+var SPEC_URL = `${BASE}/docs/SPEC.md`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
+var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/hooks/bash-write-policy.ts
 var DENY_SUBSTRINGS = [
@@ -254,6 +318,7 @@ function evaluateBashCommand(command, opts = {}) {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
   }
+  command = command.replace(new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"), (_m, op) => `${op} `);
   if (matchesDecodeAndExecute(stripQuotedContent(command))) {
     return {
       decision: "deny",
@@ -273,8 +338,10 @@ function evaluateBashCommand(command, opts = {}) {
   return { decision: "allow" };
 }
 function evaluateSegment(rawSegment, opts = {}) {
-  const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
-  if (touchesProtectedPath(normalized)) {
+  const ansiExpanded = expandAnsiCQuoting(rawSegment);
+  const normalized = collapsePathDoublings(ansiExpanded.replace(/\\/g, ""));
+  const scanText = stripQuotedContent(normalized);
+  if (touchesProtectedPathTokenized(rawSegment)) {
     const verb2 = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -292,12 +359,22 @@ function evaluateSegment(rawSegment, opts = {}) {
     };
   }
   for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle)) {
+    if (scanText.includes(needle)) {
       return {
         decision: "deny",
         reason: denyReason(needle)
       };
     }
+  }
+  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
+  if (hostedDeny !== null) {
+    return hostedDeny;
+  }
+  if (redirectsToInRepoPath(rawSegment)) {
+    return {
+      decision: "deny",
+      reason: "command redirects (`>` / `>>` / `>|`) to a path that is not on " + "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). Use an edit_* tool for in-repo writes; capture command " + "output to /tmp/ or /dev/null if you need a sink."
+    };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
   if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
@@ -469,6 +546,10 @@ function primarySplitSegments(cmd) {
         i++;
         continue;
       }
+      if (c === "|" && cmd[i - 1] === ">") {
+        buf += c;
+        continue;
+      }
       if (c === ";" || c === "|" || c === `
 ` || c === "\r" || c === "\u2028" || c === "\u2029") {
         segments.push(buf);
@@ -579,6 +660,73 @@ function unquoteHeredocDelimiters(s) {
   out = out.replace(/(<<-?\s*)\\([A-Za-z_]\w*)/g, (_m, prefix, name) => `${prefix}${name}`);
   return out;
 }
+var ANSI_C_ESCAPE_MAP = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  a: "\x07",
+  b: "\b",
+  e: "\x1B",
+  f: "\f",
+  n: `
+`,
+  r: "\r",
+  t: "\t",
+  v: "\v",
+  "0": "\x00"
+};
+function expandAnsiCQuoting(s) {
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && !inDouble && c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length && s[j] !== "'") {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          const next = s[j + 1];
+          if (next === "x") {
+            let k = j + 2;
+            let hex = "";
+            while (k < s.length && k < j + 4 && /[0-9A-Fa-f]/.test(s[k])) {
+              hex += s[k];
+              k++;
+            }
+            if (hex.length > 0) {
+              out += String.fromCharCode(parseInt(hex, 16));
+              j = k;
+              continue;
+            }
+          }
+          out += ANSI_C_ESCAPE_MAP[next] ?? next;
+          j += 2;
+          continue;
+        }
+        out += s[j];
+        j++;
+      }
+      i = j < s.length ? j + 1 : j;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = !inSingle;
+      out += c;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === '"') {
+      inDouble = !inDouble;
+      out += c;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
 function stripQuotedContent(s) {
   let out = "";
   let i = 0;
@@ -621,7 +769,7 @@ function stripQuotedContent(s) {
   return out;
 }
 function denyReason(pattern) {
-  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the nineteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
+  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the nineteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist ` + `(${SPEC_BASH_HOOK_URL}).`;
 }
 var FIND_VERBS = new Set([
   "find",
@@ -669,8 +817,11 @@ function isInRepoWriteTarget(target) {
     return false;
   if (SAFE_EXACT_TARGETS.has(target))
     return false;
-  if (target.startsWith("/")) {
-    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  const resolved = target.startsWith("/") ? path3.normalize(target) : target;
+  if (SAFE_EXACT_TARGETS.has(resolved))
+    return false;
+  if (resolved.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
   return true;
 }
@@ -769,7 +920,18 @@ var WRAPPER_VALUE_OPTS = {
     "-U"
   ]),
   doas: new Set(["-u", "-C"]),
-  env: new Set(["-u", "-C", "-S"])
+  env: new Set(["-u", "-C", "-S"]),
+  xargs: new Set([
+    "-I",
+    "-J",
+    "-E",
+    "-L",
+    "-n",
+    "-P",
+    "-s",
+    "-d",
+    "-a"
+  ])
 };
 var READ_ONLY_VERBS = new Set([
   "tail",
@@ -848,6 +1010,122 @@ function redirectsToProtected(s, opts = {}) {
       }
     }
     i = j;
+  }
+  return false;
+}
+function* iterRedirectTargets(s) {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    let j = i + 1;
+    if (s[j] === ">" || s[j] === "|")
+      j++;
+    while (j < s.length && (s[j] === " " || s[j] === "\t"))
+      j++;
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (tc === " " || tc === "\t" || tc === ";" || tc === "|" || tc === "&" || tc === `
+` || tc === ">" || tc === "<") {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    yield target;
+    i = j;
+  }
+}
+var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+function evaluateShellHostedPayload(rawSegment, opts) {
+  const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
+  if (cMatch !== null && typeof cMatch.index === "number") {
+    const argStart = cMatch.index + cMatch[0].length;
+    const arg = readShellArg(rawSegment, argStart);
+    const hit = recursivelyEvaluateArg(arg, opts);
+    if (hit !== null)
+      return hit;
+  }
+  const evalArg = extractEvalArg(rawSegment);
+  if (evalArg !== null) {
+    const hit = recursivelyEvaluateArg(evalArg, opts);
+    if (hit !== null)
+      return hit;
+  }
+  return null;
+}
+function recursivelyEvaluateArg(arg, opts) {
+  if (arg === null || arg.length === 0)
+    return null;
+  const deEscaped = arg.replace(/\\/g, "");
+  const decision = evaluateBashCommand(deEscaped, opts);
+  return decision.decision === "deny" ? decision : null;
+}
+function extractEvalArg(rawSegment) {
+  let s = stripLeadingEnvAssignments(rawSegment.trimStart());
+  for (let safety = 0;safety < 32; safety++) {
+    s = stripLeadingEnvAssignments(s);
+    const m = s.match(/^(\S+)/);
+    if (m === null || m[0] === undefined)
+      return null;
+    const word = m[0];
+    const baseStart = word.lastIndexOf("/");
+    const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
+    if (base === "eval") {
+      const argStart = word.length + (s.slice(word.length).match(/^\s+/)?.[0].length ?? 0);
+      return readShellArg(s, argStart);
+    }
+    if (!WRAPPER_VERBS.has(base))
+      return null;
+    const valueOpts = WRAPPER_VALUE_OPTS[base];
+    s = s.slice(word.length).replace(/^\s+/, "");
+    while (true) {
+      const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
+      if (optMatch === null || optMatch[0] === undefined)
+        break;
+      const opt = optMatch[0];
+      s = s.slice(opt.length).replace(/^\s+/, "");
+      if (valueOpts !== undefined && !opt.includes("=") && valueOpts.has(opt)) {
+        const valMatch = s.match(/^\S+/);
+        if (valMatch !== null && valMatch[0] !== undefined) {
+          s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+        }
+      }
+    }
+  }
+  return null;
+}
+function redirectsToInRepoPath(rawSegment) {
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0)
+      continue;
+    if (isInRepoWriteTarget(target))
+      return true;
   }
   return false;
 }
@@ -992,10 +1270,16 @@ function stripLeadingEnvAssignments(s) {
   }
   return "";
 }
-function touchesProtectedPath(command) {
-  for (const needle of PROTECTED_PATH_NEEDLES) {
-    if (containsAsPathComponent(command, needle)) {
-      return true;
+function touchesProtectedPathTokenized(rawSegment) {
+  for (const tok of tokenizeSegment(rawSegment)) {
+    if (tok.length === 0)
+      continue;
+    if (/\s/.test(tok))
+      continue;
+    const norm = collapsePathDoublings(tok.replace(/\\/g, ""));
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (containsAsPathComponent(norm, needle))
+        return true;
     }
   }
   return false;
@@ -1295,4 +1579,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=B94CEC0826C12EDE64756E2164756E21
+//# debugId=3235C159A30AA00664756E2164756E21

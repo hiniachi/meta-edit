@@ -22,6 +22,7 @@
 
 import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
+import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
 
 export type HookDecision = {
   decision: "allow" | "deny";
@@ -178,6 +179,18 @@ export function evaluateBashCommand(
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
   }
+  // Heal redirect-target detachment caused by line-separator whitespace
+  // sitting between the redirect operator and its target. Without this,
+  // `printf x >\rsrc/foo.ts` splits into `printf x >` (empty target) and
+  // `src/foo.ts` (a separate segment), bypassing the in-repo redirect
+  // deny. Real bash treats bare `\r` as an ordinary filename byte, so
+  // the rewrite is a no-op for genuine CRLF copy-paste artifacts; the
+  // primary-split CR carve-out (line 619) remains for defense in depth.
+  // Caught by dogfood-001 self-review.
+  command = command.replace(
+    new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"),
+    (_m, op) => `${op} `,
+  );
 
   // Cross-segment "decode-and-execute" bypass: `base64 -d | bash`,
   // `xxd -r ... | sh`, `openssl base64 -d | bash`. Each individual
@@ -230,7 +243,23 @@ function evaluateSegment(
   // We also collapse `//` -> `/` and `/./` -> `/` so path-equivalent
   // spellings (`.meta-edit//state`, `.meta-edit/./state`) reach the
   // same protected-path needles as the canonical form.
-  const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
+  // Codex bash-policy review (PR #42) Bug 2: expand bash ANSI-C quoting
+  // `$'...'` BEFORE backslash-stripping so escape sequences like `\x2d`
+  // resolve to their literal char (`-`). Without this, `sed $'-i'`
+  // reads as `sed $'  '` after stripQuotedContent and the `sed -i`
+  // deny pattern is invisible. The expansion runs on the raw segment;
+  // callers that pass `rawSegment` separately to readShellArg etc.
+  // continue to see the unexpanded text, which is what they need.
+  const ansiExpanded = expandAnsiCQuoting(rawSegment);
+  const normalized = collapsePathDoublings(ansiExpanded.replace(/\\/g, ""));
+  // Quote-stripped form for substring scans (DENY_SUBSTRINGS,
+  // touchesProtectedPath). dogfood-005: legitimate documentation strings
+  // that contain literal trigger phrases inside quoted arguments
+  // (`printf '... cat > foo.ts ...' > /tmp/notes.md`,
+  //  `printf '... .meta-edit/state ...' > /tmp/notes.md`) used to deny
+  // because the substring scans walked raw text. The heredoc and
+  // decode-and-execute scans were already quote-aware; align the rest.
+  const scanText = stripQuotedContent(normalized);
 
   // Protected-path edits are denied — even when the surrounding command
   // otherwise matches a documented allowlist entry. Carve-out: a small
@@ -242,7 +271,17 @@ function evaluateSegment(
   // even though its leading verb is a read tool. See
   // OBSERVED-FAILURES.md "LOW: Read-only commands referencing protected
   // paths are blocked".
-  if (touchesProtectedPath(normalized)) {
+  // Codex P1-3 (PR #42): scanning quote-stripped text alone leaves a
+  // bypass open for verbs that take a write path as a quoted operand
+  // (`sort -o "<protected>"`, `prettier --write "<protected>"`, ...).
+  // touchesProtectedPathTokenized examines single-word tokens
+  // post-dequote: a single-word token containing the protected
+  // component is a path; a multi-word token is documentation. This
+  // preserves the dogfood-005 intent (allow `printf 'docs about
+  // .meta-edit/state' > /tmp/x` whose protected reference sits inside
+  // a multi-word quoted string) while closing the quoted-operand
+  // bypass.
+  if (touchesProtectedPathTokenized(rawSegment)) {
     const verb = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -289,12 +328,46 @@ function evaluateSegment(
   // surface; the architecture now reserves room for that without giving
   // deny-bypass on chained commands.
   for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle)) {
+    if (scanText.includes(needle)) {
       return {
         decision: "deny",
         reason: denyReason(needle),
       };
     }
+  }
+
+  // Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`,
+  // including wrapper-prefixed forms like `sudo bash -c` / `env eval`)
+  // pass an arbitrary quoted string for the host shell to RE-PARSE and
+  // execute. The outer quote-stripping above blanks that payload, so
+  // re-extract the literal argument and recursively evaluate it through
+  // the full policy. Compensates for the dogfood-005 quote-stripping
+  // trade-off and closes the Codex P1 reviews:
+  //   P1-1: protected-path writes inside shell-hosted payloads
+  //         (`bash -c "printf x > .meta-edit/state/..."`)
+  //   P1-2: wrapper-prefixed eval (`sudo eval "..."`, `env eval "..."`)
+  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
+  if (hostedDeny !== null) {
+    return hostedDeny;
+  }
+
+  // dogfood-001 + dogfood-005: structural deny for any `>` / `>>` / `>|`
+  // redirect whose target is not on the documented safe-sink allowlist
+  // (/dev/null, /dev/std{out,err}, /dev/zero, /tmp/, /var/tmp/, /run/,
+  // /sys/). Replaces the per-verb deny enumeration that left holes for
+  // every new write verb (printf, echo, jq with --rawfile, ...). Reading
+  // from any source, redirecting to a safe sink remains allowed; redirect
+  // targets that resolve in-repo (relative paths) or to arbitrary
+  // absolute paths outside the safe-sink list are denied.
+  if (redirectsToInRepoPath(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        "command redirects (`>` / `>>` / `>|`) to a path that is not on " +
+        "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
+        "/sys/). Use an edit_* tool for in-repo writes; capture command " +
+        "output to /tmp/ or /dev/null if you need a sink.",
+    };
   }
 
   // Heredoc redirect bypass: `cat <<EOF > target`, `cat <<'EOF' > target`,
@@ -562,6 +635,15 @@ function primarySplitSegments(cmd: string): string[] {
         i++;
         continue;
       }
+      // Preserve `>|` (noclobber-override redirect) as a single
+      // segment-internal token. Without this carve-out, `printf x >|
+      // notes.md` splits into `printf x >` and `notes.md`, which hides
+      // the redirect target from iterRedirectTargets and bypasses the
+      // dogfood-001 in-repo redirect deny.
+      if (c === "|" && cmd[i - 1] === ">") {
+        buf += c;
+        continue;
+      }
       if (
         c === ";" ||
         c === "|" ||
@@ -751,6 +833,96 @@ function unquoteHeredocDelimiters(s: string): string {
 // hook in many other ways already; the goal is to stop tripping on
 // agent strings that mention bypass patterns by accident or in docs.
 // See codex round-2 review (a1-01, a1-02).
+// Expand bash's ANSI-C quoting `$'...'` into its decoded literal so the
+// downstream substring scans see the actual characters real bash would
+// execute. Without this expansion, `sed $'-i'` reads as `sed $'  '`
+// after stripQuotedContent (the inner content is blanked along with
+// any other single-quoted region) and the `sed -i` substring escapes
+// detection. Codex bash-policy review (PR #42) Bug 2.
+//
+// We only expand `$'...'` when the `$` sits OUTSIDE any other quoting:
+// inside `'...'` and `"..."` the `$'...'` form has no ANSI-C semantics
+// in POSIX shells and must be left alone.
+//
+// Recognized escapes follow the bash documentation subset most likely
+// to surface in agent commands: \\, \', \", \a, \b, \e, \f, \n, \r,
+// \t, \v, \0, and \xHH (1–2 hex digits). Octal \NNN and \uHHHH are
+// not decoded — they fall back to dropping the leading backslash, so
+// the underlying bytes still survive into the substring scans (which
+// is good enough for deny-pattern detection; we never re-execute the
+// expanded form).
+const ANSI_C_ESCAPE_MAP: Record<string, string> = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  a: "\x07",
+  b: "\b",
+  e: "\x1b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  v: "\v",
+  "0": "\0",
+};
+
+function expandAnsiCQuoting(s: string): string {
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i]!;
+    // `$'...'` only has ANSI-C meaning at top level (outside any other
+    // quoting). Inside single quotes everything is literal; inside
+    // double quotes `$'...'` is `$` then `'...'` (a malformed start of
+    // a single-quoted string).
+    if (!inSingle && !inDouble && c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length && s[j] !== "'") {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          const next = s[j + 1]!;
+          if (next === "x") {
+            let k = j + 2;
+            let hex = "";
+            while (k < s.length && k < j + 4 && /[0-9A-Fa-f]/.test(s[k]!)) {
+              hex += s[k]!;
+              k++;
+            }
+            if (hex.length > 0) {
+              out += String.fromCharCode(parseInt(hex, 16));
+              j = k;
+              continue;
+            }
+          }
+          out += ANSI_C_ESCAPE_MAP[next] ?? next;
+          j += 2;
+          continue;
+        }
+        out += s[j]!;
+        j++;
+      }
+      i = j < s.length ? j + 1 : j;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = !inSingle;
+      out += c;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === '"') {
+      inDouble = !inDouble;
+      out += c;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 function stripQuotedContent(s: string): string {
   let out = "";
   let i = 0;
@@ -797,8 +969,8 @@ function denyReason(pattern: string): string {
   return (
     `command matches deny pattern "${pattern}". meta-edit reserves ` +
     `direct file writes for the nineteen edit_* tools; if a formatter ` +
-    `or codegen needs to run, route it through the allowlist (see ` +
-    `docs/SPEC.md §5.2).`
+    `or codegen needs to run, route it through the allowlist ` +
+    `(${SPEC_BASH_HOOK_URL}).`
   );
 }
 
@@ -879,8 +1051,18 @@ const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
 function isInRepoWriteTarget(target: string): boolean {
   if (target.length === 0) return false;
   if (SAFE_EXACT_TARGETS.has(target)) return false;
-  if (target.startsWith("/")) {
-    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  // Lexical safe-prefix matching is bypassable via `..` traversal:
+  // `/tmp/../home/user/meta-edit/src/foo.ts` literally starts with
+  // `/tmp/` but resolves OUTSIDE the safe sink. Resolve `..` segments
+  // before the prefix check so traversal cannot escape the allowlist.
+  // path.normalize on POSIX collapses `a/b/../c` → `a/c` while leaving
+  // genuine path strings unchanged. dogfood-001 self-review caught this.
+  const resolved = target.startsWith("/")
+    ? path.normalize(target)
+    : target;
+  if (SAFE_EXACT_TARGETS.has(resolved)) return false;
+  if (resolved.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
   // Relative path → assume in-repo. This also covers `~/...` (we don't
   // expand tildes) and bare names (`foo.ts`).
@@ -1002,6 +1184,24 @@ const WRAPPER_VALUE_OPTS: Record<string, ReadonlySet<string>> = {
   ]),
   doas: new Set(["-u", "-C"]),
   env: new Set(["-u", "-C", "-S"]),
+  // xargs's `-I REPLSTR` / `-J REPLSTR` / `-E EOFSTR` / `-L MAX` /
+  // `-n N` / `-P MAX` / `-s SIZE` / `-d DELIM` / `-a FILE` all take a
+  // separate value argument. Without consuming the value, the wrapper
+  // peel mistakes the value (`{}`) for the inner verb. Codex bash-
+  // policy review (PR #42) Bug 1 caught this for `xargs -I {} eval
+  // "..."`. The `--replace=R` long form is auto-handled via the
+  // `--long=value` regex in extractCommandVerb.
+  xargs: new Set([
+    "-I",
+    "-J",
+    "-E",
+    "-L",
+    "-n",
+    "-P",
+    "-s",
+    "-d",
+    "-a",
+  ]),
 };
 
 // Common read-only inspection utilities. When the leading verb (after
@@ -1163,6 +1363,179 @@ function redirectsToProtected(
       }
     }
     i = j;
+  }
+  return false;
+}
+
+// Walk `s` and yield each `>`/`>>`/`>|` redirect's target token, ignoring
+// `>&` fd duplications and quoted regions. Shared by redirectsToProtected
+// (substring-tests against PROTECTED_PATH_NEEDLES) and the in-repo redirect
+// deny (dogfood-001 / dogfood-005). Returns dequoted, unparsed-token
+// strings — callers apply their own predicate.
+function* iterRedirectTargets(s: string): IterableIterator<string> {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    // `>&` is fd duplication (`2>&1`, `>&2`), not a write redirect.
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    let j = i + 1;
+    if (s[j] === ">" || s[j] === "|") j++;
+    while (j < s.length && (s[j] === " " || s[j] === "\t")) j++;
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (
+        tc === " " ||
+        tc === "\t" ||
+        tc === ";" ||
+        tc === "|" ||
+        tc === "&" ||
+        tc === "\n" ||
+        tc === ">" ||
+        tc === "<"
+      ) {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    yield target;
+    i = j;
+  }
+}
+
+// `bash -c "<cmd>"` / `sh -c "<cmd>"` / `eval "<cmd>"`: when the agent
+// stuffs a write-bypass into a shell-hosting wrapper's quoted argument,
+// the outer quote-stripping pass blanks the payload before any of the
+// per-segment scans see it. Recover the literal argument and re-evaluate
+// it through the full policy pipeline so every check that runs on a
+// top-level command (DENY_SUBSTRINGS, protected-path needles, in-repo
+// redirect deny, heredoc, decode-and-execute, ...) also runs on the
+// wrapper's payload.
+//
+// Codex P1-1 review: a needle-only rescan missed protected-path writes
+// like `bash -c "printf x > .meta-edit/state/edits.jsonl"` because the
+// protected-path detector lives in evaluateSegment, not in the rescan.
+// Recursing through evaluateBashCommand fixes that uniformly without
+// the rescan having to mirror every per-segment check.
+const SHELL_HOSTING_C_RE =
+  /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+
+function evaluateShellHostedPayload(
+  rawSegment: string,
+  opts: EvaluateBashOptions,
+): HookDecision | null {
+  const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
+  if (cMatch !== null && typeof cMatch.index === "number") {
+    const argStart = cMatch.index + cMatch[0].length;
+    const arg = readShellArg(rawSegment, argStart);
+    const hit = recursivelyEvaluateArg(arg, opts);
+    if (hit !== null) return hit;
+  }
+  // `eval` may appear behind env assignments OR behind any of the
+  // standard WRAPPER_VERBS (sudo, env, doas, xargs, nice, ...). The
+  // previous implementation only looked at `^eval` after env stripping,
+  // so `sudo eval "..."` and `env eval "..."` walked through unchecked.
+  // Codex P1-2 review: peel the wrapper chain via the same helper
+  // extractCommandVerb uses, then recurse into eval's argument.
+  const evalArg = extractEvalArg(rawSegment);
+  if (evalArg !== null) {
+    const hit = recursivelyEvaluateArg(evalArg, opts);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+function recursivelyEvaluateArg(
+  arg: string | null,
+  opts: EvaluateBashOptions,
+): HookDecision | null {
+  if (arg === null || arg.length === 0) return null;
+  // Strip backslash escapes so `s\ed -i` inside the arg reads as `sed
+  // -i`. The recursive call walks the de-escaped form through the same
+  // pipeline that already de-escapes top-level commands, so additional
+  // escape forms are handled there.
+  const deEscaped = arg.replace(/\\/g, "");
+  const decision = evaluateBashCommand(deEscaped, opts);
+  return decision.decision === "deny" ? decision : null;
+}
+
+// Peel WRAPPER_VERBS and env assignments off the head, then check whether
+// the next token is `eval`. Returns the dequoted argument string when an
+// eval invocation is found, or null otherwise. Mirrors the wrapper-peel
+// chain in extractCommandVerb so the set of recognized wrappers stays in
+// sync.
+function extractEvalArg(rawSegment: string): string | null {
+  let s = stripLeadingEnvAssignments(rawSegment.trimStart());
+  for (let safety = 0; safety < 32; safety++) {
+    s = stripLeadingEnvAssignments(s);
+    const m = s.match(/^(\S+)/);
+    if (m === null || m[0] === undefined) return null;
+    const word = m[0];
+    const baseStart = word.lastIndexOf("/");
+    const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
+    if (base === "eval") {
+      const argStart = word.length + (s.slice(word.length).match(/^\s+/)?.[0].length ?? 0);
+      return readShellArg(s, argStart);
+    }
+    if (!WRAPPER_VERBS.has(base)) return null;
+    const valueOpts = WRAPPER_VALUE_OPTS[base];
+    s = s.slice(word.length).replace(/^\s+/, "");
+    while (true) {
+      const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
+      if (optMatch === null || optMatch[0] === undefined) break;
+      const opt = optMatch[0];
+      s = s.slice(opt.length).replace(/^\s+/, "");
+      if (
+        valueOpts !== undefined &&
+        !opt.includes("=") &&
+        valueOpts.has(opt)
+      ) {
+        const valMatch = s.match(/^\S+/);
+        if (valMatch !== null && valMatch[0] !== undefined) {
+          s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// dogfood-001 + dogfood-005: deny any `>`/`>>`/`>|` redirect whose target
+// is not in the safe-sink allowlist. This is the structural replacement
+// for the per-verb enumeration (printf, echo, ...) the dogfood pass
+// found incomplete. The check operates on the raw segment so quoted
+// strings inside arguments are not misread as redirect targets — e.g.
+// `printf '... > foo.ts ...' > /tmp/notes.md` walks past the quoted `>`
+// and only sees the real one whose target is `/tmp/notes.md` (allowed).
+function redirectsToInRepoPath(rawSegment: string): boolean {
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0) continue;
+    if (isInRepoWriteTarget(target)) return true;
   }
   return false;
 }
@@ -1391,6 +1764,28 @@ function touchesProtectedPath(command: string): boolean {
   for (const needle of PROTECTED_PATH_NEEDLES) {
     if (containsAsPathComponent(command, needle)) {
       return true;
+    }
+  }
+  return false;
+}
+
+// Tokenize-based protected-path check (Codex P1-3 fix on PR #42).
+// Walks each shell token post-dequote. Single-word tokens that contain
+// a protected-path component count as path references; multi-word
+// tokens (documentation strings inside quotes) are skipped. This
+// preserves the dogfood-005 intent — allow `printf 'docs about
+// .meta-edit/state' > /tmp/x` whose protected reference sits inside a
+// multi-word quoted string — while closing the bypass for write verbs
+// that take a quoted single-token path operand (`sort -o
+// ".meta-edit/state/edits.jsonl"`, `prettier --write
+// ".meta-edit/state/..."`, `uniq <in> ".meta-edit/tmp/..."`).
+function touchesProtectedPathTokenized(rawSegment: string): boolean {
+  for (const tok of tokenizeSegment(rawSegment)) {
+    if (tok.length === 0) continue;
+    if (/\s/.test(tok)) continue;
+    const norm = collapsePathDoublings(tok.replace(/\\/g, ""));
+    for (const needle of PROTECTED_PATH_NEEDLES) {
+      if (containsAsPathComponent(norm, needle)) return true;
     }
   }
   return false;

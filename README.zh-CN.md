@@ -17,7 +17,7 @@
 
 这个项目押的是这样一个判断：**改变 AI 编辑行为的，是工具表面的形状本身**——而不是检测或事后验证。设计灵感来自 [SQLite 的测试策略](https://sqlite.org/testing.html)（边界值、MC/DC 条件覆盖、异常路径测试、按变更逐项核对清单），把 C 库级别的质量纪律翻译成应用层的编辑类别。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)，v0.2 的待办清单见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
 
-状态：`0.1.1` 预发布版。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
+状态：`0.1.4` 预发布版。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
 
 ## 十九个工具
 

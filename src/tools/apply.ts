@@ -202,9 +202,46 @@ export function applyChanges(
     }
 
     if (original !== ch.oldContent) {
-      warnings.push(
-        `stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`,
-      );
+      // Distinguish length mismatch from content mismatch so a common
+      // failure mode (caller passed a snippet because they were thinking
+      // in Anthropic Edit's old_string semantics, where old_string is a
+      // fragment) gets a self-explanatory diagnostic instead of a
+      // misleading "file changed" message that triggers a re-read loop.
+      // See dogfood-002. We report UTF-8 byte lengths via Buffer.byteLength
+      // because agents reasoning about file contents typically think in
+      // bytes (e.g. `wc -c`), while a generic "characters" framing
+      // confuses on UTF-16 surrogate pairs and emoji. PR #42 self-review.
+      const diskBytes = Buffer.byteLength(original, "utf8");
+      const oldBytes = Buffer.byteLength(ch.oldContent, "utf8");
+      const delta = oldBytes - diskBytes;
+      if (delta !== 0) {
+        // Trailing-newline / leading-whitespace mistakes (|delta| ≤ 2)
+        // dominate snippet-style misuses for autoformatted source files.
+        // Calling the agent's input "a snippet" when they actually
+        // shipped 99 % of the file misroutes the fix; surface the more
+        // probable cause first. PR #42 self-review (Bug 2).
+        if (Math.abs(delta) <= 2) {
+          const direction = delta > 0 ? "longer" : "shorter";
+          warnings.push(
+            `old_content for "${ch.canonical}" is ${Math.abs(delta)} byte(s) ` +
+              `${direction} than the file on disk (${oldBytes} vs ${diskBytes} bytes); ` +
+              `likely a trailing-newline or leading-whitespace mismatch. ` +
+              `Re-read the file with the same encoding and pass its complete byte-for-byte contents.`,
+          );
+        } else {
+          warnings.push(
+            `old_content for "${ch.canonical}" is ${oldBytes} bytes but the file on disk is ${diskBytes} bytes; ` +
+              `old_content must be the EXACT current full file content, not a snippet. ` +
+              `Re-read the file and pass its complete contents.`,
+          );
+        }
+      } else {
+        warnings.push(
+          `stale old_content for "${ch.canonical}": same length as disk (${diskBytes} bytes) but bytes differ; ` +
+            `the file changed since old_content was captured, or old_content used a different encoding/transcoding. ` +
+            `Re-read the file and retry.`,
+        );
+      }
       return { applied: false, warnings };
     }
 

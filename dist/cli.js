@@ -17051,7 +17051,7 @@ edit_* tools.
 Use this tool when:
 - Modifying .claude/ configuration
 - Modifying .github/workflows/ files that affect meta-edit
-- Modifying CLAUDE.md or other AI-instruction files
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
 - Modifying tool descriptions of edit_* tools themselves
 - Modifying argument schemas or hook behavior
 
@@ -17088,7 +17088,7 @@ Use this tool when:
 - Editing inline code comments
 - Editing JSDoc / docstrings / Rustdoc that document existing API
 - Editing changelogs, release notes, contribution guides
-- Editing OBSERVED-FAILURES.md and similar project meta-documentation
+- Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
 
 Required tests: NONE. test_files may be empty.
 
@@ -18234,6 +18234,7 @@ function validateRequest(toolName, request, ctx) {
   const isCreate = toolName === "edit_create_file";
   const touched = [];
   const changes = [];
+  const seenChangeFileWarning = new Set;
   for (const c of request.changes) {
     if (c.old_content.includes("\x00")) {
       warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
@@ -18256,6 +18257,14 @@ function validateRequest(toolName, request, ctx) {
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
+      if (!targetCheck.ok && c.file === request.target_file && safe.error === targetCheck.error) {
+        continue;
+      }
+      const dedupKey = `${c.file}\x00${safe.error}`;
+      if (seenChangeFileWarning.has(dedupKey)) {
+        continue;
+      }
+      seenChangeFileWarning.add(dedupKey);
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
@@ -18393,6 +18402,12 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" is absolute; must be repository-relative`
     };
   }
+  if (containsParentTraversal(p)) {
+    return {
+      ok: false,
+      error: `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`
+    };
+  }
   let norm;
   try {
     norm = normalizeRepoRelative(p);
@@ -18442,6 +18457,13 @@ function realpathOrSelf(p) {
   } catch {
     return p;
   }
+}
+function containsParentTraversal(p) {
+  for (const seg of p.split(/[\\/]/)) {
+    if (seg === "..")
+      return true;
+  }
+  return false;
 }
 
 // src/tools/registry.ts
@@ -18622,7 +18644,19 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     if (original !== ch.oldContent) {
-      warnings.push(`stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`);
+      const diskBytes = Buffer.byteLength(original, "utf8");
+      const oldBytes = Buffer.byteLength(ch.oldContent, "utf8");
+      const delta = oldBytes - diskBytes;
+      if (delta !== 0) {
+        if (Math.abs(delta) <= 2) {
+          const direction = delta > 0 ? "longer" : "shorter";
+          warnings.push(`old_content for "${ch.canonical}" is ${Math.abs(delta)} byte(s) ` + `${direction} than the file on disk (${oldBytes} vs ${diskBytes} bytes); ` + `likely a trailing-newline or leading-whitespace mismatch. ` + `Re-read the file with the same encoding and pass its complete byte-for-byte contents.`);
+        } else {
+          warnings.push(`old_content for "${ch.canonical}" is ${oldBytes} bytes but the file on disk is ${diskBytes} bytes; ` + `old_content must be the EXACT current full file content, not a snippet. ` + `Re-read the file and pass its complete contents.`);
+        }
+      } else {
+        warnings.push(`stale old_content for "${ch.canonical}": same length as disk (${diskBytes} bytes) but bytes differ; ` + `the file changed since old_content was captured, or old_content used a different encoding/transcoding. ` + `Re-read the file and retry.`);
+      }
       return { applied: false, warnings };
     }
     staged.push({
@@ -19108,8 +19142,8 @@ function formatDayKey(d) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.3",
-  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  version: "0.1.4",
+  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -19646,6 +19680,12 @@ function parseHooksArgs(argv) {
   return { ok: true, scope };
 }
 
+// src/docs-urls.ts
+var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
+var SPEC_URL = `${BASE}/docs/SPEC.md`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
+var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
+
 // src/cli.ts
 async function main(argv) {
   const [, , subcommand, ...rest] = argv;
@@ -19733,7 +19773,7 @@ Usage:
   meta-edit --version                      Show version.
   meta-edit --help                         Show this help.
 
-See docs/SPEC.md for full specification.
+See ${SPEC_URL} for full specification.
 `);
 }
 function isMainModule() {
@@ -19759,4 +19799,4 @@ export {
   main
 };
 
-//# debugId=EFC7F78F558C15B664756E2164756E21
+//# debugId=B0CCCFA522FE560264756E2164756E21

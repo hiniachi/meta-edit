@@ -538,7 +538,7 @@ edit_* tools.
 Use this tool when:
 - Modifying .claude/ configuration
 - Modifying .github/workflows/ files that affect meta-edit
-- Modifying CLAUDE.md or other AI-instruction files
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
 - Modifying tool descriptions of edit_* tools themselves
 - Modifying argument schemas or hook behavior
 
@@ -576,7 +576,7 @@ Use this tool when:
 - Editing inline code comments
 - Editing JSDoc / docstrings / Rustdoc that document existing API
 - Editing changelogs, release notes, contribution guides
-- Editing OBSERVED-FAILURES.md and similar project meta-documentation
+- Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
 
 Required tests: NONE. test_files may be empty.
 

@@ -79,6 +79,70 @@ function replyDeny(reason) {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
+// package.json
+var package_default = {
+  name: "@hiniachi/meta-edit",
+  version: "0.1.4",
+  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
+  license: "MIT",
+  author: "nia <nia@yukinofurumachi.com>",
+  type: "module",
+  bin: {
+    "meta-edit": "dist/cli.js",
+    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+  },
+  main: "./dist/server.js",
+  files: [
+    "dist/",
+    "docs/SPEC.md",
+    ".claude-plugin/",
+    "hooks/",
+    "README.md",
+    "LICENSE"
+  ],
+  scripts: {
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    test: "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    typecheck: "tsc --noEmit",
+    start: "bun run src/cli.ts"
+  },
+  engines: {
+    node: ">=20"
+  },
+  dependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    diff: "^9",
+    zod: "^3.23.0"
+  },
+  devDependencies: {
+    "@types/bun": "^1.3.13",
+    "@types/diff": "^8",
+    "@types/node": "^22.0.0",
+    typescript: "^5.6.0"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hiniachi/meta-edit.git"
+  },
+  keywords: [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+};
+
+// src/version.ts
+var VERSION = package_default.version;
+
+// src/docs-urls.ts
+var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
+var SPEC_URL = `${BASE}/docs/SPEC.md`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
+var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/hooks/raw-edit-policy.ts
 var RAW_EDIT_TOOLS = new Set([
@@ -92,7 +156,7 @@ function evaluateRawEdit(toolName) {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the nineteen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
+      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the nineteen edit_* tools that match the kind of ` + `change you are making (full list: ${SPEC_TOOLS_URL}). If no ` + `edit_* tool fits, stop and ask the user before bypassing the ` + `typed surface.`
     };
   }
   return { decision: "allow" };
@@ -113,4 +177,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=A2DAA5A6BE31D38B64756E2164756E21
+//# debugId=22908B36786D1C5664756E2164756E21

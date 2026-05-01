@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "meta-edit",
-  "description": "Single-plugin marketplace exposing the meta-edit Claude Code plugin: eighteen kind-specific edit_* MCP tools and two safety hooks.",
+  "description": "Single-plugin marketplace exposing the meta-edit Claude Code plugin: nineteen kind-specific edit_* MCP tools and two safety hooks.",
   "owner": {
     "name": "nia",
     "email": "nia@yukinofurumachi.com"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "meta-edit",
-      "description": "Replaces raw Edit / Write / MultiEdit with eighteen kind-specific edit_* MCP tools that encode the testing obligations for each kind of change directly in their tool descriptions.",
+      "description": "Replaces raw Edit / Write / MultiEdit with nineteen kind-specific edit_* MCP tools that encode the testing obligations for each kind of change directly in their tool descriptions.",
       "author": {
         "name": "nia",
         "email": "nia@yukinofurumachi.com"

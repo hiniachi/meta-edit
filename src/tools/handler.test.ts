@@ -125,7 +125,12 @@ describe("makeApplyingHandler", () => {
     expect(entries.length).toBe(1);
     expect(entries[0]?.applied).toBe(false);
     expect(
-      entries[0]?.warnings.some((w) => w.includes("stale old_content")),
+      entries[0]?.warnings.some(
+        (w) =>
+          w.includes("stale old_content") ||
+          w.includes("EXACT current full file content") ||
+          w.includes("trailing-newline or leading-whitespace mismatch"),
+      ),
     ).toBe(true);
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DRIFTED\n");
   });

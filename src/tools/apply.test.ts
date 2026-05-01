@@ -54,7 +54,11 @@ describe("applyChanges", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/b.ts"), "utf8")).toBe("dos\n");
   });
 
-  it("rejects on stale old_content (mismatch with disk) without writing", () => {
+  it("rejects on length-mismatch old_content with snippet-aware diagnostic", () => {
+    // Common dogfood-002 failure: caller passed a fragment as old_content
+    // (Anthropic-Edit `old_string` semantics) instead of the full file.
+    // The diagnostic must say so explicitly so the caller does not
+    // diagnose a TOCTOU race and re-read in a loop.
     writeFile("src/a.ts", "one\n");
     const result = applyChanges(tmpRoot, [
       change("src/a.ts", "OLD-CONTENT-DOES-NOT-MATCH\n", "two\n"),
@@ -63,7 +67,52 @@ describe("applyChanges", () => {
     if (!result.applied) {
       expect(
         result.warnings.some(
-          (w) => w.includes("stale old_content") && w.includes("src/a.ts"),
+          (w) =>
+            w.includes("src/a.ts") &&
+            w.includes("EXACT current full file content") &&
+            w.includes("not a snippet"),
+        ),
+      ).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(tmpRoot, "src/a.ts"), "utf8")).toBe("one\n");
+  });
+
+  it("rejects on small-delta old_content with trailing-newline diagnostic (PR #42 self-review)", () => {
+    // |delta| ≤ 2 — most likely a missing trailing newline rather than a
+    // genuine snippet. Surface that hint so the agent stops re-reading.
+    writeFile("src/a.ts", "alpha\n");
+    const result = applyChanges(tmpRoot, [
+      // 5 bytes vs 6 bytes — delta of 1 = trailing newline omission.
+      change("src/a.ts", "alpha", "beta\n"),
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.includes("src/a.ts") &&
+            w.includes("trailing-newline or leading-whitespace mismatch"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects on equal-length stale old_content with TOCTOU diagnostic", () => {
+    // When lengths match but bytes differ, the original "file changed
+    // since the request was prepared" framing is correct — the caller
+    // really did capture a now-stale view.
+    writeFile("src/a.ts", "one\n");
+    const result = applyChanges(tmpRoot, [
+      change("src/a.ts", "two\n", "new\n"),
+    ]);
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.includes("stale old_content") &&
+            w.includes("src/a.ts") &&
+            w.includes("same length as disk"),
         ),
       ).toBe(true);
     }
@@ -81,7 +130,10 @@ describe("applyChanges", () => {
     if (!result.applied) {
       expect(
         result.warnings.some(
-          (w) => w.includes("stale old_content") && w.includes("src/b.ts"),
+          (w) =>
+            w.includes("src/b.ts") &&
+            (w.includes("EXACT current full file content") ||
+              w.includes("stale old_content")),
         ),
       ).toBe(true);
     }

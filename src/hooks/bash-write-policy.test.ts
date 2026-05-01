@@ -1456,3 +1456,408 @@ describe("evaluateBashCommand — issue #31 /dev/fd alias bypass", () => {
     ).toBe("allow");
   });
 });
+
+describe("evaluateBashCommand — dogfood-001 in-repo redirect deny", () => {
+  // Pre-fix: only specific verbs were enumerated as deny patterns
+  // (cat >, sed -i, mv, ...). printf, echo, jq, and any future write
+  // verb fell through to allow when the redirect target was an in-repo
+  // path. The structural fix denies any `>` / `>>` / `>|` whose target
+  // is not on the safe-sink allowlist.
+
+  it("denies printf > test-playground/ (the dogfood-001 reproduction)", () => {
+    const r = evaluateBashCommand('printf "%s" leak > test-playground/sample.ts');
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("safe-sink allowlist");
+  });
+
+  it("denies echo > out.log (relative in-repo target)", () => {
+    expect(
+      evaluateBashCommand("echo hello > out.log").decision,
+    ).toBe("deny");
+  });
+
+  it("denies printf >> append to in-repo path", () => {
+    expect(
+      evaluateBashCommand("printf x >> notes.md").decision,
+    ).toBe("deny");
+  });
+
+  it("denies noclobber-override >| to in-repo path", () => {
+    expect(
+      evaluateBashCommand("printf x >| notes.md").decision,
+    ).toBe("deny");
+  });
+
+  it("denies redirect to absolute path outside the safe-sink list", () => {
+    // /home/user/repo/x is not on the safe prefixes (/tmp, /var/tmp,
+    // /run, /sys), so it is denied even though it is absolute. This
+    // matches the existing isInRepoWriteTarget contract.
+    expect(
+      evaluateBashCommand("printf x > /home/user/something.txt").decision,
+    ).toBe("deny");
+  });
+
+  it("allows printf > /dev/null (safe exact target)", () => {
+    expect(
+      evaluateBashCommand("printf x > /dev/null").decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf > /tmp/foo (safe prefix)", () => {
+    expect(
+      evaluateBashCommand("printf x > /tmp/foo.log").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo foo &> /dev/null (combined-redirect form)", () => {
+    expect(
+      evaluateBashCommand("echo foo &> /dev/null").decision,
+    ).toBe("allow");
+  });
+
+  it("allows command with no redirect", () => {
+    expect(evaluateBashCommand("printf hello").decision).toBe("allow");
+    expect(evaluateBashCommand("bun test").decision).toBe("allow");
+  });
+
+  it("allows 2>&1 fd-duplication without misreading as redirect", () => {
+    // `2>&1` is fd duplication, not a write redirect. Must not trip the
+    // in-repo deny.
+    expect(
+      evaluateBashCommand("bun test 2>&1 | head").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — dogfood-005 quote-aware scans", () => {
+  // Pre-fix: DENY_SUBSTRINGS substring scan and protected-path scan
+  // walked raw command text, so a documentation string containing the
+  // literal trigger phrase inside a printf single-quoted argument would
+  // false-positive deny. The same stripQuotedContent that protected the
+  // heredoc / decode-and-execute scans now protects these too.
+
+  it("allows printf '... cat > x ...' > /tmp/notes.md (DENY_SUBSTRINGS in quoted body)", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'avoid the cat > target pattern in scripts' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf '... sed -i ...' > /tmp/notes.md", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'do not use sed -i for in-place edits' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf '... .meta-edit/state ...' > /tmp/notes.md (protected path in quoted body)", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'edits land in .meta-edit/state/edits.jsonl' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("still denies the actual exploit when the redirect is unquoted", () => {
+    // The dogfood-005 fix must not soften the real exploit: a literal
+    // `cat > <in-repo>` (no surrounding quotes around the redirect) is
+    // still denied by the existing DENY_SUBSTRINGS entry.
+    expect(
+      evaluateBashCommand("cat > src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("still denies bash -c 'sed -i ...' (shell-hosting wrapper rescan)", () => {
+    // dogfood-005 quote-stripping would otherwise blank the bash -c
+    // payload. matchesShellHostingDeny rescans the literal arg and
+    // restores the deny.
+    expect(
+      evaluateBashCommand('bash -c "sed -i s/x/y/ src/foo.ts"').decision,
+    ).toBe("deny");
+  });
+
+  it("still denies eval 'cat > src/foo.ts' (eval literal arg)", () => {
+    expect(
+      evaluateBashCommand("eval \"cat > src/foo.ts\"").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
+  // Bugs surfaced by the post-implementation subagent review and
+  // pinned here so a future regression fails loudly.
+
+  it("denies safe-prefix-then-traversal target (/tmp/../in-repo)", () => {
+    // Lexical startsWith was bypassable: `/tmp/../home/user/meta-edit/...`
+    // literally starts with `/tmp/` but resolves OUTSIDE the safe sink.
+    // isInRepoWriteTarget now path.normalize()s the target before
+    // checking the prefix.
+    expect(
+      evaluateBashCommand(
+        "printf x > /tmp/../home/user/something/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies double-up-traversal from /var/tmp", () => {
+    expect(
+      evaluateBashCommand(
+        "printf x > /var/tmp/../../home/user/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("still allows /tmp/foo (the post-normalize prefix check is unchanged for clean targets)", () => {
+    expect(
+      evaluateBashCommand("printf x > /tmp/foo.txt").decision,
+    ).toBe("allow");
+  });
+
+  it("denies CR-detached redirect target (printf x >\\rin-repo.ts)", () => {
+    // Pre-fix: primarySplitSegments treats `\r` as a segment boundary,
+    // detaching the target from `>`. Post-fix: the redirect operator
+    // pulls following \r/\n/U+2028/U+2029 into a normal space before
+    // segment splitting runs.
+    expect(
+      evaluateBashCommand("printf x >\rsrc/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies LF-detached redirect target (printf x >\\nin-repo.ts)", () => {
+    expect(
+      evaluateBashCommand("printf x >\nsrc/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("still treats CR as a segment boundary outside the redirect-operator carve-out", () => {
+    // `cargo fmt\rmv a b`: \r is NOT after a redirect operator, so the
+    // primary-split CR carve-out still applies and `mv` is denied.
+    // Pinning the carve-out's narrow scope.
+    expect(
+      evaluateBashCommand("cargo fmt\rmv a b").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — Codex PR #42 review fixes", () => {
+  // Two P1 regressions surfaced by Codex on the dogfood PR. Pinned here
+  // so the next refactor of the shell-hosting rescan does not regress.
+
+  describe("P1-1: protected-path writes inside shell-hosted payloads", () => {
+    // The dogfood-005 quote-stripping change blanked the payload of
+    // bash -c / eval before touchesProtectedPath ran, so writes to
+    // .meta-edit/state/** inside the wrapper's quoted argument
+    // false-allowed. Fix: recursively evaluate the extracted argument
+    // through the full policy.
+
+    it("denies bash -c \"printf x > .meta-edit/state/edits.jsonl\"", () => {
+      const r = evaluateBashCommand(
+        'bash -c "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies eval \"printf x > .meta-edit/state/edits.jsonl\"", () => {
+      const r = evaluateBashCommand(
+        'eval "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sh -c with redirect to .meta-edit/tmp", () => {
+      const r = evaluateBashCommand(
+        'sh -c "echo hi > .meta-edit/tmp/scratch.json"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies bash -c with redirect to in-repo path (not protected)", () => {
+      // The recursive evaluation also picks up the structural in-repo
+      // redirect deny inside the wrapper.
+      const r = evaluateBashCommand('bash -c "printf x > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still allows bash -c with redirect to /tmp", () => {
+      // The recursion must not over-deny: a write to a safe sink remains
+      // allowed inside the wrapper.
+      const r = evaluateBashCommand('bash -c "printf x > /tmp/notes.md"');
+      expect(r.decision).toBe("allow");
+    });
+  });
+
+  describe("P1-2: wrapper-prefixed eval (sudo eval, env eval)", () => {
+    // matchesShellHostingDeny only checked `^eval` after env stripping,
+    // so `sudo eval "..."` and `env eval "..."` walked through. Fix:
+    // peel WRAPPER_VERBS the same way extractCommandVerb does before
+    // looking for eval.
+
+    it("denies sudo eval \"cat > src/foo.ts\"", () => {
+      const r = evaluateBashCommand('sudo eval "cat > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies env eval \"sed -i s/x/y/ src/foo.ts\"", () => {
+      const r = evaluateBashCommand(
+        'env eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies doas eval \"...\"", () => {
+      const r = evaluateBashCommand('doas eval "cat > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo -u root eval \"...\" (sudo with value-taking option)", () => {
+      // Wrapper option grammar must be peeled too: `-u root` consumes
+      // both tokens before reaching `eval`.
+      const r = evaluateBashCommand(
+        'sudo -u root eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies FOO=bar sudo eval \"...\" (env-assignment-prefixed wrapper)", () => {
+      const r = evaluateBashCommand(
+        'FOO=bar sudo eval "sed -i s/a/b/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo eval with protected-path write (combined P1-1 + P1-2)", () => {
+      // Both regressions stacked — must be caught by both fixes
+      // working together.
+      const r = evaluateBashCommand(
+        'sudo eval "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("P1-3: protected-path bypass via quoted write operand", () => {
+    // The dogfood-005 quote-stripping change blanked quoted operands of
+    // verbs that take a write target as a flag arg or positional
+    // (sort -o, prettier --write, uniq, ...). The tokenize-based check
+    // examines single-word tokens post-dequote so the quoted form still
+    // trips the deny without re-introducing the dogfood-005 false-
+    // positive for multi-word documentation strings.
+
+    it("denies sort -o \"<protected>\" /tmp/in (quoted single-token path operand)", () => {
+      const r = evaluateBashCommand(
+        'sort -o ".meta-edit/state/edits.jsonl" /tmp/in',
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected");
+    });
+
+    it("denies sort -o '<protected>' (single-quoted form)", () => {
+      const r = evaluateBashCommand(
+        "sort -o '.meta-edit/state/edits.jsonl' /tmp/in",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sort --output=<protected> (long-form unquoted)", () => {
+      const r = evaluateBashCommand(
+        "sort --output=.meta-edit/state/edits.jsonl /tmp/in",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies prettier --write \"<protected>\" (quoted formatter target)", () => {
+      const r = evaluateBashCommand(
+        'prettier --write ".meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still allows multi-word documentation string mentioning protected path (dogfood-005 case b)", () => {
+      // Quoted body is a multi-word documentation string, not a path
+      // operand. Write redirect target is /tmp (safe sink). Must allow.
+      const r = evaluateBashCommand(
+        "printf 'edits land in .meta-edit/state/edits.jsonl' > /tmp/notes.md",
+      );
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still allows tail of single-word protected path (read-only carve-out)", () => {
+      // Single-word token IS a protected path, but the verb is in the
+      // read-only carve-out and there is no redirect to a protected
+      // target — debugging workflow remains allowed.
+      const r = evaluateBashCommand("tail -2 .meta-edit/state/edits.jsonl");
+      expect(r.decision).toBe("allow");
+    });
+
+    it("still denies traversal-aliased single-word path operand", () => {
+      // Path-doubling collapse re-attaches `src/../.meta-edit/state/...`
+      // to the protected component before the check.
+      const r = evaluateBashCommand(
+        'sort -o "src/../.meta-edit/state/edits.jsonl" /tmp/in',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("Bash-policy review: xargs -I {} eval (Bug 1)", () => {
+    // The wrapper-peel loop in extractEvalArg consumed `-I` but not its
+    // value `{}`, so the next iteration treated `{}` as a verb and
+    // failed. xargs's `-I REPLSTR` / `-J REPLSTR` / `--replace[=R]`
+    // options take the next token as their value; without that
+    // peeling, the wrapper-prefixed eval bypass reopens.
+
+    it("denies xargs -I {} eval \"sed -i ...\"", () => {
+      const r = evaluateBashCommand(
+        'xargs -I {} eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs -I{} eval \"sed -i ...\" (glued no-space)", () => {
+      const r = evaluateBashCommand(
+        'xargs -I{} eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs --replace={} eval \"...\"", () => {
+      const r = evaluateBashCommand(
+        'xargs --replace={} eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies xargs -J {} eval \"...\" (-J is xargs's alternate replace flag)", () => {
+      const r = evaluateBashCommand(
+        'xargs -J {} eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("Bash-policy review: ANSI-C \\$'...' decoding (Bug 2)", () => {
+    // stripQuotedContent treated `$'-i'` as `$` + `'-i'`, blanking the
+    // contents. Real bash expands `$'-i'` to literal `-i`. The DENY
+    // substring `sed -i` therefore did not match. Pre-decoding ANSI-C
+    // C-style strings before the substring scans closes the bypass.
+
+    it("denies sed $'-i' s/x/y/ src/foo.ts (ANSI-C wrapping the -i flag)", () => {
+      const r = evaluateBashCommand("sed $'-i' s/x/y/ src/foo.ts");
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sed $'\\x2di' s/x/y/ src/foo.ts (hex escape for -)", () => {
+      const r = evaluateBashCommand(
+        "sed $'\\x2di' s/x/y/ src/foo.ts",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies $'cat' > src/foo.ts (ANSI-C verb)", () => {
+      const r = evaluateBashCommand("$'cat' > src/foo.ts");
+      expect(r.decision).toBe("deny");
+    });
+  });
+});

@@ -92,7 +92,11 @@ describe("validateRequest", () => {
           r.warnings.some((w) => w.includes("rationale must be non-empty")),
         ).toBe(true);
         expect(
-          r.warnings.some((w) => w.includes("escapes repository root")),
+          r.warnings.some(
+            (w) =>
+              w.includes("escapes repository root") ||
+              w.includes('".." traversal segment'),
+          ),
         ).toBe(true);
       }
     });
@@ -198,6 +202,48 @@ describe("validateRequest", () => {
       }
     });
 
+    it("rejects any `..` segment with the dedicated traversal diagnostic (dogfood-003)", () => {
+      // Pre-fix: target_file: "test-playground/../package.json" was
+      // silently rebased to "package.json" (repo root). The subsequent
+      // stale-content warning then quoted "package.json" — confusing
+      // when the caller declared a playground path. Hard-reject any
+      // `..` segment so the resolved target is unambiguous.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "test-playground/../package.json",
+          changes: [makeChange("test-playground/../package.json")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes('".." traversal segment') &&
+              w.includes("test-playground/../package.json"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts `./` and doubled-slash cosmetic normalization", () => {
+      // Cosmetic normalizations (leading `./`, doubled slashes) collapse
+      // to the same on-disk file regardless of resolution order. They
+      // do NOT trip the dogfood-003 traversal guard.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "./src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [makeChange("./src/foo.ts", "alpha", "beta")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+    });
+
     it("rejects ../ traversal", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -207,7 +253,11 @@ describe("validateRequest", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
-          r.warnings.some((w) => w.includes("escapes repository root")),
+          r.warnings.some(
+            (w) =>
+              w.includes("escapes repository root") ||
+              w.includes('".." traversal segment'),
+          ),
         ).toBe(true);
       }
     });
@@ -227,6 +277,130 @@ describe("validateRequest", () => {
       }
     });
 
+    it("emits a single protected-path warning when target_file === change.file (dogfood-004)", () => {
+      // Pre-fix: validateRequest pushed two near-identical warnings — one
+      // from the target_file scope, one from the change.file scope —
+      // both quoting the same path with the same protected-directory
+      // reason. Agents reading both tried to fix two things. Dedupe so
+      // the single canonical issue surfaces once.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: ".meta-edit/state/edits.jsonl",
+          changes: [makeChange(".meta-edit/state/edits.jsonl")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedWarnings = r.warnings.filter((w) =>
+          w.includes("protected"),
+        );
+        expect(protectedWarnings.length).toBe(1);
+      }
+    });
+
+    it("suppresses every change.file duplicate when multiple changes echo target_file", () => {
+      // Documented contract: when two or more changes share both the
+      // path string AND the failure reason of target_file, every
+      // duplicate is suppressed (the target_file warning carries the
+      // same information). Prevents an N-fold warning fan-out for a
+      // request shape the schema does not otherwise forbid.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: ".meta-edit/state/edits.jsonl",
+          changes: [
+            makeChange(".meta-edit/state/edits.jsonl"),
+            makeChange(".meta-edit/state/edits.jsonl"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedWarnings = r.warnings.filter((w) =>
+          w.includes("protected"),
+        );
+        expect(protectedWarnings.length).toBe(1);
+      }
+    });
+
+    it("dedupes two change.file entries with identical path AND error (PR #42 self-review Bug 1)", () => {
+      // Pre-fix: two changes with the same input path and same failure
+      // reason produced two byte-identical change.file warnings. The
+      // dedup now collapses them to one.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange(".meta-edit/state/edits.jsonl"),
+            makeChange(".meta-edit/state/edits.jsonl"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedChangeFileWarnings = r.warnings.filter(
+          (w) => w.includes("change.file") && w.includes("protected"),
+        );
+        expect(protectedChangeFileWarnings.length).toBe(1);
+      }
+    });
+
+    it("does NOT dedupe change.file warnings with distinct error reasons", () => {
+      // Two changes failing for different reasons must both surface — the
+      // dedup is only on (file + error), not file alone.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            // First fails: protected path.
+            makeChange(".meta-edit/state/edits.jsonl"),
+            // Second fails for a DIFFERENT reason: traversal segment.
+            makeChange("src/../escape.ts"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const changeFileWarnings = r.warnings.filter((w) =>
+          w.includes("change.file"),
+        );
+        expect(changeFileWarnings.length).toBe(2);
+      }
+    });
+
+    it("still emits the change.file warning when only the change differs", () => {
+      // When target_file is acceptable but a change.file points into a
+      // protected path, the change.file warning must still surface; only
+      // the byte-identical duplicate is suppressed.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [makeChange(".meta-edit/state/edits.jsonl")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("change.file") && w.includes("protected"),
+          ),
+        ).toBe(true);
+      }
+    });
+
     it("rejects edits inside .meta-edit/tmp/", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -243,6 +417,10 @@ describe("validateRequest", () => {
     });
 
     it("rejects target_file aliasing into protected path via traversal", () => {
+      // dogfood-003 hardened this further: any `..` segment is now rejected
+      // before resolution, so the rejection reason is the traversal guard
+      // rather than the protected-path guard. Either is acceptable; both
+      // refuse the alias attempt without writing.
       const aliased = "src/../.meta-edit/state/edits.jsonl";
       const r = validateRequest(
         "edit_boundary_condition",
@@ -256,7 +434,9 @@ describe("validateRequest", () => {
       if (!r.ok) {
         expect(
           r.warnings.some(
-            (w) => w.includes("protected") && w.includes("resolves"),
+            (w) =>
+              (w.includes("protected") && w.includes("resolves")) ||
+              w.includes('".." traversal segment'),
           ),
         ).toBe(true);
       }
@@ -275,7 +455,9 @@ describe("validateRequest", () => {
       if (!r.ok) {
         expect(
           r.warnings.some(
-            (w) => w.includes("protected") && w.includes("resolves"),
+            (w) =>
+              (w.includes("protected") && w.includes("resolves")) ||
+              w.includes('".." traversal segment'),
           ),
         ).toBe(true);
       }
@@ -481,8 +663,11 @@ describe("validateRequest", () => {
     });
 
     // a5-03 strengthen: cover `../` dot-dot segment normalization.
-    // "src/nested/../foo.ts" and "src/foo.ts" both resolve to the same
-    // canonical via path.resolve, so the duplicate-canonical guard must fire.
+    // Originally validated that the duplicate-canonical guard caught
+    // "src/nested/../foo.ts" aliasing "src/foo.ts". dogfood-003 now
+    // rejects any `..` segment up-front, so this test pins the stronger
+    // behavior: the alias is refused before even reaching the duplicate
+    // guard.
     it("rejects two changes that alias the same file via ../ dot-dot segments", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -496,17 +681,13 @@ describe("validateRequest", () => {
         }),
         ctx,
       );
-      // path.resolve folds "src/nested/../foo.ts" → "src/foo.ts" so both
-      // canonicals match. The duplicate-canonical guard (not the scope guard)
-      // must fire: both entries map to the same canonical "src/foo.ts", which
-      // IS in the allowed set, so the scope guard would pass them — only the
-      // duplicate-canonical guard can catch this alias.
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
           r.warnings.some(
             (w) =>
-              w.includes("multiple entries") && w.includes("foo.ts"),
+              w.includes('".." traversal segment') ||
+              (w.includes("multiple entries") && w.includes("foo.ts")),
           ),
         ).toBe(true);
       }
