@@ -1100,6 +1100,30 @@ describe("evaluateBashCommand — a1-04 find -exec bypass", () => {
       ).decision,
     ).toBe("deny");
   });
+
+  it("allows echo -exec mv ... (echo verb, not find)", () => {
+    expect(
+      evaluateBashCommand("echo -exec mv a b \\;").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo with literal exec arg (no find verb)", () => {
+    expect(
+      evaluateBashCommand('echo "exec mv a b"').decision,
+    ).toBe("allow");
+  });
+
+  it("allows find . -name '*.log' -delete (find without -exec write)", () => {
+    expect(
+      evaluateBashCommand("find . -name '*.log' -delete").decision,
+    ).toBe("allow");
+  });
+
+  it("allows find -exec with read-only inner (ls)", () => {
+    expect(
+      evaluateBashCommand("find . -maxdepth 2 -type f -exec ls -la {} \\;").decision,
+    ).toBe("allow");
+  });
 });
 
 describe("evaluateBashCommand — a1-05 perl/ruby/php inline writes", () => {

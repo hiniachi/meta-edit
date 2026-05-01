@@ -378,6 +378,12 @@ function extractFindExecInners(seg: string): string[] {
   // Quick reject: avoid the per-character walk if the segment has no
   // find primary token at all.
   if (!/(?:^|\s)-exec(?:dir)?(?:\s|$)/.test(seg)) return inners;
+  // Codex round-2 review (a1-04): only treat `-exec` as the find primary
+  // when the segment's actual verb is `find` (or its variants). For
+  // `echo -exec mv a b \\;` the `-exec` is just an echo argument and
+  // must not trigger inner-command extraction.
+  const verb = extractCommandVerb(seg.trimStart());
+  if (verb === null || !FIND_VERBS.has(verb)) return inners;
 
   let i = 0;
   let inSingle = false;
@@ -641,6 +647,17 @@ function denyReason(pattern: string): string {
     `docs/SPEC.md §5.2).`
   );
 }
+
+// Verbs whose `-exec ... \;` / `-execdir ... \;` argument should be
+// treated as an embedded sub-command. Limiting to find / fdfind avoids
+// false-positives where `-exec` is just a literal argument to a
+// non-find verb (`echo -exec mv a b \;`). See codex round-2 (a1-04).
+const FIND_VERBS: ReadonlySet<string> = new Set([
+  "find",
+  "fdfind",
+  "fd",
+  "gfind",
+]);
 
 // Wrapper verbs whose remaining tokens are themselves the command we
 // actually care about. After encountering one of these as the first
