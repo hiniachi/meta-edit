@@ -708,6 +708,40 @@ describe("evaluateBashCommand — writes to protected paths still denied", () =>
   });
 });
 
+// ---------------------------------------------------------------------------
+// Codex round-1 a4-01 - symlink-aware redirect target check via cwd
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand - symlink-aware redirect target (a4-01)", () => {
+  it("denies a redirect whose target is a symlink resolving into .meta-edit/state/", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-a401-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      const stateDir = path.join(metaEditDir, "state");
+      fs.mkdirSync(stateDir, { recursive: true });
+      // link -> .meta-edit, so "link/state/edits.jsonl" resolves into the
+      // protected directory tree.
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "link"));
+
+      const r = evaluateBashCommand("cat foo > link/state/edits.jsonl", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("deny");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still allows a redirect to a non-protected path when cwd is supplied", () => {
+    const r = evaluateBashCommand("echo hi > /tmp/whatever.log", {
+      cwd: "/tmp",
+    });
+    expect(r.decision).toBe("allow");
+  });
+});
+
 describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
   describe("command substitution expansion (items 1, 2)", () => {
     it("denies a backtick command substitution containing mv", () => {

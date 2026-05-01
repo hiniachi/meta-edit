@@ -20,9 +20,21 @@
 // preserving (formatters) or driven by separate input files (codegens),
 // so they are unlikely to be a deliberate bypass route.
 
+import * as path from "node:path";
+import { isProtectedPath } from "../state/protected-paths.js";
+
 export type HookDecision = {
   decision: "allow" | "deny";
   reason?: string;
+};
+
+// Codex round-1 a4-01: hooks now thread the agent's cwd through so the
+// protected-path check can resolve symlinks ("link/state/edits.jsonl"
+// where link -> .meta-edit) instead of relying on a lexical needle match.
+// When the cwd is omitted, the function falls back to the lexical-only
+// behavior used prior to a4-01.
+export type EvaluateBashOptions = {
+  cwd?: string;
 };
 
 export const ALLOWLIST_PATTERNS: readonly string[] = [
@@ -159,7 +171,10 @@ function findTokenStart(s: string, pos: number): number {
   return i;
 }
 
-export function evaluateBashCommand(command: string): HookDecision {
+export function evaluateBashCommand(
+  command: string,
+  opts: EvaluateBashOptions = {},
+): HookDecision {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
   }
@@ -173,7 +188,7 @@ export function evaluateBashCommand(command: string): HookDecision {
   }
 
   for (const segment of segments) {
-    const decision = evaluateSegment(segment);
+    const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
@@ -181,7 +196,10 @@ export function evaluateBashCommand(command: string): HookDecision {
   return { decision: "allow" };
 }
 
-function evaluateSegment(rawSegment: string): HookDecision {
+function evaluateSegment(
+  rawSegment: string,
+  opts: EvaluateBashOptions = {},
+): HookDecision {
   // Best-effort defeat of trivial backslash-escape bypasses such as
   // `s\ed -i ...`. Stripping backslashes can change the *meaning* of
   // commands inside quoted regions, but for substring pattern detection
@@ -204,7 +222,7 @@ function evaluateSegment(rawSegment: string): HookDecision {
   if (touchesProtectedPath(normalized)) {
     const verb = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
-    const writeTargetsProtected = redirectsToProtected(normalized);
+    const writeTargetsProtected = redirectsToProtected(normalized, opts);
     if (!isReadOnly || writeTargetsProtected) {
       return {
         decision: "deny",
@@ -214,6 +232,23 @@ function evaluateSegment(rawSegment: string): HookDecision {
           "paths must go through an edit_policy_change tool call.",
       };
     }
+  }
+
+  // Codex round-1 a4-01: even when the command does not lexically reference
+  // a protected path, a redirect target may resolve into one through an
+  // intermediate symlink (e.g. "cat foo > link/state/edits.jsonl" where
+  // link -> .meta-edit). When a cwd is supplied, redirectsToProtected does
+  // a realpath-aware check on each write target and denies if any resolves
+  // into a protected directory.
+  if (opts.cwd && redirectsToProtected(normalized, opts)) {
+    return {
+      decision: "deny",
+      reason:
+        "command would write to a protected meta-edit path " +
+        "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " +
+        "redirect target; writes to these paths must go through an " +
+        "edit_policy_change tool call.",
+    };
   }
 
   // Deny patterns are checked unconditionally; we deliberately do NOT
@@ -590,7 +625,16 @@ const READ_ONLY_VERBS: ReadonlySet<string> = new Set([
 // target token references a protected path. Used to withdraw the
 // read-only-verb carve-out when a read tool is ALSO redirecting its
 // output into the protected directory.
-function redirectsToProtected(s: string): boolean {
+//
+// Codex round-1 a4-01: when an `opts.cwd` is supplied, each extracted
+// target token is also checked through the symlink-aware isProtectedPath
+// (which realpath-resolves the absolute path under cwd). This catches
+// redirects whose target lexically looks innocent ("link/state/x") but
+// resolves into a protected directory through a symlink.
+function redirectsToProtected(
+  s: string,
+  opts: EvaluateBashOptions = {},
+): boolean {
   let i = 0;
   let inSingle = false;
   let inDouble = false;
@@ -646,6 +690,26 @@ function redirectsToProtected(s: string): boolean {
     target = target.replace(/^["']|["']$/g, "");
     for (const needle of PROTECTED_PATH_NEEDLES) {
       if (containsAsPathComponent(target, needle)) {
+        return true;
+      }
+    }
+    // Codex round-1 a4-01: if a cwd was supplied, run the target through
+    // the symlink-aware guard. This catches redirects whose lexical form
+    // does not match a protected needle but whose realpath resolves into
+    // a protected directory (e.g. via "link/state/" where link is a
+    // symlink to .meta-edit). Absolute targets are checked directly;
+    // relative targets are resolved against cwd before the check.
+    if (opts.cwd && target.length > 0) {
+      const absolute = path.isAbsolute(target)
+        ? target
+        : path.resolve(opts.cwd, target);
+      // isProtectedPath needs a repo-relative-shaped argument when given
+      // repoRoot; pass the relative form so the lexical fallback also
+      // works. For absolute targets that resolve outside the cwd, the
+      // realpath-and-prefix check inside isProtectedPath returns false,
+      // which is the correct (non-protected) decision.
+      const rel = path.relative(opts.cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: opts.cwd })) {
         return true;
       }
     }
