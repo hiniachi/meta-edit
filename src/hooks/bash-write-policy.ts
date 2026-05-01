@@ -796,7 +796,7 @@ function stripQuotedContent(s: string): string {
 function denyReason(pattern: string): string {
   return (
     `command matches deny pattern "${pattern}". meta-edit reserves ` +
-    `direct file writes for the eighteen edit_* tools; if a formatter ` +
+    `direct file writes for the nineteen edit_* tools; if a formatter ` +
     `or codegen needs to run, route it through the allowlist (see ` +
     `docs/SPEC.md §5.2).`
   );

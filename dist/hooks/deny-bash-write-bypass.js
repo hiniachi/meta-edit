@@ -621,7 +621,7 @@ function stripQuotedContent(s) {
   return out;
 }
 function denyReason(pattern) {
-  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the eighteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
+  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the nineteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
 }
 var FIND_VERBS = new Set([
   "find",
@@ -1295,4 +1295,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=CB6CC2EBCD432C9164756E2164756E21
+//# debugId=B94CEC0826C12EDE64756E2164756E21

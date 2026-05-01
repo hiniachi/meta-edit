@@ -92,7 +92,7 @@ function evaluateRawEdit(toolName) {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the eighteen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
+      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the nineteen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
     };
   }
   return { decision: "allow" };
@@ -113,4 +113,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=1910DCB40CF3350264756E2164756E21
+//# debugId=A2DAA5A6BE31D38B64756E2164756E21

@@ -40,7 +40,7 @@ const inputSchema = {
       minItems: 1,
       maxItems: 100,
       description:
-        "One or more content-pair changes. The server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. Modify-only — no create / delete / rename.",
+        "One or more content-pair changes. For modify-only tools the server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. For edit_create_file the server opens each path with O_CREAT|O_EXCL|O_NOFOLLOW, refuses if anything already exists at the path or follows a symlink at the leaf, and writes new_content; old_content MUST be the empty string. The shape does not represent delete or rename.",
       items: {
         type: "object",
         required: ["file", "old_content", "new_content"],
@@ -48,17 +48,17 @@ const inputSchema = {
           file: {
             type: "string",
             description:
-              "Repository-relative path of the file to modify. Must already exist on disk.",
+              "Repository-relative path of the file. For modify-only tools the file must already exist on disk; for edit_create_file the file must NOT exist on disk.",
           },
           old_content: {
             type: "string",
             description:
-              "Exact current content of the file. The server compares byte-for-byte at apply time and rejects the call if disk content differs.",
+              "For modify-only tools: exact current content of the file (the server compares byte-for-byte at apply time and rejects the call if disk content differs). For edit_create_file: MUST be the empty string (the file does not yet exist).",
           },
           new_content: {
             type: "string",
             description:
-              "New content to write to the file. Atomically replaces the file on success.",
+              "New content to write to the file. For modify-only tools, atomically replaces the existing file on success; for edit_create_file, the new file is created with this content.",
           },
         },
         additionalProperties: false,

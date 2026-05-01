@@ -7,7 +7,7 @@ import {
   makeApplyingHandler,
   type ValidationContext,
 } from "./tools/common.js";
-import { applyChanges } from "./tools/apply.js";
+import { applyChanges, applyCreates } from "./tools/apply.js";
 import { EditLog } from "./state/edit-log.js";
 import { VERSION } from "./version.js";
 
@@ -44,6 +44,7 @@ export function createServer(options: CreateServerOptions = {}): Server {
     ctx: context,
     log,
     applyChanges,
+    applyCreates,
   });
 
   const server = new Server(

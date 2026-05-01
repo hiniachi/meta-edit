@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of nineteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -12,7 +12,7 @@ Modern AI coding agents (Claude Code, Cursor, Cline, Aider, Codex) all use a gen
 
 `meta-edit` is built on a different bet:
 
-> If you split the generic edit tool into eighteen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
+> If you split the generic edit tool into nineteen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
 >
 > 1. Be forced to decide which kind of edit it is making, *as a tool selection step*
 > 2. Read the testing obligations every time, because tool descriptions are part of the prompt
@@ -64,7 +64,7 @@ That is the entire system.
 
 ---
 
-## 3. The eighteen tools: common schema
+## 3. The nineteen tools: common schema
 
 All tools accept the same arguments and return the same result.
 
@@ -127,7 +127,7 @@ The MCP server enforces:
 - Each `change.file` is validated under the same path-safety rules as `target_file` (inside repo after `realpath`, not in protected paths)
 - The total payload bytes — the sum of `Buffer.byteLength(change.old_content, "utf8") + Buffer.byteLength(change.new_content, "utf8")` across every change — must not exceed `MAX_CHANGE_BYTES` (1 MiB)
 - Each `change.old_content` and `change.new_content` must not contain a NUL byte
-- `change.file` must reference an existing file on disk at apply time. The content-pair shape is **modify-only**: there is no representation for file creation, deletion, or rename. Missing files fail the call.
+- `change.file` must reference an existing file on disk at apply time, **except for `edit_create_file`**. For all other tools, the content-pair shape is **modify-only**: there is no representation for file deletion or rename, and missing files fail the call. For `edit_create_file`, the file MUST NOT exist on disk — `old_content` MUST be the empty string and the server opens the path with `O_CREAT | O_EXCL | O_NOFOLLOW`, refusing to overwrite or follow a symlink at the leaf.
 - `change.old_content` must equal the current disk content of `change.file` byte-for-byte at apply time (precondition). A mismatch fails the entire call without writing anything.
 - Apply is two-phase: precondition check (no writes) → per-change sibling temp-write → rename. If any precondition fails OR any temp-write fails, NO target file is modified. Rename failures after some renames committed are reported as warnings (best-effort multi-file atomicity on POSIX).
 - Patch scope rules apply (see below)
@@ -188,7 +188,7 @@ The server does not analyze the new content. It does not check whether the chose
 
 ---
 
-## 4. The eighteen tool descriptions
+## 4. The nineteen tool descriptions
 
 These descriptions are the product. Everything else is plumbing.
 
@@ -893,6 +893,57 @@ General principles (apply to every edit):
 
 ---
 
+### `edit_create_file`
+
+```
+Create a new file at a path that does not yet exist on disk.
+The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
+to overwrite an existing file or follow a symlink at the leaf.
+
+Use this tool when:
+- Adding a new source module, helper, or class file
+- Adding a new test file when fulfilling another tool's test obligations
+- Adding new configuration files, fixtures, or example assets
+- Scaffolding code for which no in-place modify path applies
+
+Required tests (you MUST cover):
+1. The newly-created file must be exercised by at least one test that
+   imports, loads, or otherwise consumes it. Files that are not exercised
+   by any test are dead on arrival.
+2. If the new file is itself a test file, it must contain at least one
+   explicit assertion. The mere existence of a test file is not a test.
+
+test_files must be non-empty (you must declare which test covers the new
+code). For each entry in `changes`, `old_content` MUST be the empty
+string — the file does not yet exist. `new_content` is the full content
+to write.
+
+This tool MUST NOT be used when:
+- The target path already exists; modifying an existing file is the job
+  of one of the modify-only edit_* tools
+- The new path lands inside a protected directory (.meta-edit/state/**,
+  .meta-edit/tmp/**)
+- The change is a rename or move (delete-and-add); the modify/create
+  shape cannot represent rename atomically and the audit log would not
+  reflect the original file's deletion
+- The file is a binary payload; the string-based content shape will
+  corrupt non-UTF-8 data
+
+Rationale: the other modify-only edit_* tools cannot represent file
+creation. Without an explicit creation tool, agents resort to bash
+redirects, undermining the typed-tool surface meta-edit exists to defend.
+Creation has a different precondition profile (no current state to check)
+and a strong post-condition (the file did not exist; now it does), and
+the audit log records it explicitly so reviewers see new-file additions
+distinct from in-place edits.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
+```
+
+---
+
 ## 5. Hooks
 
 Two hooks. No more.
@@ -983,7 +1034,7 @@ Fields:
 
 - `edit_id`: monotonically increasing within a day, format `edit_YYYYMMDD_NNNN`
 - `timestamp`: ISO 8601 with timezone
-- `tool_name`: one of the eighteen tool names
+- `tool_name`: one of the nineteen tool names
 - `target_file`: repository-relative path
 - `rationale`: as supplied by the AI (any language)
 - `risk_level`: as supplied by the AI (recorded for audit, not enforcement)
@@ -1137,7 +1188,7 @@ meta-edit/
   src/
     tools/
       common.ts              shared types, validation, patch application
-      descriptions.ts        the eighteen descriptions, verbatim from §4
+      descriptions.ts        the nineteen descriptions, verbatim from §4
       registry.ts            MCP tool registration
     server.ts                MCP stdio server entry
     cli.ts                   CLI entry
@@ -1158,7 +1209,7 @@ meta-edit/
 
 ### The most important file
 
-`src/tools/descriptions.ts` is the most important file in the repository. It contains the eighteen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
+`src/tools/descriptions.ts` is the most important file in the repository. It contains the nineteen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
 
 ```typescript
 export const TOOL_DESCRIPTIONS = {
@@ -1169,11 +1220,11 @@ Use this tool when:
 
   edit_test_only_change: `...`,
 
-  // ... eighteen total
+  // ... nineteen total
 } as const;
 ```
 
-Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of eighteen separate tools is that **tool selection is the reasoning step**.
+Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of nineteen separate tools is that **tool selection is the reasoning step**.
 
 ---
 
@@ -1187,7 +1238,7 @@ That is the only planned semantic-enforcement direction. Workspace protocols, VC
 
 Smaller maintenance changes — refining tool descriptions based on observed usage, tightening the bash hook's allowlist if it becomes a bypass route, improving log details — are not "future directions" in the same sense; they are ordinary upkeep and will happen as needed.
 
-`meta-edit` is exactly this: eighteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
+`meta-edit` is exactly this: nineteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
 
 ---
 

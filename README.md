@@ -7,19 +7,19 @@
 
 **Languages:** **English** · [日本語](./README.ja.md) · [简体中文](./README.zh-CN.md)
 
-> An MCP server that replaces a coding agent's generic file-edit tool with **eighteen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
+> An MCP server that replaces a coding agent's generic file-edit tool with **nineteen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
 
 ## Why typed edits?
 
 Instructions in `CLAUDE.md` decay across turns. Skills only fire when the agent decides to invoke them. Both rely on text the model *might* re-read — neither has structural force at the moment of action.
 
-Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers "add boundary tests", `meta-edit` splits the single `Edit` primitive into eighteen kind-specific tools, each carrying — in its own description — when to use it, when not to use it, what tests must accompany the edit, and when to stop and ask the user.
+Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers "add boundary tests", `meta-edit` splits the single `Edit` primitive into nineteen kind-specific tools, each carrying — in its own description — when to use it, when not to use it, what tests must accompany the edit, and when to stop and ask the user.
 
 The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification, and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the v0.2 backlog.
 
 Status: `0.1.1` pre-release. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
 
-## The eighteen tools
+## The nineteen tools
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -31,6 +31,7 @@ edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
 edit_policy_change            edit_docs_only
+edit_create_file
 ```
 
 Each tool description specifies:
@@ -66,7 +67,7 @@ install meta-edit:
 /plugin install meta-edit@meta-edit
 ```
 
-That auto-registers the meta-edit MCP server (the eighteen `edit_*`
+That auto-registers the meta-edit MCP server (the nineteen `edit_*`
 tools) and the two safety hooks (`deny-raw-edit`,
 `deny-bash-write-bypass`). The plugin runs prebuilt JavaScript shipped
 under `dist/` — Node 20+ is the only runtime requirement; no Bun, no

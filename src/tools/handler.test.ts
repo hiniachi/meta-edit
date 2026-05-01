@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { makeApplyingHandler } from "./common.js";
-import { applyChanges } from "./apply.js";
+import { applyChanges, applyCreates } from "./apply.js";
 import { EditLog } from "../state/edit-log.js";
 
 let tmpRoot: string;
@@ -32,6 +32,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -69,6 +70,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -103,6 +105,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -152,6 +155,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log: failingLog,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -198,6 +202,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log: failingLog,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -250,6 +255,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log: failingLog,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -286,6 +292,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -323,6 +330,7 @@ describe("makeApplyingHandler", () => {
       ctx: { repoRoot: tmpRoot },
       log,
       applyChanges,
+      applyCreates,
       now: fixedNow,
     });
 
@@ -348,5 +356,90 @@ describe("makeApplyingHandler", () => {
     expect(r1.edit_id).toBe("edit_20260430_0001");
     expect(r2.edit_id).toBe("edit_20260430_0002");
     expect(log.readAll().length).toBe(2);
+  });
+
+  it("dispatches edit_create_file to applyCreates and writes a new file", async () => {
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tests/seed.test.ts"), "test\n", "utf8");
+
+    const log = new EditLog(tmpRoot);
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log,
+      applyChanges,
+      applyCreates,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_create_file", {
+      target_file: "src/seed.ts",
+      rationale: "Bootstrap a new module to host helper for seeded tests.",
+      risk_level: "low",
+      test_files: ["tests/seed.test.ts"],
+      changes: [
+        { file: "src/seed.ts", old_content: "", new_content: "export const x = 1;\n" },
+      ],
+    });
+
+    expect(result.applied).toBe(true);
+    expect(fs.readFileSync(path.join(tmpRoot, "src/seed.ts"), "utf8")).toBe(
+      "export const x = 1;\n",
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.applied).toBe(true);
+    expect(entries[0]?.tool_name).toBe("edit_create_file");
+    expect(entries[0]?.target_file).toBe("src/seed.ts");
+    expect(entries[0]?.test_files).toEqual(["tests/seed.test.ts"]);
+    expect(entries[0]?.patch_size_bytes).toBeGreaterThan(0);
+  });
+
+  it("does not write through edit_create_file when the target already exists (logs applied=false)", async () => {
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, "src/seed.ts"),
+      "preexisting\n",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tests/seed.test.ts"), "test\n", "utf8");
+
+    const log = new EditLog(tmpRoot);
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log,
+      applyChanges,
+      applyCreates,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_create_file", {
+      target_file: "src/seed.ts",
+      rationale: "Should be rejected because target already exists.",
+      risk_level: "low",
+      test_files: ["tests/seed.test.ts"],
+      changes: [
+        { file: "src/seed.ts", old_content: "", new_content: "tampered\n" },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(
+      result.warnings.some(
+        (w) =>
+          w.includes("src/seed.ts") &&
+          (w.includes("already exists") || w.includes("EEXIST")),
+      ),
+    ).toBe(true);
+    expect(fs.readFileSync(path.join(tmpRoot, "src/seed.ts"), "utf8")).toBe(
+      "preexisting\n",
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.applied).toBe(false);
+    expect(entries[0]?.tool_name).toBe("edit_create_file");
   });
 });

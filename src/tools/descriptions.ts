@@ -1,4 +1,4 @@
-// The eighteen tool descriptions, copied verbatim from docs/SPEC.md §4.
+// The nineteen tool descriptions, copied verbatim from docs/SPEC.md §4.
 // CLAUDE.md §4 forbids paraphrasing, summarizing, or "improving" these.
 // If you change a description here, update docs/SPEC.md §4 in the same change.
 
@@ -21,6 +21,7 @@ export const TOOL_NAMES = [
   "edit_dependency_config",
   "edit_policy_change",
   "edit_docs_only",
+  "edit_create_file",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -597,6 +598,51 @@ Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
 mislead future readers (including future AI agents). Treat
 documentation as a contract with future readers.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+
+  edit_create_file: `Create a new file at a path that does not yet exist on disk.
+The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
+to overwrite an existing file or follow a symlink at the leaf.
+
+Use this tool when:
+- Adding a new source module, helper, or class file
+- Adding a new test file when fulfilling another tool's test obligations
+- Adding new configuration files, fixtures, or example assets
+- Scaffolding code for which no in-place modify path applies
+
+Required tests (you MUST cover):
+1. The newly-created file must be exercised by at least one test that
+   imports, loads, or otherwise consumes it. Files that are not exercised
+   by any test are dead on arrival.
+2. If the new file is itself a test file, it must contain at least one
+   explicit assertion. The mere existence of a test file is not a test.
+
+test_files must be non-empty (you must declare which test covers the new
+code). For each entry in \`changes\`, \`old_content\` MUST be the empty
+string — the file does not yet exist. \`new_content\` is the full content
+to write.
+
+This tool MUST NOT be used when:
+- The target path already exists; modifying an existing file is the job
+  of one of the modify-only edit_* tools
+- The new path lands inside a protected directory (.meta-edit/state/**,
+  .meta-edit/tmp/**)
+- The change is a rename or move (delete-and-add); the modify/create
+  shape cannot represent rename atomically and the audit log would not
+  reflect the original file's deletion
+- The file is a binary payload; the string-based content shape will
+  corrupt non-UTF-8 data
+
+Rationale: the other modify-only edit_* tools cannot represent file
+creation. Without an explicit creation tool, agents resort to bash
+redirects, undermining the typed-tool surface meta-edit exists to defend.
+Creation has a different precondition profile (no current state to check)
+and a strong post-condition (the file did not exist; now it does), and
+the audit log records it explicitly so reviewers see new-file additions
+distinct from in-place edits.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
