@@ -442,6 +442,71 @@ describe("validateRequest", () => {
       }
     });
 
+    // Issue 020 (a5-03): the existing test above pins string-identical
+    // duplicates only. The case below covers two changes whose paths
+    // canonicalize to the same physical file via embedded dot-segments
+    // ("src/./foo.ts" vs "src/foo.ts"). path.resolve folds the dot
+    // segment so both entries surface as the same canonical and the
+    // duplicate guard fires. Either that guard or the scope guard must
+    // reject; ok:true is unacceptable because applyChanges would then
+    // catch the duplicate at apply time with an "internal error"
+    // assertion instead of a clean validation rejection.
+    it("rejects a request with two changes that resolve to the same canonical via path normalization", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/./foo.ts", "alpha", "beta"),
+          ],
+        }),
+        ctx,
+      );
+      // Either the duplicate-canonical guard fires (paths normalized
+      // identically) or the scope guard fires (paths not normalized,
+      // "src/./foo.ts" not in allowed set). Either is acceptable; what
+      // is NOT acceptable is ok:true.
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("foo.ts") &&
+              (w.includes("multiple entries") || w.includes("scope")),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("duplicate-canonical guard fires before applyChanges internal assertion", () => {
+      // If validateRequest lets through duplicate canonicals, applyChanges
+      // catches them as an internal-error assertion (apply.ts:100-104).
+      // This pins the rejection at validation time, not apply time.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/foo.ts", "beta", "gamma"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("multiple entries") && w.includes("src/foo.ts"),
+          ),
+        ).toBe(true);
+        // Must NOT come from applyChanges' defensive assertion — that would
+        // mean the rejection slipped past validateRequest.
+        expect(r.warnings.every((w) => !w.includes("internal error"))).toBe(true);
+      }
+    });
+
     it("accepts a change touching target_file and listed test_files", () => {
       const r = validateRequest(
         "edit_boundary_condition",
