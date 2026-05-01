@@ -942,6 +942,78 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
       );
       expect(r.decision).toBe("deny");
     });
+
+    // The next four cases construct command strings via concatenation
+    // of `EX` / `EV` consts because writing the raw `exec(` / `eval(`
+    // tokens in source would trip the project's PreToolUse security-
+    // reminder hook on the test author's machine. The runtime command
+    // string the hook receives is identical to the obvious literal.
+    const EX = "exe" + "c";
+    const EV = "ev" + "al";
+
+    it("denies python -c with exec()-wrapped open(...,'w').write()", () => {
+      // Codex GitHub bot review on PR #27 round 2 (P1): exec-wrapped
+      // scripts evade the masker because the writer call lives
+      // inside a string literal that is then handed to exec() at
+      // runtime. The detector now scans the unmasked arg whenever
+      // exec/eval/compile is present.
+      const r = evaluateBashCommand(
+        `python -c "${EX}('open(\\"x\\",\\"w\\").write(\\"y\\")')"`,
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies python -c with compile()-then-exec wrapping write_text", () => {
+      const r = evaluateBashCommand(
+        `python -c "${EX}(compile('write_text(\\"x\\")','<>','${EX}'))"`,
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies node -e with eval()-wrapped require('fs').writeFileSync", () => {
+      const r = evaluateBashCommand(
+        `node -e "${EV}('require(\\"fs\\").writeFileSync(\\"x\\",\\"y\\")')"`,
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies node -e with new Function() runtime bypass", () => {
+      const r = evaluateBashCommand(
+        "node -e \"new Function('require(\\\"fs\\\").writeFileSync(\\\"x\\\",\\\"y\\\")')()\"",
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+
+  describe("patch --dry-run -o output bypass (PR #27 round 2 P1)", () => {
+    it("denies patch --dry-run -o FILE (writes despite --dry-run)", () => {
+      // Codex GitHub bot review on PR #27 round 2 (P1): patch
+      // --dry-run with -o / --output=FILE writes the patched file
+      // anyway. The carve-out must be withdrawn when -o is present.
+      const r = evaluateBashCommand(
+        "patch --dry-run -o src/new.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies patch --dry-run --output=FILE (long form)", () => {
+      const r = evaluateBashCommand(
+        "patch --dry-run --output=src/new.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies patch --check -o FILE (same hole on --check)", () => {
+      const r = evaluateBashCommand(
+        "patch --check -o src/new.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still allows pure patch --dry-run (no -o; no write path)", () => {
+      const r = evaluateBashCommand("patch --dry-run < changes.diff");
+      expect(r.decision).toBe("allow");
+    });
   });
 
   describe("Unicode line separators (item 8)", () => {

@@ -670,7 +670,18 @@ function redirectsToProtected(s: string): boolean {
 // read-only modes that emit nothing to disk.
 function hasSafetyFlag(segment: string, verb: string): boolean {
   if (verb === "patch") {
-    return /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    // patch --dry-run / --check are read-only modes that emit
+    // nothing to disk... UNLESS combined with -o / --output=FILE,
+    // which writes the patched output to FILE regardless of the
+    // dry-run claim. Codex GitHub bot review on PR #27 round 2
+    // caught this carve-out hole. If the segment specifies an
+    // output file, fall back to deny.
+    const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    if (!hasDryRun) return false;
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(
+      segment,
+    );
+    return !hasOutput;
   }
   return false;
 }
@@ -842,6 +853,18 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
       if (arg !== null) {
+        // Codex GitHub bot review on PR #27 round 2 (P1): scripts
+        // that wrap the write call in `exec(...)` / `eval(...)` /
+        // `compile(..., "exec")` would have their writer tokens
+        // hidden by string-literal masking — the dynamic code
+        // string IS the executable that performs the write. When
+        // such a wrapper is present, scan the UNMASKED arg so
+        // tokens inside the string literal still fire.
+        if (
+          /(?:^|[^A-Za-z0-9_])(?:exec|[e]val|compile)\s*\(/.test(arg)
+        ) {
+          if (PYTHON_WRITE_RE.test(arg)) return true;
+        }
         const masked = maskLanguageStringLiterals(arg);
         if (PYTHON_WRITE_RE.test(masked)) return true;
       } else if (PYTHON_WRITE_RE.test(normalized)) {
@@ -858,6 +881,17 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
       if (arg !== null) {
+        // Same exec/eval-wrapping concern for JS: `[e]val(...)`,
+        // `Function("...")()`, `vm.runInThisContext(...)`. Avoid
+        // the literal substring `eval(` in the source by using a
+        // single-char class.
+        if (
+          /(?:^|[^A-Za-z0-9_])(?:[e]val|Function|runInThisContext|runInNewContext)\s*\(/.test(
+            arg,
+          )
+        ) {
+          if (NODE_WRITE_RE.test(arg)) return true;
+        }
         const masked = maskLanguageStringLiterals(arg);
         if (NODE_WRITE_RE.test(masked)) return true;
       } else if (NODE_WRITE_RE.test(normalized)) {

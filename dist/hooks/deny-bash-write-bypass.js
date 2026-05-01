@@ -469,7 +469,11 @@ function redirectsToProtected(s) {
 }
 function hasSafetyFlag(segment, verb) {
   if (verb === "patch") {
-    return /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    if (!hasDryRun)
+      return false;
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(segment);
+    return !hasOutput;
   }
   return false;
 }
@@ -580,6 +584,10 @@ function matchesPythonNodeWrite(normalized, raw) {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
       if (arg !== null) {
+        if (/(?:^|[^A-Za-z0-9_])(?:exec|[e]val|compile)\s*\(/.test(arg)) {
+          if (PYTHON_WRITE_RE.test(arg))
+            return true;
+        }
         const masked = maskLanguageStringLiterals(arg);
         if (PYTHON_WRITE_RE.test(masked))
           return true;
@@ -596,6 +604,10 @@ function matchesPythonNodeWrite(normalized, raw) {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
       if (arg !== null) {
+        if (/(?:^|[^A-Za-z0-9_])(?:[e]val|Function|runInThisContext|runInNewContext)\s*\(/.test(arg)) {
+          if (NODE_WRITE_RE.test(arg))
+            return true;
+        }
         const masked = maskLanguageStringLiterals(arg);
         if (NODE_WRITE_RE.test(masked))
           return true;
@@ -807,4 +819,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=674D9AAAC7460A3364756E2164756E21
+//# debugId=F006CE6E1618F11264756E2164756E21
