@@ -82,8 +82,8 @@ function replyDeny(reason) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.3",
-  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  version: "0.1.4",
+  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -177,4 +177,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=19D1DC1A0DAD901364756E2164756E21
+//# debugId=22908B36786D1C5664756E2164756E21

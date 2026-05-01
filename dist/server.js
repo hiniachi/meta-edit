@@ -19129,8 +19129,8 @@ function formatDayKey(d) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.3",
-  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  version: "0.1.4",
+  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -19235,4 +19235,4 @@ export {
   createServer
 };
 
-//# debugId=91A986784F076F1664756E2164756E21
+//# debugId=C8AE9892862035C764756E2164756E21
