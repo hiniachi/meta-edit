@@ -98,6 +98,12 @@ type EditToolResult = {
   applied: boolean;
   edit_id: string;                            // e.g. "edit_20260427_0001"
   warnings: string[];
+  log_error?: string;                         // Present if and only if the
+                                              // edit-log append fails after
+                                              // a successful apply.
+                                              // Distinguishes audit-log
+                                              // failures from validation
+                                              // warnings.
 };
 ```
 
