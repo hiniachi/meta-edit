@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, it, expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -570,6 +570,36 @@ describe("EditLog.append / readAll", () => {
     // JSON.stringify escaped the embedded newline as \\n so the injected
     // text remains inside the rationale string value).
     expect(nonEmpty[0]).not.toMatch(/"injected":true/);
+  });
+
+  // Regression for issue a6-04 (codex round 1): chmodSync failure on
+  // the state directory must propagate on POSIX, otherwise the 0o700
+  // guarantee is silently lost and the audit log can end up world-
+  // readable without the caller knowing.
+  it("propagates chmodSync error on POSIX (does not swallow)", () => {
+    if (process.platform === "win32") {
+      return; // chmod is a no-op on win32 — no guarantee to defend
+    }
+
+    const log = new EditLog(tmpRoot);
+    const statePath = path.join(tmpRoot, ".meta-edit", "state");
+    const original = fs.chmodSync;
+    const spy = spyOn(fs, "chmodSync");
+    spy.mockImplementation(((p: fs.PathLike, m: fs.Mode) => {
+      // Simulate EPERM specifically when narrowing the state dir.
+      if (typeof p === "string" && p === statePath) {
+        const err = new Error("EPERM: simulated") as NodeJS.ErrnoException;
+        err.code = "EPERM";
+        throw err;
+      }
+      return original(p, m);
+    }) as typeof fs.chmodSync);
+    try {
+      expect(() => log.append(entry())).toThrow(/EPERM/);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // Regression test for issue a6-04: the .meta-edit/state/ directory

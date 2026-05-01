@@ -145,18 +145,18 @@ export class EditLog {
     //      a pre-fix version of the tool (we narrow on every append).
     fs.mkdirSync(this.statePath, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") {
+      // a6-04 (codex round 1): chmod failure on the state directory
+      // must propagate. Swallowing it silently loses the 0o700 audit-
+      // log guarantee on shared systems. The previous code masked all
+      // chmod errors, including real EPERM/EROFS conditions.
+      fs.chmodSync(this.statePath, 0o700);
+      // Also narrow the .meta-edit parent that recursive mkdir may
+      // have just created; harmless if the user already created it.
+      const parent = path.dirname(this.statePath);
       try {
-        fs.chmodSync(this.statePath, 0o700);
-        // Also narrow the .meta-edit parent that recursive mkdir may
-        // have just created; harmless if the user already created it.
-        const parent = path.dirname(this.statePath);
-        try {
-          fs.chmodSync(parent, 0o700);
-        } catch {
-          /* ignore — parent may be owned by another user / pre-existing */
-        }
+        fs.chmodSync(parent, 0o700);
       } catch {
-        /* ignore — fs may reject chmod on certain platforms */
+        /* ignore — parent may be owned by another user / pre-existing */
       }
     }
   }
