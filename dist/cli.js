@@ -6517,8 +6517,8 @@ var require_dist = __commonJS((exports, module) => {
 });
 
 // src/server.ts
-import * as fs4 from "node:fs";
-import * as path4 from "node:path";
+import * as fs6 from "node:fs";
+import * as path6 from "node:path";
 
 // ../../meta-edit/node_modules/zod/v3/external.js
 var exports_external = {};
@@ -17116,8 +17116,8 @@ General principles (apply to every edit):
 };
 
 // src/tools/common.ts
-import * as fs from "node:fs";
-import * as path from "node:path";
+import * as fs3 from "node:fs";
+import * as path3 from "node:path";
 
 // ../../meta-edit/node_modules/diff/libesm/diff/base.js
 class Diff {
@@ -18028,11 +18028,47 @@ function splitLines(text) {
   return result;
 }
 // src/state/protected-paths.ts
+import * as fs2 from "node:fs";
+import * as path2 from "node:path";
+
+// src/utils/realpath.ts
+import * as fs from "node:fs";
+import * as path from "node:path";
+function realpathOfDeepestExisting(p) {
+  let cur = p;
+  const tail = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync(cur);
+      if (tail.length === 0) {
+        return real;
+      }
+      return path.join(real, ...tail.reverse());
+    } catch (e) {
+      const code = e?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        const parent = path.dirname(cur);
+        if (parent === cur) {
+          return p;
+        }
+        tail.push(path.basename(cur));
+        cur = parent;
+        continue;
+      }
+      return null;
+    }
+  }
+}
+
+// src/state/protected-paths.ts
 var PROTECTED_PREFIXES = [
   ".meta-edit/state/",
   ".meta-edit/tmp/"
 ];
 function normalizeRepoRelative(p) {
+  if (p.includes("\x00")) {
+    throw new Error("path contains NUL byte");
+  }
   let n = p.replace(/\\/g, "/");
   while (n.startsWith("./")) {
     n = n.slice(2);
@@ -18042,10 +18078,53 @@ function normalizeRepoRelative(p) {
   }
   return n.replace(/\/+/g, "/");
 }
-function isProtectedPath(p) {
-  const norm = normalizeRepoRelative(p);
-  const folded = norm.toLowerCase();
-  return PROTECTED_PREFIXES.some((prefix) => norm.startsWith(prefix) || folded.startsWith(prefix));
+var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function matchesProtectedPrefix(norm) {
+  const folded = CASE_INSENSITIVE_FS ? norm.toLowerCase() : null;
+  return PROTECTED_PREFIXES.some((prefix) => {
+    const dir = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    if (norm.startsWith(prefix) || norm === dir) {
+      return true;
+    }
+    if (folded !== null && (folded.startsWith(prefix) || folded === dir)) {
+      return true;
+    }
+    return false;
+  });
+}
+function isProtectedPath(p, options = {}) {
+  let norm;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch {
+    return true;
+  }
+  if (matchesProtectedPrefix(norm)) {
+    return true;
+  }
+  const repoRoot = options.repoRoot;
+  if (repoRoot && !path2.isAbsolute(p)) {
+    try {
+      const absInput = path2.resolve(repoRoot, norm);
+      const realResolved = realpathOfDeepestExisting(absInput);
+      if (realResolved === null) {
+        return false;
+      }
+      let realRoot;
+      try {
+        realRoot = fs2.realpathSync(repoRoot);
+      } catch {
+        realRoot = path2.resolve(repoRoot);
+      }
+      if (realResolved === realRoot || realResolved.startsWith(realRoot + path2.sep)) {
+        const canonicalRel = normalizeRepoRelative(path2.relative(realRoot, realResolved));
+        if (matchesProtectedPrefix(canonicalRel)) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
 }
 
 // src/tools/common.ts
@@ -18198,7 +18277,7 @@ function makeApplyingHandler(deps) {
     };
     const validation = validateRequest(toolName, args, ctx);
     if (!validation.ok) {
-      const finalWarnings2 = appendLogSafely(log, {
+      const { warnings: finalWarnings2, audit_error: audit_error2 } = appendLogSafely(log, {
         ...baseEntry,
         patch_size_bytes: 0,
         applied: false,
@@ -18207,7 +18286,8 @@ function makeApplyingHandler(deps) {
       return {
         applied: false,
         edit_id: editId,
-        warnings: finalWarnings2
+        warnings: finalWarnings2,
+        ...audit_error2 !== undefined ? { audit_error: audit_error2 } : {}
       };
     }
     let synthesized = "";
@@ -18216,7 +18296,7 @@ function makeApplyingHandler(deps) {
     }
     const patchSize = Buffer.byteLength(synthesized, "utf8");
     const result = applyChanges(ctx.repoRoot, validation.changes);
-    const finalWarnings = appendLogSafely(log, {
+    const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
       ...baseEntry,
       patch_size_bytes: patchSize,
       applied: result.applied,
@@ -18225,21 +18305,22 @@ function makeApplyingHandler(deps) {
     return {
       applied: result.applied,
       edit_id: editId,
-      warnings: finalWarnings
+      warnings: finalWarnings,
+      ...audit_error !== undefined ? { audit_error } : {}
     };
   };
 }
 function appendLogSafely(log, entry) {
   try {
     log.append(entry);
-    return entry.warnings;
+    return { warnings: entry.warnings };
   } catch (e) {
     const code = e?.code;
     const msg = e?.message ?? String(e);
-    return [
-      ...entry.warnings,
-      `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`
-    ];
+    return {
+      warnings: entry.warnings,
+      audit_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`
+    };
   }
 }
 function isoTimestampForHandler(d) {
@@ -18252,19 +18333,27 @@ function isoTimestampForHandler(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` + `${sign}${offH}:${offM}`;
 }
 function checkPathSafety(p, repoRoot) {
-  if (path.isAbsolute(p)) {
+  if (path3.isAbsolute(p)) {
     return {
       ok: false,
       error: `path "${p}" is absolute; must be repository-relative`
     };
   }
-  const norm = normalizeRepoRelative(p);
+  let norm;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `path "${p}" is invalid: ${err.message}`
+    };
+  }
   if (norm.length === 0) {
     return { ok: false, error: "path is empty after normalization" };
   }
-  const lexicalRoot = path.resolve(repoRoot);
-  const lexicalResolved = path.resolve(lexicalRoot, norm);
-  if (lexicalResolved !== lexicalRoot && !lexicalResolved.startsWith(lexicalRoot + path.sep)) {
+  const lexicalRoot = path3.resolve(repoRoot);
+  const lexicalResolved = path3.resolve(lexicalRoot, norm);
+  if (lexicalResolved !== lexicalRoot && !lexicalResolved.startsWith(lexicalRoot + path3.sep)) {
     return { ok: false, error: `path "${p}" escapes repository root` };
   }
   const realRoot = realpathOrSelf(lexicalRoot);
@@ -18275,13 +18364,13 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" could not be canonicalized via realpath; failing closed`
     };
   }
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path3.sep)) {
     return {
       ok: false,
       error: `path "${p}" escapes repository root after symlink resolution`
     };
   }
-  const canonical = normalizeRepoRelative(path.relative(realRoot, realResolved));
+  const canonical = normalizeRepoRelative(path3.relative(realRoot, realResolved));
   if (canonical.length === 0) {
     return { ok: false, error: `path "${p}" resolves to the repository root` };
   }
@@ -18295,34 +18384,9 @@ function checkPathSafety(p, repoRoot) {
 }
 function realpathOrSelf(p) {
   try {
-    return fs.realpathSync(p);
+    return fs3.realpathSync(p);
   } catch {
     return p;
-  }
-}
-function realpathOfDeepestExisting(p) {
-  let cur = p;
-  const tail = [];
-  while (true) {
-    try {
-      const real = fs.realpathSync(cur);
-      if (tail.length === 0) {
-        return real;
-      }
-      return path.join(real, ...tail.reverse());
-    } catch (e) {
-      const code = e?.code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        const parent = path.dirname(cur);
-        if (parent === cur) {
-          return p;
-        }
-        tail.push(path.basename(cur));
-        cur = parent;
-        continue;
-      }
-      return null;
-    }
   }
 }
 
@@ -18417,9 +18481,9 @@ function registerTools(server, options) {
 
 // src/tools/apply.ts
 import * as crypto from "node:crypto";
-import * as fs2 from "node:fs";
-import * as path2 from "node:path";
-var PLATFORM_O_NOFOLLOW = fs2.constants.O_NOFOLLOW;
+import * as fs4 from "node:fs";
+import * as path4 from "node:path";
+var PLATFORM_O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
 function applyChanges(repoRoot, changes, options = {}) {
   const warnings = [];
   const O_NOFOLLOW = options.oNofollow !== undefined ? options.oNofollow : PLATFORM_O_NOFOLLOW;
@@ -18433,7 +18497,7 @@ function applyChanges(repoRoot, changes, options = {}) {
   }
   let realRoot;
   try {
-    realRoot = fs2.realpathSync(path2.resolve(repoRoot));
+    realRoot = fs4.realpathSync(path4.resolve(repoRoot));
   } catch {
     return {
       applied: false,
@@ -18448,20 +18512,20 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     seenCanonical.add(ch.canonical);
-    const lexicalAbs = path2.join(realRoot, ch.canonical);
+    const lexicalAbs = path4.join(realRoot, ch.canonical);
     let realAbs;
     try {
-      realAbs = fs2.realpathSync(lexicalAbs);
+      realAbs = fs4.realpathSync(lexicalAbs);
     } catch (e) {
       const code = e?.code;
       warnings.push(`apply-time canonicalization failed for "${ch.canonical}" (${code ?? "ERR"}); refusing to write`);
       return { applied: false, warnings };
     }
-    if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path2.sep)) {
+    if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path4.sep)) {
       warnings.push(`apply-time canonical for "${ch.canonical}" escapes the repository root; refusing`);
       return { applied: false, warnings };
     }
-    const reCanonical = normalizeRepoRelative(path2.relative(realRoot, realAbs));
+    const reCanonical = normalizeRepoRelative(path4.relative(realRoot, realAbs));
     if (reCanonical !== ch.canonical) {
       warnings.push(`apply-time canonical "${reCanonical}" differs from validated canonical "${ch.canonical}"; refusing`);
       return { applied: false, warnings };
@@ -18470,22 +18534,22 @@ function applyChanges(repoRoot, changes, options = {}) {
       warnings.push(`apply-time canonical for "${ch.canonical}" lands in a protected directory; refusing`);
       return { applied: false, warnings };
     }
-    const lexicalParent = path2.dirname(realAbs);
+    const lexicalParent = path4.dirname(realAbs);
     let realParent;
     try {
-      realParent = fs2.realpathSync(lexicalParent);
+      realParent = fs4.realpathSync(lexicalParent);
     } catch (e) {
       const code = e?.code;
       warnings.push(`apply-time parent canonicalization failed for "${ch.canonical}" (${code ?? "ERR"}); refusing`);
       return { applied: false, warnings };
     }
-    if (realParent !== realRoot && !realParent.startsWith(realRoot + path2.sep)) {
+    if (realParent !== realRoot && !realParent.startsWith(realRoot + path4.sep)) {
       warnings.push(`apply-time parent for "${ch.canonical}" escapes the repository root; refusing`);
       return { applied: false, warnings };
     }
     let originalMode = null;
     try {
-      originalMode = fs2.statSync(realAbs).mode & 4095;
+      originalMode = fs4.statSync(realAbs).mode & 4095;
     } catch (e) {
       const code = e?.code;
       originalMode = null;
@@ -18493,7 +18557,7 @@ function applyChanges(repoRoot, changes, options = {}) {
     }
     let original;
     try {
-      original = fs2.readFileSync(realAbs, "utf8");
+      original = fs4.readFileSync(realAbs, "utf8");
     } catch (e) {
       const code = e?.code;
       if (code === "ENOENT") {
@@ -18518,7 +18582,7 @@ function applyChanges(repoRoot, changes, options = {}) {
   const parentDriftCheck = (parent, op) => {
     let nowReal;
     try {
-      nowReal = fs2.realpathSync(parent);
+      nowReal = fs4.realpathSync(parent);
     } catch (e) {
       const code = e?.code;
       return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
@@ -18538,8 +18602,8 @@ function applyChanges(repoRoot, changes, options = {}) {
     }
   };
   for (const w of staged) {
-    const tempName = path2.basename(w.absolute) + "." + crypto.randomBytes(8).toString("hex") + ".metaedit-tmp";
-    const tempPath = path2.join(w.parent, tempName);
+    const tempName = path4.basename(w.absolute) + "." + crypto.randomBytes(8).toString("hex") + ".metaedit-tmp";
+    const tempPath = path4.join(w.parent, tempName);
     const driftBeforeOpen = parentDriftCheck(w.parent, "temp open");
     if (!driftBeforeOpen.ok) {
       warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeOpen.reason}`);
@@ -18548,9 +18612,9 @@ function applyChanges(repoRoot, changes, options = {}) {
     }
     let fd = null;
     try {
-      fd = fs2.openSync(tempPath, fs2.constants.O_WRONLY | fs2.constants.O_CREAT | fs2.constants.O_EXCL | O_NOFOLLOW, 384);
-      fs2.writeFileSync(fd, w.output, { encoding: "utf8" });
-      fs2.fsyncSync(fd);
+      fd = fs4.openSync(tempPath, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_EXCL | O_NOFOLLOW, 384);
+      fs4.writeFileSync(fd, w.output, { encoding: "utf8" });
+      fs4.fsyncSync(fd);
     } catch (e) {
       const code = e?.code;
       warnings.push(`failed to stage temp file for "${w.canonical}": ${code ?? "ERR"}`);
@@ -18560,13 +18624,13 @@ function applyChanges(repoRoot, changes, options = {}) {
     } finally {
       if (fd !== null) {
         try {
-          fs2.closeSync(fd);
+          fs4.closeSync(fd);
         } catch {}
       }
     }
     if (w.mode !== null) {
       try {
-        fs2.chmodSync(tempPath, w.mode);
+        fs4.chmodSync(tempPath, w.mode);
       } catch (e) {
         const code = e?.code;
         warnings.push(`failed to restore original mode 0o${w.mode.toString(8)} on "${w.canonical}" (${code ?? "ERR"}); new content will land at 0o600`);
@@ -18589,7 +18653,7 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     try {
-      fs2.renameSync(tempPath, w.absolute);
+      fs4.renameSync(tempPath, w.absolute);
     } catch (e) {
       const code = e?.code;
       warnings.push(`failed to atomically rename temp into "${w.canonical}": ${code ?? "ERR"}`);
@@ -18603,11 +18667,11 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     try {
-      const dirFd = fs2.openSync(w.parent, fs2.constants.O_RDONLY);
+      const dirFd = fs4.openSync(w.parent, fs4.constants.O_RDONLY);
       try {
-        fs2.fsyncSync(dirFd);
+        fs4.fsyncSync(dirFd);
       } finally {
-        fs2.closeSync(dirFd);
+        fs4.closeSync(dirFd);
       }
     } catch {}
     touchedAbsolutePaths.push(w.absolute);
@@ -18616,13 +18680,13 @@ function applyChanges(repoRoot, changes, options = {}) {
 }
 function cleanupTemp(p) {
   try {
-    fs2.unlinkSync(p);
+    fs4.unlinkSync(p);
   } catch {}
 }
 
 // src/state/edit-log.ts
-import * as fs3 from "node:fs";
-import * as path3 from "node:path";
+import * as fs5 from "node:fs";
+import * as path5 from "node:path";
 var EditLogEntrySchema = exports_external.object({
   edit_id: exports_external.string(),
   timestamp: exports_external.string(),
@@ -18643,8 +18707,8 @@ class EditLog {
   todayKey = null;
   todayCounter = 0;
   constructor(repoRoot) {
-    this.statePath = path3.join(repoRoot, ".meta-edit", "state");
-    this.logPath = path3.join(this.statePath, "edits.jsonl");
+    this.statePath = path5.join(repoRoot, ".meta-edit", "state");
+    this.logPath = path5.join(this.statePath, "edits.jsonl");
   }
   get filePath() {
     return this.logPath;
@@ -18653,39 +18717,135 @@ class EditLog {
     const key = formatDayKey(now);
     if (this.todayKey !== key) {
       this.todayKey = key;
-      this.todayCounter = this.scanMaxCounterForKey(key);
+      this.todayCounter = 0;
     }
-    this.todayCounter += 1;
-    const nnnn = String(this.todayCounter).padStart(4, "0");
-    return `edit_${key}_${nnnn}`;
+    this.ensureStateDir();
+    return this.withFileLock(() => {
+      const onDiskLog = this.scanMaxCounterForKey(key);
+      const onDiskCounter = this.readCounterFile(key);
+      const base = Math.max(this.todayCounter, onDiskLog, onDiskCounter);
+      this.todayCounter = base + 1;
+      this.writeCounterFile(key, this.todayCounter);
+      const nnnn = String(this.todayCounter).padStart(4, "0");
+      return `edit_${key}_${nnnn}`;
+    });
   }
   append(entry) {
-    ensureNoSymlinkOnPath(this.statePath);
-    fs3.mkdirSync(this.statePath, { recursive: true });
+    this.ensureStateDir();
     ensureNoSymlinkOnPath(this.statePath);
     const line = JSON.stringify(entry) + `
 `;
-    const O_NOFOLLOW = fs3.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection");
     }
+    this.withFileLock(() => {
+      let fd = null;
+      try {
+        fd = fs5.openSync(this.logPath, fs5.constants.O_WRONLY | fs5.constants.O_APPEND | fs5.constants.O_CREAT | O_NOFOLLOW, 384);
+        fs5.writeSync(fd, line, null, "utf8");
+      } finally {
+        if (fd !== null) {
+          try {
+            fs5.closeSync(fd);
+          } catch {}
+        }
+      }
+    });
+  }
+  ensureStateDir() {
+    ensureNoSymlinkOnPath(this.statePath);
+    fs5.mkdirSync(this.statePath, { recursive: true, mode: 448 });
+    if (process.platform !== "win32") {
+      fs5.chmodSync(this.statePath, 448);
+    }
+  }
+  withFileLock(fn) {
+    const lockPath = path5.join(this.statePath, ".lock");
+    const start = Date.now();
+    const TIMEOUT_MS = 30000;
+    while (true) {
+      try {
+        fs5.mkdirSync(lockPath);
+        break;
+      } catch (e) {
+        const code = e.code;
+        if (code !== "EEXIST")
+          throw e;
+        if (Date.now() - start > TIMEOUT_MS) {
+          throw new Error(`meta-edit: timed out waiting for edit-log lock at ${lockPath}; ` + `if no other meta-edit process is running, remove this directory manually.`);
+        }
+        const until = Date.now() + 2 + Math.floor(Math.random() * 3);
+        while (Date.now() < until) {}
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        fs5.rmdirSync(lockPath);
+      } catch {}
+    }
+  }
+  readCounterFile(key) {
+    const counterPath = path5.join(this.statePath, "counter.json");
+    let text;
+    try {
+      text = fs5.readFileSync(counterPath, "utf8");
+    } catch (e) {
+      const code = e.code;
+      if (code === "ENOENT")
+        return 0;
+      throw e;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return 0;
+    }
+    if (typeof parsed === "object" && parsed !== null && key in parsed) {
+      const v = parsed[key];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+        return Math.floor(v);
+      }
+    }
+    return 0;
+  }
+  writeCounterFile(key, value) {
+    const counterPath = path5.join(this.statePath, "counter.json");
+    const payload = JSON.stringify({ [key]: value });
+    try {
+      const lst = fs5.lstatSync(counterPath);
+      if (lst.isSymbolicLink()) {
+        throw new Error(`refusing to use edit-log path: "${counterPath}" is a symlink. The audit-log counter must not be redirected through a symlink.`);
+      }
+    } catch (e) {
+      const code = e.code;
+      if (code !== "ENOENT")
+        throw e;
+    }
+    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
+    if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+      throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to write the audit-log counter without symlink-leaf protection");
+    }
     let fd = null;
     try {
-      fd = fs3.openSync(this.logPath, fs3.constants.O_WRONLY | fs3.constants.O_APPEND | fs3.constants.O_CREAT | O_NOFOLLOW, 384);
-      fs3.writeSync(fd, line, null, "utf8");
+      fd = fs5.openSync(counterPath, fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_TRUNC | O_NOFOLLOW, 384);
+      fs5.writeSync(fd, payload, null, "utf8");
     } finally {
       if (fd !== null) {
         try {
-          fs3.closeSync(fd);
+          fs5.closeSync(fd);
         } catch {}
       }
     }
   }
   readAll() {
-    if (!fs3.existsSync(this.logPath)) {
+    if (!fs5.existsSync(this.logPath)) {
       return [];
     }
-    const text = fs3.readFileSync(this.logPath, "utf8");
+    const text = fs5.readFileSync(this.logPath, "utf8");
     const out = [];
     for (const line of text.split(`
 `)) {
@@ -18706,14 +18866,13 @@ class EditLog {
     return out;
   }
   scanMaxCounterForKey(key) {
-    if (!fs3.existsSync(this.logPath)) {
-      return 0;
-    }
     let text;
     try {
-      text = fs3.readFileSync(this.logPath, "utf8");
-    } catch {
-      return 0;
+      text = fs5.readFileSync(this.logPath, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return 0;
+      throw e;
     }
     let max = 0;
     for (const line of text.split(`
@@ -18741,14 +18900,14 @@ class EditLog {
   }
 }
 function ensureNoSymlinkOnPath(maybeRelativeDir) {
-  const absDir = path3.resolve(maybeRelativeDir);
-  const segments = absDir.split(path3.sep).filter((s) => s.length > 0);
-  let cur = path3.sep;
+  const absDir = path5.resolve(maybeRelativeDir);
+  const segments = absDir.split(path5.sep).filter((s) => s.length > 0);
+  let cur = path5.sep;
   for (const seg of segments) {
-    cur = path3.join(cur, seg);
+    cur = path5.join(cur, seg);
     let stat;
     try {
-      stat = fs3.lstatSync(cur);
+      stat = fs5.lstatSync(cur);
     } catch (e) {
       const code = e?.code;
       if (code === "ENOENT")
@@ -18828,7 +18987,7 @@ var VERSION = package_default.version;
 // src/server.ts
 function assertIsRepo(dir) {
   const sentinels = [".git", ".jj"];
-  const found = sentinels.some((s) => fs4.existsSync(path4.join(dir, s)));
+  const found = sentinels.some((s) => fs6.existsSync(path6.join(dir, s)));
   if (!found) {
     throw new Error(`meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Start the server from the repository root or pass --repo-root.`);
   }
@@ -18861,14 +19020,18 @@ async function runStdioServer(options = {}) {
     transport.close().catch(() => {});
   });
   await server.connect(transport);
-  await new Promise((resolve4) => {
+  await new Promise((resolve5) => {
     const previousOnClose = transport.onclose;
     transport.onclose = () => {
       previousOnClose?.call(transport);
-      resolve4();
+      resolve5();
     };
   });
 }
+
+// src/cli.ts
+import * as fs8 from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // src/cli/parse-since.ts
 var YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -19092,22 +19255,22 @@ function parseDate(s) {
 
 // src/cli/hooks-cmd.ts
 import * as crypto2 from "node:crypto";
-import * as fs5 from "node:fs";
+import * as fs7 from "node:fs";
 import * as os from "node:os";
-import * as path5 from "node:path";
+import * as path7 from "node:path";
 var META_EDIT_HOOK_COMMANDS = {
   rawEdit: "meta-edit-deny-raw-edit",
   bashWriteBypass: "meta-edit-deny-bash-write-bypass"
 };
-var META_EDIT_RAW_EDIT_MATCHER = "Edit|Write|MultiEdit";
+var META_EDIT_RAW_EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 var META_EDIT_BASH_MATCHER = "Bash";
 function settingsPathForScope(scope, options = {}) {
   const home = options.home ?? os.homedir();
   const cwd = options.cwd ?? process.cwd();
   if (scope === "user") {
-    return path5.join(home, ".claude", "settings.json");
+    return path7.join(home, ".claude", "settings.json");
   }
-  return path5.join(cwd, ".claude", "settings.json");
+  return path7.join(cwd, ".claude", "settings.json");
 }
 function runInstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
@@ -19120,7 +19283,7 @@ function runInstallHooks(options) {
 }
 function runUninstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
-  if (!fs5.existsSync(target)) {
+  if (!fs7.existsSync(target)) {
     options.out.write(`meta-edit: ${target} does not exist; nothing to uninstall.
 `);
     return 0;
@@ -19227,54 +19390,54 @@ function isMetaEditHookCommand(cmd) {
   ];
   if (owned.includes(cmd))
     return true;
-  const basename4 = path5.basename(cmd);
+  const basename4 = path7.basename(cmd);
   return owned.includes(basename4);
 }
 function readSettings(filePath) {
-  if (!fs5.existsSync(filePath))
+  if (!fs7.existsSync(filePath))
     return {};
-  const text = fs5.readFileSync(filePath, "utf8");
+  const text = fs7.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
   return JSON.parse(text);
 }
 function writeSettings(filePath, settings) {
-  const dir = path5.dirname(filePath);
-  fs5.mkdirSync(dir, { recursive: true });
+  const dir = path7.dirname(filePath);
+  fs7.mkdirSync(dir, { recursive: true });
   let mode = 384;
   try {
-    mode = fs5.statSync(filePath).mode & 4095;
+    mode = fs7.statSync(filePath).mode & 4095;
   } catch {}
-  const tempName = path5.basename(filePath) + "." + crypto2.randomBytes(8).toString("hex") + ".metaedit-tmp";
-  const tempPath = path5.join(dir, tempName);
+  const tempName = path7.basename(filePath) + "." + crypto2.randomBytes(8).toString("hex") + ".metaedit-tmp";
+  const tempPath = path7.join(dir, tempName);
   let fd = null;
   try {
-    fd = fs5.openSync(tempPath, fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_EXCL | (fs5.constants.O_NOFOLLOW ?? 0), 384);
-    fs5.writeFileSync(fd, JSON.stringify(settings, null, 2) + `
+    fd = fs7.openSync(tempPath, fs7.constants.O_WRONLY | fs7.constants.O_CREAT | fs7.constants.O_EXCL | (fs7.constants.O_NOFOLLOW ?? 0), 384);
+    fs7.writeFileSync(fd, JSON.stringify(settings, null, 2) + `
 `, {
       encoding: "utf8"
     });
-    fs5.fsyncSync(fd);
+    fs7.fsyncSync(fd);
   } catch (e) {
     try {
-      fs5.unlinkSync(tempPath);
+      fs7.unlinkSync(tempPath);
     } catch {}
     throw e;
   } finally {
     if (fd !== null) {
       try {
-        fs5.closeSync(fd);
+        fs7.closeSync(fd);
       } catch {}
     }
   }
   try {
-    fs5.chmodSync(tempPath, mode);
+    fs7.chmodSync(tempPath, mode);
   } catch {}
   try {
-    fs5.renameSync(tempPath, filePath);
+    fs7.renameSync(tempPath, filePath);
   } catch (e) {
     try {
-      fs5.unlinkSync(tempPath);
+      fs7.unlinkSync(tempPath);
     } catch {}
     throw e;
   }
@@ -19396,8 +19559,9 @@ function isMainModule() {
   if (!process.argv[1])
     return false;
   try {
-    const argv1Url = new URL(`file://${process.argv[1]}`).href;
-    return import.meta.url === argv1Url;
+    const argv1Real = fs8.realpathSync(process.argv[1]);
+    const moduleReal = fs8.realpathSync(fileURLToPath(import.meta.url));
+    return argv1Real === moduleReal;
   } catch {
     return false;
   }
@@ -19414,4 +19578,4 @@ export {
   main
 };
 
-//# debugId=3F9DB2E928E3F4E864756E2164756E21
+//# debugId=FF54CAD0315B567964756E2164756E21

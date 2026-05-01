@@ -1390,3 +1390,69 @@ describe("evaluateBashCommand — round-2 nice-to-have allow regressions", () =>
     ).toBe("allow");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #31 follow-up (P1 codex review): /dev/fd alias bypass.
+//
+// The previous safe-target list used `/dev/` as a broad prefix. A shell
+// can pre-open a writable FD to a repo file (`exec 3>src/foo.ts`) and
+// then write to `/dev/fd/3` (or the equivalent `/proc/self/fd/3`); both
+// are kernel-provided aliases for the original FD. Treating them as
+// safe means a one-line `tee /dev/fd/3` bypasses the entire write
+// guard.
+//
+// Fix: only the four exact-match safe sinks (`/dev/null`, `/dev/stdout`,
+// `/dev/stderr`, `/dev/zero`) are allowed. Every other path under
+// `/dev/`, `/proc/`, and similar fd-aliasing trees is treated as
+// potentially in-repo and denied.
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — issue #31 /dev/fd alias bypass", () => {
+  it("denies tee /dev/fd/3 (could alias a pre-opened FD to a repo file)", () => {
+    expect(
+      evaluateBashCommand("echo hi | tee /dev/fd/3").decision,
+    ).toBe("deny");
+  });
+
+  it("denies dd of=/dev/fd/4", () => {
+    expect(
+      evaluateBashCommand("dd of=/dev/fd/4").decision,
+    ).toBe("deny");
+  });
+
+  it("denies tee /proc/self/fd/3 (procfs FD alias)", () => {
+    expect(
+      evaluateBashCommand("tee /proc/self/fd/3").decision,
+    ).toBe("deny");
+  });
+
+  it("denies dd of=/proc/12345/fd/2 (procfs FD alias for arbitrary pid)", () => {
+    expect(
+      evaluateBashCommand("dd of=/proc/12345/fd/2").decision,
+    ).toBe("deny");
+  });
+
+  // Regression: the four exact-match safe sinks must still be allowed.
+  it("still allows tee /dev/null", () => {
+    expect(
+      evaluateBashCommand("echo hi | tee /dev/null").decision,
+    ).toBe("allow");
+  });
+
+  it("still allows tee /dev/stdout", () => {
+    expect(
+      evaluateBashCommand("echo hi | tee /dev/stdout").decision,
+    ).toBe("allow");
+  });
+
+  it("still allows tee /dev/stderr", () => {
+    expect(
+      evaluateBashCommand("echo hi | tee /dev/stderr").decision,
+    ).toBe("allow");
+  });
+
+  it("still allows dd of=/dev/null", () => {
+    expect(
+      evaluateBashCommand("dd if=/tmp/x of=/dev/null").decision,
+    ).toBe("allow");
+  });
+});

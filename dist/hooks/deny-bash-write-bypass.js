@@ -81,6 +81,109 @@ function replyDeny(reason) {
 }
 
 // src/hooks/bash-write-policy.ts
+import * as path3 from "node:path";
+
+// src/state/protected-paths.ts
+import * as fs2 from "node:fs";
+import * as path2 from "node:path";
+
+// src/utils/realpath.ts
+import * as fs from "node:fs";
+import * as path from "node:path";
+function realpathOfDeepestExisting(p) {
+  let cur = p;
+  const tail = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync(cur);
+      if (tail.length === 0) {
+        return real;
+      }
+      return path.join(real, ...tail.reverse());
+    } catch (e) {
+      const code = e?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        const parent = path.dirname(cur);
+        if (parent === cur) {
+          return p;
+        }
+        tail.push(path.basename(cur));
+        cur = parent;
+        continue;
+      }
+      return null;
+    }
+  }
+}
+
+// src/state/protected-paths.ts
+var PROTECTED_PREFIXES = [
+  ".meta-edit/state/",
+  ".meta-edit/tmp/"
+];
+function normalizeRepoRelative(p) {
+  if (p.includes("\x00")) {
+    throw new Error("path contains NUL byte");
+  }
+  let n = p.replace(/\\/g, "/");
+  while (n.startsWith("./")) {
+    n = n.slice(2);
+  }
+  while (n.startsWith("/")) {
+    n = n.slice(1);
+  }
+  return n.replace(/\/+/g, "/");
+}
+var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function matchesProtectedPrefix(norm) {
+  const folded = CASE_INSENSITIVE_FS ? norm.toLowerCase() : null;
+  return PROTECTED_PREFIXES.some((prefix) => {
+    const dir = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    if (norm.startsWith(prefix) || norm === dir) {
+      return true;
+    }
+    if (folded !== null && (folded.startsWith(prefix) || folded === dir)) {
+      return true;
+    }
+    return false;
+  });
+}
+function isProtectedPath(p, options = {}) {
+  let norm;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch {
+    return true;
+  }
+  if (matchesProtectedPrefix(norm)) {
+    return true;
+  }
+  const repoRoot = options.repoRoot;
+  if (repoRoot && !path2.isAbsolute(p)) {
+    try {
+      const absInput = path2.resolve(repoRoot, norm);
+      const realResolved = realpathOfDeepestExisting(absInput);
+      if (realResolved === null) {
+        return false;
+      }
+      let realRoot;
+      try {
+        realRoot = fs2.realpathSync(repoRoot);
+      } catch {
+        realRoot = path2.resolve(repoRoot);
+      }
+      if (realResolved === realRoot || realResolved.startsWith(realRoot + path2.sep)) {
+        const canonicalRel = normalizeRepoRelative(path2.relative(realRoot, realResolved));
+        if (matchesProtectedPrefix(canonicalRel)) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+// src/hooks/bash-write-policy.ts
 var DENY_SUBSTRINGS = [
   "sed -i",
   "sed --in-place",
@@ -88,9 +191,6 @@ var DENY_SUBSTRINGS = [
   "perl -i",
   "cat >",
   "cat >>",
-  "tee ",
-  "tee\t",
-  "tee -a",
   "git apply",
   "rsync ",
   "rsync\t"
@@ -150,34 +250,46 @@ function findTokenStart(s, pos) {
   }
   return i;
 }
-function evaluateBashCommand(command) {
+function evaluateBashCommand(command, opts = {}) {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
+  }
+  if (matchesDecodeAndExecute(stripQuotedContent(command))) {
+    return {
+      decision: "deny",
+      reason: "decoder piped into a shell interpreter (e.g. `base64 -d | bash`) " + "executes arbitrary commands at runtime, bypassing every static " + "deny pattern. Use an edit_* tool instead."
+    };
   }
   const segments = splitSegments(command);
   if (segments.length === 0) {
     return { decision: "allow" };
   }
   for (const segment of segments) {
-    const decision = evaluateSegment(segment);
+    const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
   }
   return { decision: "allow" };
 }
-function evaluateSegment(rawSegment) {
+function evaluateSegment(rawSegment, opts = {}) {
   const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
   if (touchesProtectedPath(normalized)) {
     const verb2 = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
-    const writeTargetsProtected = redirectsToProtected(normalized);
+    const writeTargetsProtected = redirectsToProtected(normalized, opts);
     if (!isReadOnly || writeTargetsProtected) {
       return {
         decision: "deny",
         reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**); writes to these " + "paths must go through an edit_policy_change tool call."
       };
     }
+  }
+  if (opts.cwd && redirectsToProtected(normalized, opts)) {
+    return {
+      decision: "deny",
+      reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " + "redirect target; writes to these paths must go through an " + "edit_policy_change tool call."
+    };
   }
   for (const needle of DENY_SUBSTRINGS) {
     if (normalized.includes(needle)) {
@@ -187,6 +299,13 @@ function evaluateSegment(rawSegment) {
       };
     }
   }
+  const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
+  if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
+    return {
+      decision: "deny",
+      reason: "heredoc-with-redirect (`<<MARKER ... > target`) writes to a file. " + "Use an edit_* tool instead of redirecting a heredoc body to a path."
+    };
+  }
   const verb = extractCommandVerb(normalized.trimStart());
   if (verb !== null && DENY_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
     return {
@@ -194,10 +313,28 @@ function evaluateSegment(rawSegment) {
       reason: denyReason(verb)
     };
   }
+  if (matchesDangerousDd(rawSegment)) {
+    return {
+      decision: "deny",
+      reason: "`dd of=<path>` writes to an arbitrary file when the target is " + "an in-repo path. Use an edit_* tool instead."
+    };
+  }
+  if (matchesDangerousTee(rawSegment)) {
+    return {
+      decision: "deny",
+      reason: "`tee <path>` writes to a file when the target is an in-repo " + "path. Use an edit_* tool instead."
+    };
+  }
+  if (matchesEvalDeferredString(rawSegment)) {
+    return {
+      decision: "deny",
+      reason: "`eval` of a non-literal argument (command substitution / backticks / " + "variable expansion) executes a payload that cannot be statically " + "inspected, bypassing every deny pattern. Use an edit_* tool instead."
+    };
+  }
   if (matchesPythonNodeWrite(normalized, rawSegment)) {
     return {
       decision: "deny",
-      reason: `inline "python -c" / "node -e" with write_text, .write, open(..., 'w'), or writeFile* is a bash bypass; use an edit_* tool instead.`
+      reason: "inline interpreter write (python -c / node -e / perl -e / ruby -e / php -r) " + "is a bash bypass; use an edit_* tool instead."
     };
   }
   return { decision: "allow" };
@@ -212,8 +349,89 @@ function splitSegments(cmd) {
         result.push(innerSeg);
       }
     }
+    for (const inner of extractFindExecInners(seg)) {
+      for (const innerSeg of splitSegments(inner)) {
+        result.push(innerSeg);
+      }
+    }
   }
   return result;
+}
+function extractFindExecInners(seg) {
+  const inners = [];
+  if (!/(?:^|\s)-exec(?:dir)?(?:\s|$)/.test(seg))
+    return inners;
+  const verb = extractCommandVerb(seg.trimStart());
+  if (verb === null || !FIND_VERBS.has(verb))
+    return inners;
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (!inSingle && c === "\\" && i + 1 < seg.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (c === "-" && (seg.slice(i, i + 5) === "-exec" || seg.slice(i, i + 8) === "-execdir") && (i === 0 || /\s/.test(seg[i - 1]))) {
+        const tokenLen = seg.slice(i, i + 8) === "-execdir" ? 8 : 5;
+        const after = seg[i + tokenLen];
+        if (after === undefined || /\s/.test(after)) {
+          let j = i + tokenLen;
+          while (j < seg.length && /\s/.test(seg[j]))
+            j++;
+          const bodyStart = j;
+          let bSingle = false;
+          let bDouble = false;
+          while (j < seg.length) {
+            const cj = seg[j];
+            if (!bSingle && cj === "\\" && j + 1 < seg.length) {
+              if (seg[j + 1] === ";") {
+                break;
+              }
+              j += 2;
+              continue;
+            }
+            if (cj === "'" && !bDouble) {
+              bSingle = !bSingle;
+              j++;
+              continue;
+            }
+            if (cj === '"' && !bSingle) {
+              bDouble = !bDouble;
+              j++;
+              continue;
+            }
+            if (!bSingle && !bDouble) {
+              if (cj === "+" && (seg[j + 1] === undefined || /\s/.test(seg[j + 1])) && /\s/.test(seg[j - 1] ?? " ")) {
+                break;
+              }
+            }
+            j++;
+          }
+          let body = seg.slice(bodyStart, j).trim();
+          body = body.replace(/(^|\s)\{\}(\s|$)/g, "$1$2").trim();
+          if (body.length > 0)
+            inners.push(body);
+          i = j;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+  return inners;
 }
 function primarySplitSegments(cmd) {
   const segments = [];
@@ -356,9 +574,61 @@ function extractSubstitutionInners(seg) {
   }
   return inners;
 }
+function unquoteHeredocDelimiters(s) {
+  let out = s.replace(/(<<-?\s*)(['"])([A-Za-z_]\w*)\2/g, (_m, prefix, _q, name) => `${prefix}${name}`);
+  out = out.replace(/(<<-?\s*)\\([A-Za-z_]\w*)/g, (_m, prefix, name) => `${prefix}${name}`);
+  return out;
+}
+function stripQuotedContent(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'") {
+      out += "'";
+      i++;
+      while (i < s.length && s[i] !== "'") {
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += "'";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += '"';
+      i++;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === "\\" && i + 1 < s.length) {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += '"';
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
 function denyReason(pattern) {
   return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the eighteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
 }
+var FIND_VERBS = new Set([
+  "find",
+  "fdfind",
+  "fd",
+  "gfind"
+]);
 var WRAPPER_VERBS = new Set([
   "sudo",
   "doas",
@@ -373,9 +643,116 @@ var WRAPPER_VERBS = new Set([
   "eval",
   "stdbuf",
   "chrt",
-  "taskset"
+  "taskset",
+  "busybox",
+  "toybox"
 ]);
-var DENY_VERBS = new Set(["mv", "cp", "patch"]);
+var DENY_VERBS = new Set([
+  "mv",
+  "cp",
+  "patch"
+]);
+var SAFE_ABSOLUTE_PREFIXES = [
+  "/tmp/",
+  "/var/tmp/",
+  "/run/",
+  "/sys/"
+];
+var SAFE_EXACT_TARGETS = new Set([
+  "/dev/null",
+  "/dev/stdout",
+  "/dev/stderr",
+  "/dev/zero"
+]);
+function isInRepoWriteTarget(target) {
+  if (target.length === 0)
+    return false;
+  if (SAFE_EXACT_TARGETS.has(target))
+    return false;
+  if (target.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  }
+  return true;
+}
+function tokenizeSegment(segment) {
+  const tokens = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let hasContent = false;
+  for (let i = 0;i < segment.length; i++) {
+    const c = segment[i];
+    if (!inSingle && c === "\\" && i + 1 < segment.length) {
+      buf += segment[i + 1];
+      hasContent = true;
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      hasContent = true;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      hasContent = true;
+      continue;
+    }
+    if (!inSingle && !inDouble && /\s/.test(c)) {
+      if (hasContent) {
+        tokens.push(buf);
+        buf = "";
+        hasContent = false;
+      }
+      continue;
+    }
+    buf += c;
+    hasContent = true;
+  }
+  if (hasContent)
+    tokens.push(buf);
+  return tokens;
+}
+function matchesDangerousDd(segment) {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "dd")
+    return false;
+  const tokens = tokenizeSegment(trimmed);
+  for (const tok of tokens) {
+    if (tok.startsWith("of=")) {
+      const target = tok.slice(3);
+      if (isInRepoWriteTarget(target))
+        return true;
+    }
+  }
+  return false;
+}
+function matchesDangerousTee(segment) {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "tee")
+    return false;
+  const tokens = tokenizeSegment(trimmed);
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    const base = tok.includes("/") ? tok.slice(tok.lastIndexOf("/") + 1) : tok;
+    if (base === "tee") {
+      i++;
+      break;
+    }
+    i++;
+  }
+  for (;i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.startsWith("-"))
+      continue;
+    if (isInRepoWriteTarget(tok))
+      return true;
+  }
+  return false;
+}
 var WRAPPER_VALUE_OPTS = {
   sudo: new Set([
     "-u",
@@ -414,7 +791,7 @@ var READ_ONLY_VERBS = new Set([
   "diff",
   "cmp"
 ]);
-function redirectsToProtected(s) {
+function redirectsToProtected(s, opts = {}) {
   let i = 0;
   let inSingle = false;
   let inDouble = false;
@@ -443,7 +820,7 @@ function redirectsToProtected(s) {
       continue;
     }
     let j = i + 1;
-    if (s[j] === ">")
+    if (s[j] === ">" || s[j] === "|")
       j++;
     while (j < s.length && (s[j] === " " || s[j] === "\t"))
       j++;
@@ -463,7 +840,57 @@ function redirectsToProtected(s) {
         return true;
       }
     }
+    if (opts.cwd && target.length > 0) {
+      const absolute = path3.isAbsolute(target) ? target : path3.resolve(opts.cwd, target);
+      const rel = path3.relative(opts.cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: opts.cwd })) {
+        return true;
+      }
+    }
     i = j;
+  }
+  return false;
+}
+var DECODE_AND_EXEC_RE = /(?:base64\s+(?:--decode\b|-[A-Za-z]*d[A-Za-z]*\b)|xxd\s+-[A-Za-z]*r[A-Za-z]*\b|openssl\s+(?:base64|enc)\b[^|]*?\s-d\b)[^|]*\|\s*(?:sudo\s+|env\s+(?:[A-Z][A-Z0-9_]*=\S*\s+)*)?(?:\/\S+\/)?(?:bash|sh|dash|zsh|ksh|ash)\b/;
+function matchesDecodeAndExecute(command) {
+  return DECODE_AND_EXEC_RE.test(command);
+}
+function matchesEvalDeferredString(rawSegment) {
+  const trimmed = rawSegment.replace(/^\s+/, "");
+  const head = stripLeadingEnvAssignments(trimmed);
+  const m = head.match(/^eval\b\s*/);
+  if (m === null)
+    return false;
+  const arg = head.slice(m[0].length);
+  if (arg.length === 0)
+    return false;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0;i < arg.length; i++) {
+    const c = arg[i];
+    if (!inSingle && c === "\\" && i + 1 < arg.length) {
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (inSingle)
+      continue;
+    if (c === "$") {
+      const next = arg[i + 1];
+      if (next === "(" || next === "{")
+        return true;
+      if (next !== undefined && /[A-Za-z_]/.test(next))
+        return true;
+    }
+    if (c === "`")
+      return true;
   }
   return false;
 }
@@ -575,6 +1002,15 @@ function touchesProtectedPath(command) {
 }
 var PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 var NODE_WRITE_RE = /writeFile|writeFileSync/;
+var PERL_WRITE_RE = /\bopen\b[^;]*?["']>{1,2}["']|\bsyswrite\b|->\s*spew(?:_raw|_utf8)?\b|IO::File->new\b[^;]*?["']>{1,2}/;
+var RUBY_WRITE_RE = /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write\b\s*\(\s*['"]/;
+var PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
+var PERL_INVOCATION_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b/;
+var PERL_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b\s*/;
+var RUBY_INVOCATION_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b/;
+var RUBY_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b\s*/;
+var PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
+var PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 var NODE_INVOCATION_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)/;
 var NODE_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)\s*/;
 function matchesPythonNodeWrite(normalized, raw) {
@@ -595,6 +1031,45 @@ function matchesPythonNodeWrite(normalized, raw) {
         return true;
       }
     } else if (PYTHON_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  if (PERL_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PERL_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PERL_WRITE_RE.test(arg))
+        return true;
+      if (arg === null && PERL_WRITE_RE.test(normalized))
+        return true;
+    } else if (PERL_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  if (RUBY_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(RUBY_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && RUBY_WRITE_RE.test(arg))
+        return true;
+      if (arg === null && RUBY_WRITE_RE.test(normalized))
+        return true;
+    } else if (RUBY_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  if (PHP_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PHP_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PHP_WRITE_RE.test(arg))
+        return true;
+      if (arg === null && PHP_WRITE_RE.test(normalized))
+        return true;
+    } else if (PHP_WRITE_RE.test(normalized)) {
       return true;
     }
   }
@@ -808,7 +1283,8 @@ async function main() {
   }
   const input = event["tool_input"] ?? {};
   const command = typeof input.command === "string" ? input.command : "";
-  const decision = evaluateBashCommand(command);
+  const cwd = typeof event["cwd"] === "string" ? event["cwd"] : undefined;
+  const decision = evaluateBashCommand(command, cwd ? { cwd } : {});
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-bash-write-bypass");
   }
@@ -819,4 +1295,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=F006CE6E1618F11264756E2164756E21
+//# debugId=CB6CC2EBCD432C9164756E2164756E21

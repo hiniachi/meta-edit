@@ -682,3 +682,49 @@ describe("isoTimestamp", () => {
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+\-]\d{2}:\d{2}$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #35 follow-up (P1 codex review): counter.json missing symlink
+// defense.
+//
+// `EditLog.append` opens `edits.jsonl` with O_NOFOLLOW + lstat-walk, but
+// `writeCounterFile` (called from `nextEditId`) used a plain
+// `fs.writeFileSync` that follows the symlink leaf and clobbers the
+// target. An attacker (or a malicious process sharing the workdir) who
+// drops a symlink at `.meta-edit/state/counter.json` pointing at an
+// arbitrary file converts a benign `nextEditId()` call into a write to
+// that file. The audit log itself is hardened; the sidecar wasn't.
+//
+// Fix: open counter.json with O_NOFOLLOW + O_CREAT (and lstat-guard) so
+// any pre-existing symlink at that leaf throws fail-closed. Verify both
+// (a) the symlink is preserved unchanged after the throw and (b) the
+// would-be target is unchanged.
+// ---------------------------------------------------------------------------
+describe("EditLog counter.json symlink defense", () => {
+  it("refuses to write counter.json when it is a symlink (preserves both link and target)", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), {
+      recursive: true,
+    });
+    const stateDir = path.join(tmpRoot, ".meta-edit", "state");
+    const counterPath = path.join(stateDir, "counter.json");
+
+    // Place a sentinel "victim" file outside the state dir and point
+    // the counter.json leaf at it via a symlink. Without the fix,
+    // writeFileSync would follow the link and overwrite the victim.
+    const victimPath = path.join(tmpRoot, "victim.txt");
+    const originalVictim = "DO NOT OVERWRITE\n";
+    fs.writeFileSync(victimPath, originalVictim, "utf8");
+    fs.symlinkSync(victimPath, counterPath);
+
+    const log = new EditLog(tmpRoot);
+    expect(() => log.nextEditId(new Date(2026, 3, 30))).toThrow();
+
+    // The symlink itself must still exist and still BE a symlink.
+    const lst = fs.lstatSync(counterPath);
+    expect(lst.isSymbolicLink()).toBe(true);
+
+    // And the file the symlink pointed at must be byte-for-byte
+    // unchanged — that is the whole point of the defense.
+    expect(fs.readFileSync(victimPath, "utf8")).toBe(originalVictim);
+  });
+});
