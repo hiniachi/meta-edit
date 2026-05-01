@@ -293,7 +293,15 @@ export function makeApplyingHandler(
       // work on a request that was about to be rejected. We log
       // `patch_size_bytes: 0` on validation failure — there is no
       // applied diff to measure.
-      const { warnings: finalWarnings, log_error } = appendLogSafely(log, {
+      //
+      // log_error is intentionally NOT propagated here. Its contract is
+      // "audit-log append failed after a successful apply" (SPEC §3.4).
+      // The apply never ran on a validation-rejected request, so a
+      // log-append failure at this point is a pure infrastructure hiccup:
+      // callers MUST NOT infer "edit applied but audit record missing"
+      // from a validation-rejected response. We still attempt the append
+      // for completeness, but silently discard any log-write error.
+      const { warnings: finalWarnings } = appendLogSafely(log, {
         ...baseEntry,
         patch_size_bytes: 0,
         applied: false,
@@ -303,7 +311,6 @@ export function makeApplyingHandler(
         applied: false,
         edit_id: editId,
         warnings: finalWarnings,
-        ...(log_error !== undefined ? { log_error } : {}),
       };
     }
 

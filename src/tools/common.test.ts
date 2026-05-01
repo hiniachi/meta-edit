@@ -866,4 +866,35 @@ describe("appendLogSafely audit-integrity", () => {
     expect(result.applied).toBe(true);
     expect(result.log_error).toBeUndefined();
   });
+
+  // a7-04 tighten: log_error must NOT appear on validation-failure paths.
+  // The field's contract is "audit-log append failed after a successful apply".
+  // If the request is rejected by validation, the apply never ran; a log-append
+  // failure at that point is an internal infrastructure hiccup, but it MUST NOT
+  // surface as log_error — callers use log_error exclusively to signal
+  // "edit applied but audit record may be missing".
+  it("response.log_error is absent when log.append throws but validation fails", async () => {
+    const diskFullError = Object.assign(new Error("disk full"), {
+      code: "ENOSPC",
+    });
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    // empty rationale triggers a validation failure before any apply
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src.ts",
+      rationale: "   ",
+      risk_level: "low",
+      test_files: ["tests/src.test.ts"],
+      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
+    });
+
+    expect(result.applied).toBe(false);
+    // log_error is scoped to audit failures on applied edits only
+    expect(result.log_error).toBeUndefined();
+  });
 });

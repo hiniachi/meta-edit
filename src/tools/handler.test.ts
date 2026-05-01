@@ -209,12 +209,10 @@ describe("makeApplyingHandler", () => {
 
     expect(result.applied).toBe(false);
     expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
-    // Issue 029 (a7-04): log-append failure on a validation rejection still
-    // populates `log_error`, kept distinct from the validation warnings the
-    // caller needs to act on.
-    expect(result.log_error).toBeDefined();
-    expect(result.log_error).toContain("failed to append edit log");
-    expect(result.log_error).toContain("EACCES");
+    // a7-04 tighten: log_error is scoped to audit failures on applied edits.
+    // On a validation rejection the apply never ran, so log_error MUST NOT
+    // be set — callers rely on its presence to mean "applied but audit missing".
+    expect(result.log_error).toBeUndefined();
     expect(
       result.warnings.some((w) => w.includes("failed to append edit log")),
     ).toBe(false);
