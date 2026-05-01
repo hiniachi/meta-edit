@@ -20,9 +20,21 @@
 // preserving (formatters) or driven by separate input files (codegens),
 // so they are unlikely to be a deliberate bypass route.
 
+import * as path from "node:path";
+import { isProtectedPath } from "../state/protected-paths.js";
+
 export type HookDecision = {
   decision: "allow" | "deny";
   reason?: string;
+};
+
+// Codex round-1 a4-01: hooks now thread the agent's cwd through so the
+// protected-path check can resolve symlinks ("link/state/edits.jsonl"
+// where link -> .meta-edit) instead of relying on a lexical needle match.
+// When the cwd is omitted, the function falls back to the lexical-only
+// behavior used prior to a4-01.
+export type EvaluateBashOptions = {
+  cwd?: string;
 };
 
 export const ALLOWLIST_PATTERNS: readonly string[] = [
@@ -46,9 +58,9 @@ export const DENY_SUBSTRINGS: readonly string[] = [
   "perl -i",
   "cat >",
   "cat >>",
-  "tee ",
-  "tee\t",
-  "tee -a",
+  // `tee` moved to DENY_VERBS so unicode whitespace separators
+  // (U+00A0, U+2009, etc.) between `tee` and its target path don't
+  // bypass the deny via the substring `"tee "`. See issue a2-01.
   "git apply",
   "rsync ",
   "rsync\t",
@@ -159,9 +171,35 @@ function findTokenStart(s: string, pos: number): number {
   return i;
 }
 
-export function evaluateBashCommand(command: string): HookDecision {
+export function evaluateBashCommand(
+  command: string,
+  opts: EvaluateBashOptions = {},
+): HookDecision {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
+  }
+
+  // Cross-segment "decode-and-execute" bypass: `base64 -d | bash`,
+  // `xxd -r ... | sh`, `openssl base64 -d | bash`. Each individual
+  // segment looks benign, so per-segment evaluation cannot catch it.
+  // We detect a decoder verb followed (after a pipe) by a shell
+  // interpreter and deny outright. Read-only downstream consumers
+  // (`base64 -d | grep`, `base64 -d | hexdump`) remain allowed because
+  // the downstream verb is not a shell.
+  //
+  // Codex round-2 review (a1-02): scan against the quote-stripped form
+  // so that legitimate string literals containing the bypass shape
+  // (`printf 'base64 -d | bash\n'`) are not denied. A determined
+  // attacker can hide the actual pipe behind `eval "..."` — that case
+  // is already handled by matchesEvalDeferredString.
+  if (matchesDecodeAndExecute(stripQuotedContent(command))) {
+    return {
+      decision: "deny",
+      reason:
+        'decoder piped into a shell interpreter (e.g. `base64 -d | bash`) ' +
+        'executes arbitrary commands at runtime, bypassing every static ' +
+        'deny pattern. Use an edit_* tool instead.',
+    };
   }
 
   // Split on common shell segment boundaries so an allowlist hit in one
@@ -173,7 +211,7 @@ export function evaluateBashCommand(command: string): HookDecision {
   }
 
   for (const segment of segments) {
-    const decision = evaluateSegment(segment);
+    const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
@@ -181,7 +219,10 @@ export function evaluateBashCommand(command: string): HookDecision {
   return { decision: "allow" };
 }
 
-function evaluateSegment(rawSegment: string): HookDecision {
+function evaluateSegment(
+  rawSegment: string,
+  opts: EvaluateBashOptions = {},
+): HookDecision {
   // Best-effort defeat of trivial backslash-escape bypasses such as
   // `s\ed -i ...`. Stripping backslashes can change the *meaning* of
   // commands inside quoted regions, but for substring pattern detection
@@ -204,7 +245,7 @@ function evaluateSegment(rawSegment: string): HookDecision {
   if (touchesProtectedPath(normalized)) {
     const verb = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
-    const writeTargetsProtected = redirectsToProtected(normalized);
+    const writeTargetsProtected = redirectsToProtected(normalized, opts);
     if (!isReadOnly || writeTargetsProtected) {
       return {
         decision: "deny",
@@ -214,6 +255,23 @@ function evaluateSegment(rawSegment: string): HookDecision {
           "paths must go through an edit_policy_change tool call.",
       };
     }
+  }
+
+  // Codex round-1 a4-01: even when the command does not lexically reference
+  // a protected path, a redirect target may resolve into one through an
+  // intermediate symlink (e.g. "cat foo > link/state/edits.jsonl" where
+  // link -> .meta-edit). When a cwd is supplied, redirectsToProtected does
+  // a realpath-aware check on each write target and denies if any resolves
+  // into a protected directory.
+  if (opts.cwd && redirectsToProtected(normalized, opts)) {
+    return {
+      decision: "deny",
+      reason:
+        "command would write to a protected meta-edit path " +
+        "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " +
+        "redirect target; writes to these paths must go through an " +
+        "edit_policy_change tool call.",
+    };
   }
 
   // Deny patterns are checked unconditionally; we deliberately do NOT
@@ -239,6 +297,37 @@ function evaluateSegment(rawSegment: string): HookDecision {
     }
   }
 
+  // Heredoc redirect bypass: `cat <<EOF > target`, `cat <<'EOF' > target`,
+  // `cat <<"EOF" > target`, `cat <<-EOF > target`. The DENY_SUBSTRINGS
+  // entry "cat >" only catches the form where `>` directly follows `cat`;
+  // when a heredoc marker sits between them, the substring check misses
+  // entirely. The combination of `<<MARKER` followed by `>` (not `>>`
+  // separately, not `>&`) on the same segment always writes a file.
+  // Allowed read-only form `cat <<EOF | grep foo` does not match because
+  // the `>` is required.
+  //
+  // Codex round-2 review (a1-01): scan the quote-stripped form so that
+  // legitimate string literals like `grep '<<EOF > src/foo.ts'` and
+  // `echo "cat <<EOF > src/foo.ts"` are not denied. False-negative on
+  // a quote-escaped bypass is preferable here; eval-based deferred
+  // execution is already covered separately.
+  //
+  // Codex round-3 (a1-01 reopen): stripQuotedContent blanks the EOF
+  // inside quoted heredoc delimiters (`<<"EOF"`, `<<'EOF'`,
+  // `<<-'EOF'`), masking the redirect regex. Pre-unquote any heredoc
+  // delimiter token so its identifier survives the strip-quotes pass,
+  // while ordinary string literals elsewhere in the command are still
+  // blanked (preserving the round-2 false-positive prevention).
+  const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
+  if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
+    return {
+      decision: "deny",
+      reason:
+        'heredoc-with-redirect (`<<MARKER ... > target`) writes to a file. ' +
+        'Use an edit_* tool instead of redirecting a heredoc body to a path.',
+    };
+  }
+
   // Verb-based deny: extract the actual command verb after stripping
   // leading env assignments (`FOO=bar mv a b` -> `mv`), peeling wrapper
   // verbs (`sudo mv a b`, `env mv a b`, `xargs mv -t /tmp`,
@@ -252,11 +341,43 @@ function evaluateSegment(rawSegment: string): HookDecision {
       reason: denyReason(verb),
     };
   }
+  // Scoped deny: `dd of=<in-repo-path>` writes to source. Allow
+  // `dd of=/dev/null`, `dd of=/tmp/swap`, and dd invocations with no
+  // `of=` operand. See codex round-2 review (a1-03).
+  if (matchesDangerousDd(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`dd of=<path>` writes to an arbitrary file when the target is ' +
+        'an in-repo path. Use an edit_* tool instead.',
+    };
+  }
+  // Scoped deny: `tee <in-repo-path>` writes to source. Allow
+  // `tee /dev/null`, `tee /tmp/log.txt`, etc. See codex round-2
+  // review (a2-01).
+  if (matchesDangerousTee(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`tee <path>` writes to a file when the target is an in-repo ' +
+        'path. Use an edit_* tool instead.',
+    };
+  }
+  if (matchesEvalDeferredString(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`eval` of a non-literal argument (command substitution / backticks / ' +
+        'variable expansion) executes a payload that cannot be statically ' +
+        'inspected, bypassing every deny pattern. Use an edit_* tool instead.',
+    };
+  }
   if (matchesPythonNodeWrite(normalized, rawSegment)) {
     return {
       decision: "deny",
       reason:
-        'inline "python -c" / "node -e" with write_text, .write, open(..., \'w\'), or writeFile* is a bash bypass; use an edit_* tool instead.',
+        'inline interpreter write (python -c / node -e / perl -e / ruby -e / php -r) ' +
+        'is a bash bypass; use an edit_* tool instead.',
     };
   }
 
@@ -288,8 +409,117 @@ function splitSegments(cmd: string): string[] {
         result.push(innerSeg);
       }
     }
+    // `find ... -exec CMD \;` / `... -exec CMD +` carries an embedded
+    // command in positional args, not via shell composition operators.
+    // Extract those bodies and re-evaluate them as segments so deny
+    // verbs / substrings inside the body fire.
+    for (const inner of extractFindExecInners(seg)) {
+      for (const innerSeg of splitSegments(inner)) {
+        result.push(innerSeg);
+      }
+    }
   }
   return result;
+}
+
+// Extract the body of every `-exec ... \;` / `-execdir ... \;` /
+// `-exec ... +` / `-execdir ... +` block in `seg`. The body ends at the
+// next `\;` or `+` token (whitespace-bounded). `{}` placeholders are
+// stripped from the body before returning so they don't shadow real
+// verbs. Quoted regions are respected so an `-exec` literal inside a
+// single-quoted string is not misread as the find primary.
+function extractFindExecInners(seg: string): string[] {
+  const inners: string[] = [];
+  // Quick reject: avoid the per-character walk if the segment has no
+  // find primary token at all.
+  if (!/(?:^|\s)-exec(?:dir)?(?:\s|$)/.test(seg)) return inners;
+  // Codex round-2 review (a1-04): only treat `-exec` as the find primary
+  // when the segment's actual verb is `find` (or its variants). For
+  // `echo -exec mv a b \\;` the `-exec` is just an echo argument and
+  // must not trigger inner-command extraction.
+  const verb = extractCommandVerb(seg.trimStart());
+  if (verb === null || !FIND_VERBS.has(verb)) return inners;
+
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (!inSingle && c === "\\" && i + 1 < seg.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      // Match `-exec` or `-execdir` at a whitespace boundary.
+      if (
+        c === "-" &&
+        (seg.slice(i, i + 5) === "-exec" || seg.slice(i, i + 8) === "-execdir") &&
+        (i === 0 || /\s/.test(seg[i - 1]!))
+      ) {
+        const tokenLen = seg.slice(i, i + 8) === "-execdir" ? 8 : 5;
+        const after = seg[i + tokenLen];
+        if (after === undefined || /\s/.test(after)) {
+          // Skip the primary token + leading whitespace.
+          let j = i + tokenLen;
+          while (j < seg.length && /\s/.test(seg[j]!)) j++;
+          // Read body until `\;` or whitespace-bounded `+`.
+          const bodyStart = j;
+          let bSingle = false;
+          let bDouble = false;
+          while (j < seg.length) {
+            const cj = seg[j];
+            if (!bSingle && cj === "\\" && j + 1 < seg.length) {
+              if (seg[j + 1] === ";") {
+                // Terminator `\;`. Stop body before the backslash.
+                break;
+              }
+              j += 2;
+              continue;
+            }
+            if (cj === "'" && !bDouble) {
+              bSingle = !bSingle;
+              j++;
+              continue;
+            }
+            if (cj === '"' && !bSingle) {
+              bDouble = !bDouble;
+              j++;
+              continue;
+            }
+            if (!bSingle && !bDouble) {
+              // Whitespace-bounded `+` terminator.
+              if (
+                cj === "+" &&
+                (seg[j + 1] === undefined || /\s/.test(seg[j + 1]!)) &&
+                /\s/.test(seg[j - 1] ?? " ")
+              ) {
+                break;
+              }
+            }
+            j++;
+          }
+          let body = seg.slice(bodyStart, j).trim();
+          // Strip lone `{}` placeholders so they don't shadow verbs.
+          body = body.replace(/(^|\s)\{\}(\s|$)/g, "$1$2").trim();
+          if (body.length > 0) inners.push(body);
+          i = j;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+  return inners;
 }
 
 function primarySplitSegments(cmd: string): string[] {
@@ -464,6 +694,105 @@ function extractSubstitutionInners(seg: string): string[] {
   return inners;
 }
 
+// Find heredoc redirects in the raw command (`<<DELIM`, `<<-DELIM`,
+// `<<'DELIM'`, `<<"DELIM"`, `<<-'DELIM'`, `<<-"DELIM"`, `<<\DELIM`,
+// `<<-\DELIM`) and remove the quote/escape chars from the delimiter
+// word, leaving the bare identifier in place. This must run BEFORE
+// stripQuotedContent: the round-2 quote stripper would otherwise blank
+// out the identifier inside the quoted delimiter (`<<'EOF'` ->
+// `<<'   '`), masking the heredoc shape from the redirect regex.
+// Ordinary single- and double-quoted string literals elsewhere in the
+// command are untouched, so the round-2 false-positive prevention for
+// `grep '<<EOF > src/foo.ts'` is preserved by the subsequent
+// stripQuotedContent pass.
+//
+// Codex round-3 review (a1-01 reopen).
+// Codex round-4 (a1-01 follow-up): also handle the backslash-quoted
+// form `<<\WORD` / `<<-\WORD`. Bash treats a single leading backslash
+// before the delimiter word (no trailing pair) as suppressing variable
+// and command expansion — semantically identical to `<<'WORD'`. The
+// normalization pass already strips backslashes, so this second replace
+// is a belt-and-suspenders defence for any future caller that skips
+// normalization or passes a pre-normalized string containing the
+// backslash literally.
+function unquoteHeredocDelimiters(s: string): string {
+  // Match `<<` or `<<-` followed by optional whitespace, then a
+  // single- OR double-quoted identifier `<<'NAME'` / `<<"NAME"`. We
+  // deliberately don't try to honour outer quote state here: a `<<`
+  // sequence inside a real quoted literal has no heredoc semantics,
+  // but any spurious unquoting we do there is invisible to downstream
+  // analysis because stripQuotedContent will blank that whole region
+  // immediately after.
+  let out = s.replace(
+    /(<<-?\s*)(['"])([A-Za-z_]\w*)\2/g,
+    (_m, prefix, _q, name) => `${prefix}${name}`,
+  );
+  // Backslash-quoted form: `<<\WORD` (single leading backslash, no
+  // trailing counterpart). Must NOT match `<<\\WORD` (escaped backslash
+  // — two characters: `\\` then the word) which is not a heredoc
+  // quoting form in standard bash.
+  out = out.replace(
+    /(<<-?\s*)\\([A-Za-z_]\w*)/g,
+    (_m, prefix, name) => `${prefix}${name}`,
+  );
+  return out;
+}
+
+// Replace the *contents* of single- and double-quoted regions with
+// space placeholders, preserving the quote chars themselves so quote
+// state remains balanced for any downstream parser that re-walks the
+// string. Used to make heredoc / decode-and-exec scans ignore literal
+// string arguments. NOTE: heredoc bodies (`<<EOF ... EOF`) are real
+// code, not string literals — they are intentionally NOT stripped here.
+//
+// Conservative trade-off: we err on the side of FALSE-NEGATIVE for
+// quote-escaped bypass forms (`echo 'sed -i ...'` no longer denies
+// the embedded sed -i text). Determined attackers can defeat this
+// hook in many other ways already; the goal is to stop tripping on
+// agent strings that mention bypass patterns by accident or in docs.
+// See codex round-2 review (a1-01, a1-02).
+function stripQuotedContent(s: string): string {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'") {
+      out += "'";
+      i++;
+      while (i < s.length && s[i] !== "'") {
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += "'";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += '"';
+      i++;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === "\\" && i + 1 < s.length) {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += '"';
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 function denyReason(pattern: string): string {
   return (
     `command matches deny pattern "${pattern}". meta-edit reserves ` +
@@ -472,6 +801,17 @@ function denyReason(pattern: string): string {
     `docs/SPEC.md §5.2).`
   );
 }
+
+// Verbs whose `-exec ... \;` / `-execdir ... \;` argument should be
+// treated as an embedded sub-command. Limiting to find / fdfind avoids
+// false-positives where `-exec` is just a literal argument to a
+// non-find verb (`echo -exec mv a b \;`). See codex round-2 (a1-04).
+const FIND_VERBS: ReadonlySet<string> = new Set([
+  "find",
+  "fdfind",
+  "fd",
+  "gfind",
+]);
 
 // Wrapper verbs whose remaining tokens are themselves the command we
 // actually care about. After encountering one of these as the first
@@ -491,10 +831,146 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "stdbuf",
   "chrt",
   "taskset",
+  // Multi-call binaries that forward their first argument as the
+  // applet name (`busybox mv a b`, `toybox cp a b`). Same wrapper
+  // shape as `sudo`/`env`, no extra option grammar required.
+  "busybox",
+  "toybox",
 ]);
 
-// Verbs whose mere invocation is denied.
-const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
+// Verbs whose mere invocation is denied. `dd` and `tee` are NOT in
+// this set: their write side-effect is target-dependent (e.g.
+// `dd of=/tmp/swap`, `tee /dev/null` are legitimate), so they are
+// scoped via matchesDangerousDd / matchesDangerousTee. Codex round-2
+// review on PR #27 caught both false-positives.
+const DENY_VERBS: ReadonlySet<string> = new Set([
+  "mv",
+  "cp",
+  "patch",
+]);
+
+// Path-classification helper used by dd / tee scoped denies. Conservative:
+// relative paths default to "in-repo" (deny). Absolute paths default to
+// "not-in-repo" (allow) UNLESS they are clearly outside the safe-prefix
+// list. This errs on the side of FALSE-NEGATIVE for absolute paths that
+// happen to be repo paths; that trade-off is acceptable because absolute
+// paths to source trees are rare in agent workflows.
+const SAFE_ABSOLUTE_PREFIXES: readonly string[] = [
+  "/dev/",
+  "/tmp/",
+  "/var/tmp/",
+  "/run/",
+  "/proc/",
+  "/sys/",
+];
+const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
+  "/dev/null",
+  "/dev/stdout",
+  "/dev/stderr",
+  "/dev/zero",
+]);
+
+function isInRepoWriteTarget(target: string): boolean {
+  if (target.length === 0) return false;
+  if (SAFE_EXACT_TARGETS.has(target)) return false;
+  if (target.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  }
+  // Relative path → assume in-repo. This also covers `~/...` (we don't
+  // expand tildes) and bare names (`foo.ts`).
+  return true;
+}
+
+// Tokenize a segment respecting single/double quotes. Backslash-escapes
+// outside single quotes consume the next char into the current token.
+// Used by dd / tee target detection; lighter weight than a full shell
+// parser but quote-aware enough for argument extraction.
+function tokenizeSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let hasContent = false;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]!;
+    if (!inSingle && c === "\\" && i + 1 < segment.length) {
+      buf += segment[i + 1];
+      hasContent = true;
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      hasContent = true;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      hasContent = true;
+      continue;
+    }
+    if (!inSingle && !inDouble && /\s/.test(c)) {
+      if (hasContent) {
+        tokens.push(buf);
+        buf = "";
+        hasContent = false;
+      }
+      continue;
+    }
+    buf += c;
+    hasContent = true;
+  }
+  if (hasContent) tokens.push(buf);
+  return tokens;
+}
+
+// `dd` is denied only when invoked with `of=<in-repo-path>`. Allow
+// `dd of=/dev/null`, `dd of=/tmp/swap`, and `dd` invocations without
+// any `of=` operand. See codex round-2 review (a1-03).
+function matchesDangerousDd(segment: string): boolean {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "dd") return false;
+  const tokens = tokenizeSegment(trimmed);
+  for (const tok of tokens) {
+    if (tok.startsWith("of=")) {
+      const target = tok.slice(3);
+      if (isInRepoWriteTarget(target)) return true;
+    }
+  }
+  return false;
+}
+
+// `tee` is denied only when at least one positional target argument
+// resolves to an in-repo path. Flags (`-a`, `--append`, `-i`,
+// `--ignore-interrupts`, `-p`) are skipped. Targets like `/dev/null`
+// and `/tmp/log.txt` are allowed. The original a2-01 unicode-
+// whitespace bypass (`tee src/foo.ts`) remains caught because
+// extractCommandVerb's `\S+` treats NBSP / U+2009 as `\s` in JS regex.
+// See codex round-2 review (a2-01).
+function matchesDangerousTee(segment: string): boolean {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "tee") return false;
+  const tokens = tokenizeSegment(trimmed);
+  // Skip past wrapper chain + the tee token itself.
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    const base = tok.includes("/") ? tok.slice(tok.lastIndexOf("/") + 1) : tok;
+    if (base === "tee") {
+      i++;
+      break;
+    }
+    i++;
+  }
+  for (; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    if (tok.startsWith("-")) continue;
+    if (isInRepoWriteTarget(tok)) return true;
+  }
+  return false;
+}
 
 // Per-wrapper short options that take a separate value argument. After
 // peeling a wrapper, `extractCommandVerb` consumes a flag plus its
@@ -590,7 +1066,16 @@ const READ_ONLY_VERBS: ReadonlySet<string> = new Set([
 // target token references a protected path. Used to withdraw the
 // read-only-verb carve-out when a read tool is ALSO redirecting its
 // output into the protected directory.
-function redirectsToProtected(s: string): boolean {
+//
+// Codex round-1 a4-01: when an `opts.cwd` is supplied, each extracted
+// target token is also checked through the symlink-aware isProtectedPath
+// (which realpath-resolves the absolute path under cwd). This catches
+// redirects whose target lexically looks innocent ("link/state/x") but
+// resolves into a protected directory through a symlink.
+function redirectsToProtected(
+  s: string,
+  opts: EvaluateBashOptions = {},
+): boolean {
   let i = 0;
   let inSingle = false;
   let inDouble = false;
@@ -619,9 +1104,11 @@ function redirectsToProtected(s: string): boolean {
       i += 2;
       continue;
     }
-    // Skip past the redirect operator (one or two `>`s).
+    // Skip past the redirect operator (one or two `>`s, or noclobber-
+    // override `>|`). All three are write redirects whose target is
+    // the next token; we treat them uniformly here. See issue a2-04.
     let j = i + 1;
-    if (s[j] === ">") j++;
+    if (s[j] === ">" || s[j] === "|") j++;
     // Skip whitespace after the operator.
     while (j < s.length && (s[j] === " " || s[j] === "\t")) j++;
     // Read the target token until the next shell delimiter.
@@ -649,7 +1136,87 @@ function redirectsToProtected(s: string): boolean {
         return true;
       }
     }
+    // Codex round-1 a4-01: if a cwd was supplied, run the target through
+    // the symlink-aware guard. This catches redirects whose lexical form
+    // does not match a protected needle but whose realpath resolves into
+    // a protected directory (e.g. via "link/state/" where link is a
+    // symlink to .meta-edit). Absolute targets are checked directly;
+    // relative targets are resolved against cwd before the check.
+    if (opts.cwd && target.length > 0) {
+      const absolute = path.isAbsolute(target)
+        ? target
+        : path.resolve(opts.cwd, target);
+      // isProtectedPath needs a repo-relative-shaped argument when given
+      // repoRoot; pass the relative form so the lexical fallback also
+      // works. For absolute targets that resolve outside the cwd, the
+      // realpath-and-prefix check inside isProtectedPath returns false,
+      // which is the correct (non-protected) decision.
+      const rel = path.relative(opts.cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: opts.cwd })) {
+        return true;
+      }
+    }
     i = j;
+  }
+  return false;
+}
+
+// Detect `<decoder> ... | <shell>` patterns where a runtime payload is
+// decoded then piped into a shell interpreter. Static analysis cannot
+// see the decoded contents, so we deny the structural pipe outright.
+// The downstream-shell predicate is intentionally narrow (bash, sh,
+// dash, zsh, ksh, ash) so legitimate read-only consumers
+// (`base64 -d | grep`, `base64 -d | hexdump`, `base64 -d | jq`) keep
+// working.
+const DECODE_AND_EXEC_RE =
+  /(?:base64\s+(?:--decode\b|-[A-Za-z]*d[A-Za-z]*\b)|xxd\s+-[A-Za-z]*r[A-Za-z]*\b|openssl\s+(?:base64|enc)\b[^|]*?\s-d\b)[^|]*\|\s*(?:sudo\s+|env\s+(?:[A-Z][A-Z0-9_]*=\S*\s+)*)?(?:\/\S+\/)?(?:bash|sh|dash|zsh|ksh|ash)\b/;
+
+function matchesDecodeAndExecute(command: string): boolean {
+  return DECODE_AND_EXEC_RE.test(command);
+}
+
+// Detect `eval` (optionally wrapped) followed by a non-literal argument
+// — i.e. an argument that contains a command substitution (`$(`,
+// backticks) or a variable expansion (`$NAME` / `${NAME}`) outside
+// single quotes. Static analysis cannot expand the payload, so we
+// deny. Bare-literal evals (`eval "cat > x"`) are unaffected because
+// the literal still runs through the per-segment scan and is caught
+// by the appropriate deny pattern.
+function matchesEvalDeferredString(rawSegment: string): boolean {
+  const trimmed = rawSegment.replace(/^\s+/, "");
+  // Peel optional wrappers commonly placed before eval (env, sudo, ...).
+  const head = stripLeadingEnvAssignments(trimmed);
+  // Strict prefix match of a literal `eval` token.
+  const m = head.match(/^eval\b\s*/);
+  if (m === null) return false;
+  const arg = head.slice(m[0].length);
+  if (arg.length === 0) return false;
+  // Walk the rest, tracking quote state. Inside single quotes, command
+  // substitution and variable expansion are literal — ignored. Outside
+  // single quotes, `$(` / backtick / `$VAR` make the eval non-literal.
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < arg.length; i++) {
+    const c = arg[i];
+    if (!inSingle && c === "\\" && i + 1 < arg.length) {
+      i++;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (inSingle) continue;
+    if (c === "$") {
+      const next = arg[i + 1];
+      if (next === "(" || next === "{") return true;
+      if (next !== undefined && /[A-Za-z_]/.test(next)) return true;
+    }
+    if (c === "`") return true;
   }
   return false;
 }
@@ -825,6 +1392,23 @@ function touchesProtectedPath(command: string): boolean {
 
 const PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 const NODE_WRITE_RE = /writeFile|writeFileSync/;
+// Perl: `open(... , ">" , ...)`, `open(... , ">>" , ...)`, `print FH ...`
+// to a file handle previously opened for write. Detect the `open` call
+// with a `>` mode arg, which is the canonical write form. Also catch
+// `syswrite`, `IO::File->new(... ">")`, and `Path::Tiny->spew*`.
+const PERL_WRITE_RE =
+  /\bopen\b[^;]*?["']>{1,2}["']|\bsyswrite\b|->\s*spew(?:_raw|_utf8)?\b|IO::File->new\b[^;]*?["']>{1,2}/;
+// Ruby: `File.write`, `File.open(... , "w")`, `IO.write`, `IO.binwrite`.
+const RUBY_WRITE_RE =
+  /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write\b\s*\(\s*['"]/;
+// PHP: `file_put_contents`, `fwrite`, `fputs`, `fputcsv`.
+const PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
+const PERL_INVOCATION_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b/;
+const PERL_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b\s*/;
+const RUBY_INVOCATION_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b/;
+const RUBY_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b\s*/;
+const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
+const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 // Use a single-char class `[e]val` so this source file does not contain
 // the literal substring `eval(`, which trips overzealous heuristic
 // security scanners. The regex meaning is unchanged: it still matches
@@ -871,6 +1455,44 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
         return true;
       }
     } else if (PYTHON_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // perl -e / perl -E: detect open(..., ">", ...), syswrite, etc.
+  // Unlike python/node, perl's writer signal (the `>` mode arg) IS
+  // inside a string literal, so we scan the UNMASKED arg.
+  if (PERL_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PERL_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PERL_WRITE_RE.test(arg)) return true;
+      if (arg === null && PERL_WRITE_RE.test(normalized)) return true;
+    } else if (PERL_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // ruby -e: detect File.write / File.open(..., "w") / IO.write.
+  if (RUBY_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(RUBY_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && RUBY_WRITE_RE.test(arg)) return true;
+      if (arg === null && RUBY_WRITE_RE.test(normalized)) return true;
+    } else if (RUBY_WRITE_RE.test(normalized)) {
+      return true;
+    }
+  }
+  // php -r / php -R / php -B: detect file_put_contents / fwrite / fputs.
+  if (PHP_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PHP_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null && PHP_WRITE_RE.test(arg)) return true;
+      if (arg === null && PHP_WRITE_RE.test(normalized)) return true;
+    } else if (PHP_WRITE_RE.test(normalized)) {
       return true;
     }
   }

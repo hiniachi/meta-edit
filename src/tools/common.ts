@@ -10,6 +10,7 @@ import {
   isProtectedPath,
   normalizeRepoRelative,
 } from "../state/protected-paths.js";
+import { realpathOfDeepestExisting } from "../utils/realpath.js";
 
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
@@ -415,7 +416,17 @@ function checkPathSafety(
       error: `path "${p}" is absolute; must be repository-relative`,
     };
   }
-  const norm = normalizeRepoRelative(p);
+  let norm: string;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch (err) {
+    // normalizeRepoRelative throws on NUL bytes (a4-02) — surface as a
+    // structured error rather than an unhandled exception.
+    return {
+      ok: false,
+      error: `path "${p}" is invalid: ${(err as Error).message}`,
+    };
+  }
   if (norm.length === 0) {
     return { ok: false, error: "path is empty after normalization" };
   }
@@ -486,34 +497,5 @@ function realpathOrSelf(p: string): string {
     return fs.realpathSync(p);
   } catch {
     return p;
-  }
-}
-
-function realpathOfDeepestExisting(p: string): string | null {
-  let cur = p;
-  const tail: string[] = [];
-  while (true) {
-    try {
-      const real = fs.realpathSync(cur);
-      if (tail.length === 0) {
-        return real;
-      }
-      return path.join(real, ...tail.reverse());
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        const parent = path.dirname(cur);
-        if (parent === cur) {
-          return p;
-        }
-        tail.push(path.basename(cur));
-        cur = parent;
-        continue;
-      }
-      // EACCES, EPERM, ELOOP, EMFILE, etc. — fail closed. The caller will
-      // turn this into a validation rejection so we never accept a path we
-      // could not canonicalize.
-      return null;
-    }
   }
 }
