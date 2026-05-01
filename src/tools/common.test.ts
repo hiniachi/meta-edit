@@ -308,6 +308,30 @@ describe("validateRequest", () => {
       }
     });
 
+    it("rejects a no-op change (old_content === new_content)", () => {
+      // Codex GitHub bot review on PR #29 (P2): pre-PR-D the jsdiff
+      // parser rejected zero-hunk patches, so no-op edits never
+      // reached apply. Under the content-pair shape we must enforce
+      // the same posture explicitly — otherwise stage+rename runs
+      // for semantically empty edits and bumps mtime / inode for
+      // downstream watchers and audit consumers.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [makeChange("src/foo.ts", "same\n", "same\n")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("no-op") && w.includes("src/foo.ts"),
+          ),
+        ).toBe(true);
+      }
+    });
+
     it("rejects NUL byte in new_content", () => {
       const r = validateRequest(
         "edit_boundary_condition",

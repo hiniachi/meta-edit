@@ -154,6 +154,18 @@ export function validateRequest(
       warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
+    // Reject no-op changes (old_content === new_content). Pre-PR-D the
+    // jsdiff parser rejected zero-hunk patches; the content-pair flow
+    // would otherwise accept them and still stage+rename the file,
+    // bumping mtime / inode and triggering downstream watchers /
+    // rebuilds for a semantically empty edit. Codex GitHub bot review
+    // on PR #29 (P2) caught this regression.
+    if (c.old_content === c.new_content) {
+      warnings.push(
+        `change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`,
+      );
+      continue;
+    }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
       warnings.push(`change.file "${c.file}": ${safe.error}`);

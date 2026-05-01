@@ -18114,6 +18114,10 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
+    if (c.old_content === c.new_content) {
+      warnings.push(`change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`);
+      continue;
+    }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
       warnings.push(`change.file "${c.file}": ${safe.error}`);
@@ -19380,4 +19384,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=1B9815573E89A7E664756E2164756E21
+//# debugId=9645AF638848103164756E2164756E21
