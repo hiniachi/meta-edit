@@ -84,10 +84,12 @@ function replyDeny(reason) {
 var RAW_EDIT_TOOLS = new Set([
   "Edit",
   "Write",
-  "MultiEdit"
+  "MultiEdit",
+  "NotebookEdit"
 ]);
+var LOWER_RAW_EDIT_TOOLS = new Set([...RAW_EDIT_TOOLS].map((t) => t.toLowerCase()));
 function evaluateRawEdit(toolName) {
-  if (RAW_EDIT_TOOLS.has(toolName)) {
+  if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
       reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the eighteen edit_* tools that match the kind of ` + `change you are making (see docs/SPEC.md §4). If no edit_* tool ` + `fits, stop and ask the user before bypassing the typed surface.`
@@ -111,4 +113,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=EF96E6D80E10F0BE64756E2164756E21
+//# debugId=1910DCB40CF3350264756E2164756E21
