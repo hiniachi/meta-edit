@@ -320,4 +320,57 @@ describe("applyChanges", () => {
     );
     expect(typeof result.applied).toBe("boolean");
   });
+
+  // Issue 018 (a5-01): regression-test gap for the TOCTOU window documented at
+  // common.ts:421-435. validateRequest cannot canonicalize a path whose leaf
+  // does not yet exist; it lexically re-attaches the missing tail. The Phase 3
+  // contract is that applyChanges re-realpaths immediately before write, so a
+  // symlink injected at the missing leaf between calls resolves to its real
+  // target and is rejected by the containment check at apply.ts lines 121-128.
+  // No prior test pinned this specific path; a future "simplification" of
+  // applyChanges that drops the re-realpath would silently regress.
+  it("rejects a symlink placed at a previously non-existent target after validation-time lexical resolution", () => {
+    // Setup: parent dir exists, but the target file does not yet.
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+
+    const outsideFile = path.join(
+      os.tmpdir(),
+      `meta-edit-toctou-${Date.now()}.txt`,
+    );
+    fs.writeFileSync(outsideFile, "outside\n", "utf8");
+
+    try {
+      // Simulate the race: inject the symlink at the path after the lexical
+      // validation window. We do this before calling applyChanges, which is
+      // the worst-case (the entire race window has been lost to the attacker).
+      fs.symlinkSync(outsideFile, path.join(tmpRoot, "src/new.ts"));
+
+      const result = applyChanges(tmpRoot, [
+        change("src/new.ts", "old\n", "new\n"),
+      ]);
+
+      // apply.ts re-realpaths the target at line 112; the symlink resolves to
+      // outsideFile which is outside repoRoot, triggering the "escapes the
+      // repository root" guard (lines 121-128 of apply.ts).
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(
+          result.warnings.some(
+            (w) =>
+              w.includes("escapes the repository root") ||
+              w.includes("canonicalization failed") ||
+              w.includes("differs from validated canonical"),
+          ),
+        ).toBe(true);
+      }
+      // The outside file must not have been modified.
+      expect(fs.readFileSync(outsideFile, "utf8")).toBe("outside\n");
+    } finally {
+      try {
+        fs.unlinkSync(outsideFile);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 });
