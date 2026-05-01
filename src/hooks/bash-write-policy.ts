@@ -855,12 +855,18 @@ const DENY_VERBS: ReadonlySet<string> = new Set([
 // list. This errs on the side of FALSE-NEGATIVE for absolute paths that
 // happen to be repo paths; that trade-off is acceptable because absolute
 // paths to source trees are rare in agent workflows.
+//
+// Codex review #31 caught a critical alias hole: a broad `/dev/` prefix
+// allowed `/dev/fd/N` (and the equivalent `/proc/<pid>/fd/N`) to be
+// treated as safe. Both are kernel-provided FD aliases, so a shell
+// snippet like `exec 3>src/foo.ts; echo hi | tee /dev/fd/3` produced a
+// silent write to a repo file. The fix narrows `/dev/` and `/proc/` to
+// EXACT-match-only safe sinks and reverts the prefix to `/tmp/`,
+// `/var/tmp/`, `/run/`, and `/sys/` (none of which expose FD aliases).
 const SAFE_ABSOLUTE_PREFIXES: readonly string[] = [
-  "/dev/",
   "/tmp/",
   "/var/tmp/",
   "/run/",
-  "/proc/",
   "/sys/",
 ];
 const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
