@@ -468,9 +468,6 @@ function redirectsToProtected(s) {
   return false;
 }
 function hasSafetyFlag(segment, verb) {
-  if (verb === "cp") {
-    return /(?:^|\s)(?:--no-clobber|-n)(?:\s|$)/.test(segment);
-  }
   if (verb === "patch") {
     return /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
   }
@@ -614,49 +611,64 @@ function matchesPythonNodeWrite(normalized, raw) {
 function readShellArg(s, start) {
   if (start >= s.length)
     return null;
-  const first = s[start];
-  if (first === '"') {
-    let i2 = start + 1;
-    let buf = "";
-    while (i2 < s.length) {
-      if (s[i2] === "\\" && i2 + 1 < s.length) {
-        buf += s[i2 + 1];
-        i2 += 2;
-        continue;
-      }
-      if (s[i2] === '"')
-        return buf;
-      buf += s[i2];
-      i2++;
-    }
-    return null;
-  }
-  if (first === "'") {
-    const j = s.indexOf("'", start + 1);
-    if (j < 0)
-      return null;
-    return s.slice(start + 1, j);
-  }
-  if (first === "$" && s[start + 1] === "'") {
-    let i2 = start + 2;
-    let buf = "";
-    while (i2 < s.length) {
-      if (s[i2] === "\\" && i2 + 1 < s.length) {
-        buf += s[i2 + 1];
-        i2 += 2;
-        continue;
-      }
-      if (s[i2] === "'")
-        return buf;
-      buf += s[i2];
-      i2++;
-    }
-    return null;
-  }
   let i = start;
-  while (i < s.length && !/\s/.test(s[i]))
+  let buf = "";
+  while (i < s.length) {
+    const c = s[i];
+    if (c === " " || c === "\t" || c === `
+` || c === "\r" || c === ";" || c === "|" || c === "&" || c === ">" || c === "<") {
+      break;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === '"')
+          break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length)
+        return null;
+      i = j + 1;
+      continue;
+    }
+    if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0)
+        return null;
+      buf += s.slice(i + 1, j);
+      i = j + 1;
+      continue;
+    }
+    if (c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === "'")
+          break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length)
+        return null;
+      i = j + 1;
+      continue;
+    }
+    buf += c;
     i++;
-  return s.slice(start, i);
+  }
+  if (i === start)
+    return null;
+  return buf;
 }
 function maskLanguageStringLiterals(s) {
   let result = "";
@@ -795,4 +807,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=9D4E1C7DBD47FD5164756E2164756E21
+//# debugId=674D9AAAC7460A3364756E2164756E21

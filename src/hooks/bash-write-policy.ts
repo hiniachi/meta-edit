@@ -655,13 +655,20 @@ function redirectsToProtected(s: string): boolean {
 }
 
 // Detect a per-verb safety flag in the segment that means the verb's
-// invocation is read-only or dry-run, so denying it would be a false
-// positive. Whitespace-bounded so `--no-clobber-foo` or
-// `path/--dry-run` don't fool the matcher.
+// invocation is genuinely a no-write operation (not just
+// "no-overwrite"), so denying it would be a false positive.
+// Whitespace-bounded so `--dry-run-foo` doesn't fool the matcher.
+//
+// Notable omission: `cp` is NOT carved out. `cp -n` / `cp --no-clobber`
+// only refuses to OVERWRITE an existing destination — `cp -n payload
+// src/new_file.ts` STILL CREATES new files at the destination, which
+// is exactly the bypass we want the hook to deny. Codex GitHub bot
+// review on PR #27 caught this regression and we backed out the cp
+// carve-out. `mv` has the same property (mv -n still moves to a new
+// destination) and is similarly not carved out. Only `patch` keeps a
+// carve-out, because `patch --dry-run` / `--check` are documented as
+// read-only modes that emit nothing to disk.
 function hasSafetyFlag(segment: string, verb: string): boolean {
-  if (verb === "cp") {
-    return /(?:^|\s)(?:--no-clobber|-n)(?:\s|$)/.test(segment);
-  }
   if (verb === "patch") {
     return /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
   }
@@ -863,54 +870,81 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
   return false;
 }
 
-// Read the next shell-quoted (or unquoted) token starting at `start`.
-// Returns the dequoted content for `"..."` (with `\X` escapes resolved
-// to `X`), the literal content for `'...'`, the dequoted content for
-// bash ANSI-C `$'...'` (with `\X` escapes resolved to `X` — we don't
-// fully decode `\n` / `\xNN`, but the substring presence of the
-// writer pattern is preserved), or the run of non-whitespace chars
-// for an unquoted arg. Returns null if a quote is unmatched.
+// Read the next shell word starting at `start`, returning the
+// dequoted concatenation. POSIX shells treat adjacent quoted /
+// unquoted fragments as a single word: `"foo""bar"`, `'foo''bar'`,
+// `"foo"bar`, `$'foo'"bar"` are all one token equal to `foobar`.
+// Without that concatenation, a constructed `python -c "o""pen(...)"`
+// would split at the first closing quote and the writer-pattern
+// detector would only see `o`. Codex GitHub bot review on PR #27
+// caught the bypass; this routine now consumes a full shell word.
+//
+// Stops at whitespace or a shell metacharacter (`;`, `|`, `&`, `>`,
+// `<`). Returns null if any quote opens and never closes.
 function readShellArg(s: string, start: number): string | null {
   if (start >= s.length) return null;
-  const first = s[start];
-  if (first === '"') {
-    let i = start + 1;
-    let buf = "";
-    while (i < s.length) {
-      if (s[i] === "\\" && i + 1 < s.length) {
-        buf += s[i + 1];
-        i += 2;
-        continue;
-      }
-      if (s[i] === '"') return buf;
-      buf += s[i];
-      i++;
-    }
-    return null;
-  }
-  if (first === "'") {
-    const j = s.indexOf("'", start + 1);
-    if (j < 0) return null;
-    return s.slice(start + 1, j);
-  }
-  if (first === "$" && s[start + 1] === "'") {
-    let i = start + 2;
-    let buf = "";
-    while (i < s.length) {
-      if (s[i] === "\\" && i + 1 < s.length) {
-        buf += s[i + 1];
-        i += 2;
-        continue;
-      }
-      if (s[i] === "'") return buf;
-      buf += s[i];
-      i++;
-    }
-    return null;
-  }
   let i = start;
-  while (i < s.length && !/\s/.test(s[i]!)) i++;
-  return s.slice(start, i);
+  let buf = "";
+  while (i < s.length) {
+    const c = s[i]!;
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === ";" ||
+      c === "|" ||
+      c === "&" ||
+      c === ">" ||
+      c === "<"
+    ) {
+      break;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === '"') break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length) return null;
+      i = j + 1;
+      continue;
+    }
+    if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0) return null;
+      buf += s.slice(i + 1, j);
+      i = j + 1;
+      continue;
+    }
+    if (c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === "'") break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length) return null;
+      i = j + 1;
+      continue;
+    }
+    // Unquoted character — append literally.
+    buf += c;
+    i++;
+  }
+  if (i === start) return null;
+  return buf;
 }
 
 // Replace contents of language-level string literals (single, double,

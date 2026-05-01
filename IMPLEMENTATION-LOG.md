@@ -560,3 +560,30 @@
   test. The actual fix is the masker described above. Documented
   in `OBSERVED-FAILURES.md` "Resolved" so the divergence between rec
   and resolution is on record.
+
+### Codex GitHub bot review on PR #27 (post-merge prep, follow-up commit)
+
+- **P1: `cp --no-clobber` / `cp -n` carve-out is a write bypass.**
+  `cp -n` refuses to OVERWRITE an existing destination but still
+  CREATES new files. `cp -n payload src/new_file.ts` was therefore
+  allowed by `hasSafetyFlag` and could mutate the repo outside
+  `edit_*`. **Fix**: removed `cp` from `hasSafetyFlag`. Only `patch
+  --dry-run` / `--check` (genuinely read-only) survive. Tests
+  flipped from `allow` to `deny` for `cp --no-clobber` and `cp -n`.
+- **P1: `readShellArg` stopped at the first closing quote.** POSIX
+  shells concatenate adjacent quoted/unquoted fragments into one
+  shell word: `python -c "o""pen('x','w').write('y')"` is a single
+  word equal to `python -c open('x','w').write('y')`. The original
+  routine returned only `o`, leaving the writer-pattern detector
+  blind. **Fix**: rewrote `readShellArg` to iterate fragments
+  (double, single, ANSI-C `$'...'`, unquoted), concatenating until
+  a whitespace or shell metachar boundary. Tests added for
+  `python -c "o""pen(...)"`, `node -e "require('fs').""writeFileSync(...)"`,
+  and a mixed double/single case.
+- **P2: runtime `--version` and MCP `serverInfo.version` reported
+  `0.1.1` while `package.json` was bumped to `0.1.2`.** **Fix**:
+  added `src/version.ts` that imports from `package.json` (single
+  source of truth via `resolveJsonModule`); refactored `src/cli.ts`
+  (`--version` + `--help`) and `src/server.ts` (`serverInfo.version`)
+  to read `VERSION` from there. Future version bumps propagate
+  automatically across runtime artifacts.

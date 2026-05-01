@@ -764,17 +764,23 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
   });
 
   describe("safety-flag exception (item 5)", () => {
-    it("allows cp --no-clobber a b", () => {
+    it("denies cp --no-clobber a b (still creates new file at dest)", () => {
+      // Codex GitHub bot review on PR #27 (P1): `cp -n` /
+      // `--no-clobber` only refuses to OVERWRITE an existing
+      // destination — it still CREATES new files at the destination.
+      // The original carve-out was a write bypass; backed out.
       const r = evaluateBashCommand("cp --no-clobber a b");
-      expect(r.decision).toBe("allow");
+      expect(r.decision).toBe("deny");
     });
 
-    it("allows cp -n a b (short safety flag)", () => {
+    it("denies cp -n a b (short form has the same bypass)", () => {
       const r = evaluateBashCommand("cp -n a b");
-      expect(r.decision).toBe("allow");
+      expect(r.decision).toBe("deny");
     });
 
     it("allows patch --dry-run < changes.diff", () => {
+      // patch --dry-run is documented as read-only; emits nothing to
+      // disk. Carve-out preserved.
       const r = evaluateBashCommand("patch --dry-run < changes.diff");
       expect(r.decision).toBe("allow");
     });
@@ -789,10 +795,7 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
       expect(r.decision).toBe("deny");
     });
 
-    it("still denies mv even with --no-clobber (no exception for mv)", () => {
-      // Conservative: mv's --no-clobber is an opt-in safety, but the
-      // OBSERVED-FAILURES rec only carved out cp + patch. mv stays
-      // denied to avoid widening the carve-out beyond observation.
+    it("still denies mv with --no-clobber (no exception for mv)", () => {
       const r = evaluateBashCommand("mv --no-clobber a b");
       expect(r.decision).toBe("deny");
     });
@@ -911,6 +914,33 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
         'python -c "print(f\\"this is write_text\\")"',
       );
       expect(r.decision).toBe("allow");
+    });
+
+    it("denies python -c with adjacent-quote concatenation hiding open(...,'w').write()", () => {
+      // Codex GitHub bot review on PR #27 (P1): POSIX shell treats
+      // adjacent quoted/unquoted fragments as a single word, so the
+      // arg parser must concatenate fragments, not stop at the first
+      // closing quote. `python -c "o""pen('x','w').write('y')"`
+      // dequotes to `open('x','w').write('y')`, which the masker
+      // then reduces to `open('','').write('')` — `.write(` matches.
+      const r = evaluateBashCommand(
+        "python -c \"o\"\"pen('x','w').write('y')\"",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies node -e with adjacent-quote concatenation hiding writeFileSync", () => {
+      const r = evaluateBashCommand(
+        "node -e \"require('fs').\"\"writeFileSync('x','y')\"",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies python -c with mixed double/single quote concatenation", () => {
+      const r = evaluateBashCommand(
+        'python -c "open"\'(\'"\'x\',\'w\').write(\'y\')"',
+      );
+      expect(r.decision).toBe("deny");
     });
   });
 

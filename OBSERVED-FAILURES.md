@@ -114,9 +114,13 @@ hypothetical; it is structurally on the dogfooding path.
     `sudo -u root mv a b` resolves to verb `mv`.
   - LOW "`cp --no-clobber` / `patch --dry-run` false positive" —
     `hasSafetyFlag` carves out `patch --dry-run` / `patch --check`
-    from the `DENY_VERBS` deny. (The cp carve-out was reverted in
-    a follow-up commit; see the PR-#27 round-2 note in
-    IMPLEMENTATION-LOG.md.)
+    from the `DENY_VERBS` deny. **The original PR B carve-out also
+    covered `cp -n` / `cp --no-clobber`, but that was reverted in a
+    follow-up commit on the same PR after Codex GitHub bot caught
+    that `cp -n` only refuses to OVERWRITE existing destinations —
+    it still CREATES new files, so allowing
+    `cp -n payload src/new_file.ts` was a write bypass. Only
+    `patch`'s read-only modes survive.**
   - LOW "Protected-path matching uses substring, not path component" —
     `containsAsPathComponent` requires the trailing side of the needle
     to be a path-component boundary AND the leading side to either be a
