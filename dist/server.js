@@ -16587,7 +16587,11 @@ If your patch contains any of these, choose a more specific edit_* tool:
 
 If you are unsure whether your change qualifies as refactor-only, choose a
 more specific tool. False precision is safer than false generality. Misusing
-this tool is the largest source of regression bugs in AI-generated code.`,
+this tool is the largest source of regression bugs in AI-generated code.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_test_only_change: `Add or modify test code only. No production code changes are allowed.
 
 Use this tool when:
@@ -16612,7 +16616,11 @@ Recommended assertion practice:
 This tool is the standard way to fulfill testing obligations created by
 other edit_* tools. After making a non-trivial change with another edit_*
 tool, your next action is typically one or more edit_test_only_change calls
-covering the obligations stated in the prior tool's description.`,
+covering the obligations stated in the prior tool's description.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_boundary_condition: `Modify a comparison, threshold, limit, or boundary in production code.
 
 Use this tool when:
@@ -16639,7 +16647,11 @@ value should be inclusive and which should be exclusive, before applying
 the edit.
 
 test_files must list at least one file where these three cases will be
-added. Existing test files are acceptable.`,
+added. Existing test files are acceptable.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_boolean_condition: `Modify a boolean expression, conditional logic, or guard clause in
 production code.
 
@@ -16668,7 +16680,11 @@ Coverage). Full MC/DC is not required, but the spirit of "each condition
 independently affects outcome" is.
 
 If the boolean change is purely a refactor (e.g., De Morgan's law applied
-without changing truth values), use edit_refactor_only instead.`,
+without changing truth values), use edit_refactor_only instead.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_state_transition: `Modify a state machine, workflow, or status transition in production code.
 
 Use this tool when:
@@ -16692,7 +16708,11 @@ tests are as important as the allowed-transition tests.
 
 If your change adds new states, you must also test transitions from
 existing states into the new states, and from the new states to existing
-states (where allowed).`,
+states (where allowed).
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_db_schema: `Modify database schema: tables, columns, indexes, constraints, migrations.
 
 Use this tool when:
@@ -16719,7 +16739,11 @@ The rollback question is not optional — answer it explicitly even if the
 answer is "no rollback, here's why."
 
 If your change modifies existing data (UPDATE statements, data backfills),
-you MUST also use edit_data_migration alongside this tool.`,
+you MUST also use edit_data_migration alongside this tool.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_data_migration: `Modify production data through migration scripts, backfills, or
 data-transformation code.
 
@@ -16744,7 +16768,11 @@ thoroughly as production code, ideally more so. The idempotency test is
 the single most important one — write it first.
 
 For long-running migrations, also consider testing chunked execution and
-verifying that an interrupted-then-resumed migration completes correctly.`,
+verifying that an interrupted-then-resumed migration completes correctly.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_api_contract: `Modify the request or response shape of an API: endpoints, fields, status
 codes, schemas.
 
@@ -16771,7 +16799,11 @@ test is the most important — name it explicitly and write it first.
 
 If the change is a breaking change, the rationale field must say so
 explicitly, e.g., "Breaking change: removing the deprecated \`legacyId\`
-field. Migration plan: ..."`,
+field. Migration plan: ..."
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_serialization: `Modify a serializer, parser, codec, or data format handler.
 
 Use this tool when:
@@ -16794,7 +16826,11 @@ be discovered only when production data is already in the new format and
 cannot be read by anything. The "read old format" test is the safety net.
 
 If the format change is intentionally non-backward-compatible, the
-rationale must say so and describe the migration path for existing data.`,
+rationale must say so and describe the migration path for existing data.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_error_handling: `Modify how errors, exceptions, or failure paths are handled.
 
 Use this tool when:
@@ -16819,7 +16855,11 @@ expose the error — is almost certainly a bug. Add at least one test that
 verifies the error is observable.
 
 Swallowing exceptions is forbidden unless the rationale explicitly states
-why and what the recovery path is.`,
+why and what the recovery path is.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_retry_timeout: `Modify retry, timeout, or backoff behavior.
 
 Use this tool when:
@@ -16842,7 +16882,11 @@ Required tests (you MUST cover):
 The duplicate-side-effect test is the one that catches the worst bugs.
 If your code retries an HTTP POST that creates a record, verify that two
 records are not created when the first attempt times out but actually
-succeeded server-side.`,
+succeeded server-side.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_concurrency: `Modify concurrency primitives: locks, transactions, mutexes, parallelism,
 race conditions.
 
@@ -16868,7 +16912,11 @@ many times under stress and treat any failure as a bug.
 
 If you cannot reproduce the race or contention this change addresses,
 the change is speculative. Prefer to demonstrate the bug with a failing
-test before applying the fix.`,
+test before applying the fix.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_external_side_effect: `Modify code that produces external side effects: emails, events, queue
 messages, webhooks, billing operations, audit logs.
 
@@ -16895,7 +16943,11 @@ textbook AI-generated billing bug.
 
 For test environments, side effects MUST be mocked or routed to a test
 sink. Verify that the test does not actually charge a card or send a
-real email. If your test makes a real external call, your test is wrong.`,
+real email. If your test makes a real external call, your test is wrong.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_cache_invalidation: `Modify cache keys, TTLs, invalidation logic, or staleness handling.
 
 Use this tool when:
@@ -16915,7 +16967,11 @@ Required tests (you MUST cover):
 
 Cache bugs typically manifest as "wrong data shown to user" or "stale
 data persisted to a downstream system". Both are silent until reported
-by users, which is too late. Test invalidation explicitly.`,
+by users, which is too late. Test invalidation explicitly.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_permission_logic: `Modify authorization, access control, role checks, ownership checks,
 tenancy, or feature flag gating.
 
@@ -16948,7 +17004,11 @@ Stop and ask for the matrix to be confirmed before proceeding.
 
 The negative side-effect test (test 3) is the one that catches the worst
 bugs. A permission check that returns false but still writes to the
-database is a permission bypass. Test it.`,
+database is a permission bypass. Test it.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_dependency_config: `Modify package dependencies, runtime configuration, or feature
 configuration files.
 
@@ -16973,7 +17033,11 @@ behavior change in covered paths. If you observe a behavior change,
 document it explicitly — do not silently absorb it.
 
 For security-related dependency upgrades, the rationale must say so
-explicitly.`,
+explicitly.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_policy_change: `Modify the meta-edit configuration itself: hooks, Claude permissions,
 CI configuration, this server's behavior, or the tool descriptions of
 edit_* tools.
@@ -17005,7 +17069,11 @@ rationale.
 
 If your change loosens a restriction without a strong justification, do
 not use this tool. Reconsider whether the restriction was correct in the
-first place.`,
+first place.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_docs_only: `Modify documentation, README, comments, or other narrative content
 that does not affect runtime behavior.
 
@@ -17035,7 +17103,11 @@ This tool MUST NOT be used when:
 Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
 mislead future readers (including future AI agents). Treat
-documentation as a contract with future readers.`
+documentation as a contract with future readers.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`
 };
 
 // src/tools/common.ts
@@ -18385,4 +18457,4 @@ export {
   createServer
 };
 
-//# debugId=4789D3BD643974D864756E2164756E21
+//# debugId=331CC5F0E5759E9164756E2164756E21
