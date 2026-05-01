@@ -243,7 +243,58 @@ export class EditLog {
     // Keep only the current day's counter — old days are recoverable
     // from the log itself if needed and pruning keeps the file tiny.
     const payload = JSON.stringify({ [key]: value });
-    fs.writeFileSync(counterPath, payload, { encoding: "utf8", mode: 0o600 });
+
+    // Codex review #35 follow-up: writeFileSync follows symlinks at the
+    // leaf, so a symlink dropped at counter.json by a malicious sibling
+    // process would silently turn nextEditId into an arbitrary-file
+    // write. Defend the sidecar with the same posture used for
+    // edits.jsonl:
+    //   1. lstat-guard the leaf — if it exists AND is a symlink, throw.
+    //   2. Open with O_NOFOLLOW so the kernel-side check catches a TOCTOU
+    //      racer that swapped a regular file for a symlink between (1)
+    //      and the open. ELOOP from O_NOFOLLOW manifests as an ENOENT-
+    //      adjacent error; we let it propagate.
+    try {
+      const lst = fs.lstatSync(counterPath);
+      if (lst.isSymbolicLink()) {
+        throw new Error(
+          `refusing to use edit-log path: "${counterPath}" is a symlink. The audit-log counter must not be redirected through a symlink.`,
+        );
+      }
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") throw e;
+      // ENOENT → leaf doesn't exist yet; O_CREAT below will produce a
+      // fresh regular file. Fall through.
+    }
+
+    const O_NOFOLLOW = fs.constants.O_NOFOLLOW;
+    if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+      throw new Error(
+        "this platform does not expose O_NOFOLLOW; meta-edit refuses to write the audit-log counter without symlink-leaf protection",
+      );
+    }
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(
+        counterPath,
+        // eslint-disable-next-line no-bitwise
+        fs.constants.O_WRONLY |
+          fs.constants.O_CREAT |
+          fs.constants.O_TRUNC |
+          O_NOFOLLOW,
+        0o600,
+      );
+      fs.writeSync(fd, payload, null, "utf8");
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 
   readAll(): EditLogEntry[] {
