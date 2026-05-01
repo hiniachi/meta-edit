@@ -29,7 +29,12 @@ describe("evaluateRawEdit", () => {
   });
 
   it("exposes the exact denied set", () => {
-    expect([...RAW_EDIT_TOOLS].sort()).toEqual(["Edit", "MultiEdit", "Write"]);
+    expect([...RAW_EDIT_TOOLS].sort()).toEqual([
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit",
+      "Write",
+    ]);
   });
 
   it("denies lowercase 'edit' (case-insensitive contract)", () => {
@@ -48,5 +53,13 @@ describe("evaluateRawEdit", () => {
     // Currently returns "allow" — this is the defect.
     const r = evaluateRawEdit("multiedit");
     expect(r.decision).toBe("deny");
+  });
+
+  it("denies NotebookEdit (scope gap: Jupyter notebooks contain executable code)", () => {
+    // NotebookEdit is a Claude Code built-in that edits .ipynb files.
+    // It is currently NOT in RAW_EDIT_TOOLS, so this assertion fails.
+    const r = evaluateRawEdit("NotebookEdit");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("edit_*");
   });
 });

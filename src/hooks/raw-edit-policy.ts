@@ -9,6 +9,11 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "Edit",
   "Write",
   "MultiEdit",
+  // NotebookEdit edits Jupyter (.ipynb) cells, which contain arbitrary
+  // executable code (Python, shell `!cmd`, JS). Without this entry an
+  // agent could rewrite notebook cells and bypass the entire edit_*
+  // surface. Treat it as a raw editing primitive.
+  "NotebookEdit",
 ]);
 
 // Lower-cased copy used for the actual decision so the deny gate is robust
