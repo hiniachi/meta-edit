@@ -66,9 +66,22 @@ describe("createServer repoRoot validation", () => {
     );
   });
 
-  it("throws when repoRoot is a system directory like /tmp", () => {
-    expect(() => createServer({ repoRoot: os.tmpdir() })).toThrow(
-      /not a (git )?repository|no \.git|repo sentinel/i,
+  it("throws when repoRoot is a freshly-created tmp dir with no sentinel", () => {
+    // Do NOT pass `os.tmpdir()` directly: on some hosts `/tmp/.git` exists
+    // (CI sandboxes, dev fixtures), which would make `assertIsRepo` succeed
+    // and silently mask the regression.  A fresh `mkdtempSync` subdir under
+    // tmpdir is guaranteed to have no `.git`/`.jj` of its own; `assertIsRepo`
+    // only checks the immediate dir (it does not walk up), so this isolates
+    // the test from any sentinels at higher levels.
+    const isolatedTmp = fs.mkdtempSync(
+      path.join(os.tmpdir(), "meta-edit-srv-notrepo-"),
     );
+    try {
+      expect(() => createServer({ repoRoot: isolatedTmp })).toThrow(
+        /not a (git )?repository|no \.git|repo sentinel/i,
+      );
+    } finally {
+      fs.rmSync(isolatedTmp, { recursive: true, force: true });
+    }
   });
 });
