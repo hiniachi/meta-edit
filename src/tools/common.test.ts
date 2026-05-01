@@ -92,7 +92,11 @@ describe("validateRequest", () => {
           r.warnings.some((w) => w.includes("rationale must be non-empty")),
         ).toBe(true);
         expect(
-          r.warnings.some((w) => w.includes("escapes repository root")),
+          r.warnings.some(
+            (w) =>
+              w.includes("escapes repository root") ||
+              w.includes('".." traversal segment'),
+          ),
         ).toBe(true);
       }
     });
@@ -198,6 +202,48 @@ describe("validateRequest", () => {
       }
     });
 
+    it("rejects any `..` segment with the dedicated traversal diagnostic (dogfood-003)", () => {
+      // Pre-fix: target_file: "test-playground/../package.json" was
+      // silently rebased to "package.json" (repo root). The subsequent
+      // stale-content warning then quoted "package.json" — confusing
+      // when the caller declared a playground path. Hard-reject any
+      // `..` segment so the resolved target is unambiguous.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "test-playground/../package.json",
+          changes: [makeChange("test-playground/../package.json")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes('".." traversal segment') &&
+              w.includes("test-playground/../package.json"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts `./` and doubled-slash cosmetic normalization", () => {
+      // Cosmetic normalizations (leading `./`, doubled slashes) collapse
+      // to the same on-disk file regardless of resolution order. They
+      // do NOT trip the dogfood-003 traversal guard.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "./src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [makeChange("./src/foo.ts", "alpha", "beta")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+    });
+
     it("rejects ../ traversal", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -207,7 +253,11 @@ describe("validateRequest", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
-          r.warnings.some((w) => w.includes("escapes repository root")),
+          r.warnings.some(
+            (w) =>
+              w.includes("escapes repository root") ||
+              w.includes('".." traversal segment'),
+          ),
         ).toBe(true);
       }
     });
@@ -243,6 +293,10 @@ describe("validateRequest", () => {
     });
 
     it("rejects target_file aliasing into protected path via traversal", () => {
+      // dogfood-003 hardened this further: any `..` segment is now rejected
+      // before resolution, so the rejection reason is the traversal guard
+      // rather than the protected-path guard. Either is acceptable; both
+      // refuse the alias attempt without writing.
       const aliased = "src/../.meta-edit/state/edits.jsonl";
       const r = validateRequest(
         "edit_boundary_condition",
@@ -256,7 +310,9 @@ describe("validateRequest", () => {
       if (!r.ok) {
         expect(
           r.warnings.some(
-            (w) => w.includes("protected") && w.includes("resolves"),
+            (w) =>
+              (w.includes("protected") && w.includes("resolves")) ||
+              w.includes('".." traversal segment'),
           ),
         ).toBe(true);
       }
@@ -275,7 +331,9 @@ describe("validateRequest", () => {
       if (!r.ok) {
         expect(
           r.warnings.some(
-            (w) => w.includes("protected") && w.includes("resolves"),
+            (w) =>
+              (w.includes("protected") && w.includes("resolves")) ||
+              w.includes('".." traversal segment'),
           ),
         ).toBe(true);
       }
@@ -481,8 +539,11 @@ describe("validateRequest", () => {
     });
 
     // a5-03 strengthen: cover `../` dot-dot segment normalization.
-    // "src/nested/../foo.ts" and "src/foo.ts" both resolve to the same
-    // canonical via path.resolve, so the duplicate-canonical guard must fire.
+    // Originally validated that the duplicate-canonical guard caught
+    // "src/nested/../foo.ts" aliasing "src/foo.ts". dogfood-003 now
+    // rejects any `..` segment up-front, so this test pins the stronger
+    // behavior: the alias is refused before even reaching the duplicate
+    // guard.
     it("rejects two changes that alias the same file via ../ dot-dot segments", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -496,17 +557,13 @@ describe("validateRequest", () => {
         }),
         ctx,
       );
-      // path.resolve folds "src/nested/../foo.ts" → "src/foo.ts" so both
-      // canonicals match. The duplicate-canonical guard (not the scope guard)
-      // must fire: both entries map to the same canonical "src/foo.ts", which
-      // IS in the allowed set, so the scope guard would pass them — only the
-      // duplicate-canonical guard can catch this alias.
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
           r.warnings.some(
             (w) =>
-              w.includes("multiple entries") && w.includes("foo.ts"),
+              w.includes('".." traversal segment') ||
+              (w.includes("multiple entries") && w.includes("foo.ts")),
           ),
         ).toBe(true);
       }

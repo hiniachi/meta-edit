@@ -442,6 +442,20 @@ function checkPathSafety(
       error: `path "${p}" is absolute; must be repository-relative`,
     };
   }
+  // Reject `..` traversal segments. `path.resolve` (used downstream) would
+  // silently collapse `a/../b` to `b`, producing a canonical that no
+  // longer reflects what the caller asked for. Subsequent stale-content
+  // check then quotes the rebased path, leaving the caller wondering
+  // why the wrong file was touched. See dogfood-003. Pure cosmetic
+  // normalizations (leading `./`, doubled slashes, backslashes) remain
+  // accepted because they collapse to the same on-disk file regardless.
+  if (containsParentTraversal(p)) {
+    return {
+      ok: false,
+      error:
+        `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`,
+    };
+  }
   let norm: string;
   try {
     norm = normalizeRepoRelative(p);
@@ -524,4 +538,15 @@ function realpathOrSelf(p: string): string {
   } catch {
     return p;
   }
+}
+
+// Return true iff any path segment of `p` is exactly `..`. Splits on
+// both forward and backslashes so Windows-style spellings are covered.
+// Only `..` segments count: a name like `..foo` or `foo..` is a
+// legitimate filename and is left alone.
+function containsParentTraversal(p: string): boolean {
+  for (const seg of p.split(/[\\/]/)) {
+    if (seg === "..") return true;
+  }
+  return false;
 }
