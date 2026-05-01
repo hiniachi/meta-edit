@@ -1,7 +1,7 @@
 name: build-dist
 
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
       - "src/**"
@@ -9,20 +9,15 @@ on:
       - "tsconfig*.json"
       - "bun.lock"
 
-permissions:
-  contents: write
-
 concurrency:
   group: build-dist-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  build-and-commit:
+  verify-dist:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -32,15 +27,11 @@ jobs:
 
       - run: bun run build
 
-      - name: Commit dist/ if changed
+      - name: Fail if dist/ drifted from source
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -n "$(git status --porcelain dist/)" ]]; then
-            git add -f dist/
-            git commit -m "build: rebuild dist [skip ci]"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push
-          else
-            echo "dist/ already up to date"
+            echo "::error::dist/ is stale relative to src/. Run 'bun run build' locally and commit the result." >&2
+            git --no-pager diff -- dist/ | head -200
+            exit 1
           fi
+          echo "dist/ matches a fresh build of src/"
