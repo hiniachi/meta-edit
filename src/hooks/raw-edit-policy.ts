@@ -11,13 +11,21 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
 ]);
 
+// Lower-cased copy used for the actual decision so the deny gate is robust
+// against host shims that deliver tool names in alternate casing
+// (e.g. "edit", "WRITE", "multiedit"). The exported `RAW_EDIT_TOOLS` keeps
+// the canonical PascalCase names for documentation / API stability.
+const LOWER_RAW_EDIT_TOOLS: ReadonlySet<string> = new Set(
+  [...RAW_EDIT_TOOLS].map((t) => t.toLowerCase()),
+);
+
 export type HookDecision = {
   decision: "allow" | "deny";
   reason?: string;
 };
 
 export function evaluateRawEdit(toolName: string): HookDecision {
-  if (RAW_EDIT_TOOLS.has(toolName)) {
+  if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
       reason:

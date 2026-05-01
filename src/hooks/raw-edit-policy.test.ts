@@ -31,4 +31,22 @@ describe("evaluateRawEdit", () => {
   it("exposes the exact denied set", () => {
     expect([...RAW_EDIT_TOOLS].sort()).toEqual(["Edit", "MultiEdit", "Write"]);
   });
+
+  it("denies lowercase 'edit' (case-insensitive contract)", () => {
+    // Currently returns "allow" — this is the defect.
+    const r = evaluateRawEdit("edit");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies uppercase 'WRITE' (case-insensitive contract)", () => {
+    // Currently returns "allow" — this is the defect.
+    const r = evaluateRawEdit("WRITE");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies mixed-case 'multiedit' (case-insensitive contract)", () => {
+    // Currently returns "allow" — this is the defect.
+    const r = evaluateRawEdit("multiedit");
+    expect(r.decision).toBe("deny");
+  });
 });
