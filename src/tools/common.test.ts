@@ -497,15 +497,16 @@ describe("validateRequest", () => {
         ctx,
       );
       // path.resolve folds "src/nested/../foo.ts" → "src/foo.ts" so both
-      // canonicals match. Either the duplicate-canonical guard or the scope
-      // guard must reject; ok:true is never acceptable.
+      // canonicals match. The duplicate-canonical guard (not the scope guard)
+      // must fire: both entries map to the same canonical "src/foo.ts", which
+      // IS in the allowed set, so the scope guard would pass them — only the
+      // duplicate-canonical guard can catch this alias.
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(
           r.warnings.some(
             (w) =>
-              w.includes("foo.ts") &&
-              (w.includes("multiple entries") || w.includes("scope")),
+              w.includes("multiple entries") && w.includes("foo.ts"),
           ),
         ).toBe(true);
       }
