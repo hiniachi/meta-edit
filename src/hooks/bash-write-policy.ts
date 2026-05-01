@@ -276,7 +276,14 @@ function evaluateSegment(rawSegment: string): HookDecision {
   // `echo "cat <<EOF > src/foo.ts"` are not denied. False-negative on
   // a quote-escaped bypass is preferable here; eval-based deferred
   // execution is already covered separately.
-  const heredocScan = stripQuotedContent(normalized);
+  //
+  // Codex round-3 (a1-01 reopen): stripQuotedContent blanks the EOF
+  // inside quoted heredoc delimiters (`<<"EOF"`, `<<'EOF'`,
+  // `<<-'EOF'`), masking the redirect regex. Pre-unquote any heredoc
+  // delimiter token so its identifier survives the strip-quotes pass,
+  // while ordinary string literals elsewhere in the command are still
+  // blanked (preserving the round-2 false-positive prevention).
+  const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
   if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
     return {
       decision: "deny",
@@ -650,6 +657,32 @@ function extractSubstitutionInners(seg: string): string[] {
     i++;
   }
   return inners;
+}
+
+// Find heredoc redirects in the raw command (`<<DELIM`, `<<-DELIM`,
+// `<<'DELIM'`, `<<"DELIM"`, `<<-'DELIM'`, `<<-"DELIM"`) and remove the
+// quote chars from the delimiter word, leaving the bare identifier in
+// place. This must run BEFORE stripQuotedContent: the round-2 quote
+// stripper would otherwise blank out the identifier inside the quoted
+// delimiter (`<<'EOF'` -> `<<'   '`), masking the heredoc shape from
+// the redirect regex. Ordinary single- and double-quoted string
+// literals elsewhere in the command are untouched, so the round-2
+// false-positive prevention for `grep '<<EOF > src/foo.ts'` is
+// preserved by the subsequent stripQuotedContent pass.
+//
+// Codex round-3 review (a1-01 reopen).
+function unquoteHeredocDelimiters(s: string): string {
+  // Match `<<` or `<<-` followed by optional whitespace, then a
+  // single- OR double-quoted identifier `<<'NAME'` / `<<"NAME"`. We
+  // deliberately don't try to honour outer quote state here: a `<<`
+  // sequence inside a real quoted literal has no heredoc semantics,
+  // but any spurious unquoting we do there is invisible to downstream
+  // analysis because stripQuotedContent will blank that whole region
+  // immediately after.
+  return s.replace(
+    /(<<-?\s*)(['"])([A-Za-z_]\w*)\2/g,
+    (_m, prefix, _q, name) => `${prefix}${name}`,
+  );
 }
 
 // Replace the *contents* of single- and double-quoted regions with

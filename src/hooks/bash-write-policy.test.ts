@@ -1052,6 +1052,30 @@ describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
       evaluateBashCommand('echo "cat <<EOF > src/foo.ts"').decision,
     ).toBe("allow");
   });
+
+  // Codex round-3 (a1-01 reopen): the round-2 stripQuotedContent pass
+  // (commit 435fb1b) blanked the EOF inside quoted heredoc delimiters
+  // (`<<"EOF"`, `<<'EOF'`, `<<-'EOF'`), masking the redirect regex.
+  // Heredoc detection must run on the raw command — quoting only
+  // affects whether parameter expansion happens in the body; the
+  // heredoc redirect shape is preserved.
+  it("denies heredoc redirect with single-quoted delimiter: cat <<'EOF' > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<'EOF' > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+
+  it('denies heredoc redirect with double-quoted delimiter: cat <<"EOF" > src/foo.ts', () => {
+    expect(
+      evaluateBashCommand('cat <<"EOF" > src/foo.ts\nhello\nEOF').decision,
+    ).toBe("deny");
+  });
+
+  it("denies tab-stripping heredoc redirect with quoted delimiter: cat <<-'EOF' > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<-'EOF' > src/foo.ts\n\thello\n\tEOF").decision,
+    ).toBe("deny");
+  });
 });
 
 describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
