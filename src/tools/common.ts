@@ -197,6 +197,20 @@ export function validateRequest(
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
+      // Dedupe with the target_file-level failure for the same path: when
+      // target_file === change.file (the common single-file edit shape)
+      // and both failed for the identical reason, the agent reading two
+      // near-identical warnings tries to fix two things when there is
+      // one. Prefer the target_file form because it is the field the
+      // agent declared first; the change.file form is its echo. See
+      // dogfood-004.
+      if (
+        !targetCheck.ok &&
+        c.file === request.target_file &&
+        safe.error === targetCheck.error
+      ) {
+        continue;
+      }
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }

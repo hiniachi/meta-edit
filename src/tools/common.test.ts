@@ -277,6 +277,79 @@ describe("validateRequest", () => {
       }
     });
 
+    it("emits a single protected-path warning when target_file === change.file (dogfood-004)", () => {
+      // Pre-fix: validateRequest pushed two near-identical warnings — one
+      // from the target_file scope, one from the change.file scope —
+      // both quoting the same path with the same protected-directory
+      // reason. Agents reading both tried to fix two things. Dedupe so
+      // the single canonical issue surfaces once.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: ".meta-edit/state/edits.jsonl",
+          changes: [makeChange(".meta-edit/state/edits.jsonl")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedWarnings = r.warnings.filter((w) =>
+          w.includes("protected"),
+        );
+        expect(protectedWarnings.length).toBe(1);
+      }
+    });
+
+    it("suppresses every change.file duplicate when multiple changes echo target_file", () => {
+      // Documented contract: when two or more changes share both the
+      // path string AND the failure reason of target_file, every
+      // duplicate is suppressed (the target_file warning carries the
+      // same information). Prevents an N-fold warning fan-out for a
+      // request shape the schema does not otherwise forbid.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: ".meta-edit/state/edits.jsonl",
+          changes: [
+            makeChange(".meta-edit/state/edits.jsonl"),
+            makeChange(".meta-edit/state/edits.jsonl"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        const protectedWarnings = r.warnings.filter((w) =>
+          w.includes("protected"),
+        );
+        expect(protectedWarnings.length).toBe(1);
+      }
+    });
+
+    it("still emits the change.file warning when only the change differs", () => {
+      // When target_file is acceptable but a change.file points into a
+      // protected path, the change.file warning must still surface; only
+      // the byte-identical duplicate is suppressed.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [makeChange(".meta-edit/state/edits.jsonl")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("change.file") && w.includes("protected"),
+          ),
+        ).toBe(true);
+      }
+    });
+
     it("rejects edits inside .meta-edit/tmp/", () => {
       const r = validateRequest(
         "edit_boundary_condition",
