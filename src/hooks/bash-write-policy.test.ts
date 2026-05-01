@@ -1041,3 +1041,13 @@ describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
+  it("denies base64 -d | bash (arbitrary command execution bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "echo 'c2VkIC1pIHMveC95LyBzcmMvZm9vLnRzCg==' | base64 -d | bash",
+      ).decision,
+    ).toBe("deny");
+  });
+});

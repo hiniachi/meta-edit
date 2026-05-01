@@ -164,6 +164,23 @@ export function evaluateBashCommand(command: string): HookDecision {
     return { decision: "allow" };
   }
 
+  // Cross-segment "decode-and-execute" bypass: `base64 -d | bash`,
+  // `xxd -r ... | sh`, `openssl base64 -d | bash`. Each individual
+  // segment looks benign, so per-segment evaluation cannot catch it.
+  // We detect a decoder verb followed (after a pipe) by a shell
+  // interpreter and deny outright. Read-only downstream consumers
+  // (`base64 -d | grep`, `base64 -d | hexdump`) remain allowed because
+  // the downstream verb is not a shell.
+  if (matchesDecodeAndExecute(command)) {
+    return {
+      decision: "deny",
+      reason:
+        'decoder piped into a shell interpreter (e.g. `base64 -d | bash`) ' +
+        'executes arbitrary commands at runtime, bypassing every static ' +
+        'deny pattern. Use an edit_* tool instead.',
+    };
+  }
+
   // Split on common shell segment boundaries so an allowlist hit in one
   // segment cannot whitewash a deny pattern in another (e.g.,
   // `prettier --write src/ ; sed -i 's/x/y/' src/foo.ts`).
@@ -669,6 +686,20 @@ function redirectsToProtected(s: string): boolean {
     i = j;
   }
   return false;
+}
+
+// Detect `<decoder> ... | <shell>` patterns where a runtime payload is
+// decoded then piped into a shell interpreter. Static analysis cannot
+// see the decoded contents, so we deny the structural pipe outright.
+// The downstream-shell predicate is intentionally narrow (bash, sh,
+// dash, zsh, ksh, ash) so legitimate read-only consumers
+// (`base64 -d | grep`, `base64 -d | hexdump`, `base64 -d | jq`) keep
+// working.
+const DECODE_AND_EXEC_RE =
+  /(?:base64\s+(?:--decode\b|-[A-Za-z]*d[A-Za-z]*\b)|xxd\s+-[A-Za-z]*r[A-Za-z]*\b|openssl\s+(?:base64|enc)\b[^|]*?\s-d\b)[^|]*\|\s*(?:sudo\s+|env\s+(?:[A-Z][A-Z0-9_]*=\S*\s+)*)?(?:\/\S+\/)?(?:bash|sh|dash|zsh|ksh|ash)\b/;
+
+function matchesDecodeAndExecute(command: string): boolean {
+  return DECODE_AND_EXEC_RE.test(command);
 }
 
 // Detect a per-verb safety flag in the segment that means the verb's
