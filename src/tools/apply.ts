@@ -202,9 +202,29 @@ export function applyChanges(
     }
 
     if (original !== ch.oldContent) {
-      warnings.push(
-        `stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`,
-      );
+      // Distinguish length mismatch from content mismatch so a common
+      // failure mode (caller passed a snippet because they were thinking
+      // in Anthropic Edit's old_string semantics, where old_string is a
+      // fragment) gets a self-explanatory diagnostic instead of a
+      // misleading "file changed" message that triggers a re-read loop.
+      // See dogfood-002. The size comparison uses the in-memory string
+      // length (Node UTF-16 code units) for both sides; that matches the
+      // == comparison the failure was raised on, regardless of the
+      // file's on-disk byte length.
+      const diskLen = original.length;
+      const oldLen = ch.oldContent.length;
+      if (diskLen !== oldLen) {
+        warnings.push(
+          `old_content for "${ch.canonical}" is ${oldLen} characters but the file on disk is ${diskLen} characters; ` +
+            `old_content must be the EXACT current full file content, not a snippet. ` +
+            `Re-read the file and pass its complete contents.`,
+        );
+      } else {
+        warnings.push(
+          `stale old_content for "${ch.canonical}": same length as disk (${diskLen} characters) but bytes differ; ` +
+            `the file changed between when old_content was captured and now. Re-read the file and retry.`,
+        );
+      }
       return { applied: false, warnings };
     }
 

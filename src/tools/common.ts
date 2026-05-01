@@ -375,7 +375,8 @@ export function makeApplyingHandler(
     //
     // Round-4 (defect 1): `audit_error` propagates regardless of
     // `result.applied`. applyChanges can return `applied: false` for
-    // recoverable causes (e.g. stale old_content at apply.ts:204,208) —
+    // recoverable causes (e.g. stale old_content / snippet-shaped
+    // old_content; see the length-aware mismatch branch in apply.ts) —
     // the attempt is still audited, and a log-write failure here still
     // leaves the audit trail incomplete. Callers inspect `applied`
     // separately to determine whether bytes hit disk; `audit_error`
