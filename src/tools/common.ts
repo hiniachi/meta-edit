@@ -380,7 +380,17 @@ function checkPathSafety(
       error: `path "${p}" is absolute; must be repository-relative`,
     };
   }
-  const norm = normalizeRepoRelative(p);
+  let norm: string;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch (err) {
+    // normalizeRepoRelative throws on NUL bytes (a4-02) — surface as a
+    // structured error rather than an unhandled exception.
+    return {
+      ok: false,
+      error: `path "${p}" is invalid: ${(err as Error).message}`,
+    };
+  }
   if (norm.length === 0) {
     return { ok: false, error: "path is empty after normalization" };
   }
