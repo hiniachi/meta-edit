@@ -7,6 +7,7 @@ import {
   runInstallHooks,
   runUninstallHooks,
 } from "./cli/hooks-cmd.js";
+import { VERSION } from "./version.js";
 
 async function main(argv: string[]): Promise<number> {
   const [, , subcommand, ...rest] = argv;
@@ -22,7 +23,7 @@ async function main(argv: string[]): Promise<number> {
 
     case "--version":
     case "-v":
-      out.write("meta-edit 0.1.1\n");
+      out.write(`meta-edit ${VERSION}\n`);
       return 0;
 
     case "serve":
@@ -83,7 +84,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 function printHelp(): void {
-  process.stdout.write(`meta-edit 0.1.1
+  process.stdout.write(`meta-edit ${VERSION}
 
 Usage:
   meta-edit serve                          Run the MCP stdio server.

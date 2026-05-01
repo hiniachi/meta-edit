@@ -1,6 +1,6 @@
 {
   "name": "meta-edit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Replaces raw Edit / Write / MultiEdit with eighteen kind-specific edit_* MCP tools that encode the testing obligations for each kind of change directly in their tool descriptions.",
   "author": {
     "name": "nia",

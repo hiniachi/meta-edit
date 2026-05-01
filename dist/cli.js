@@ -18292,6 +18292,18 @@ function cleanupTemp(p) {
 // src/state/edit-log.ts
 import * as fs3 from "node:fs";
 import * as path3 from "node:path";
+var EditLogEntrySchema = exports_external.object({
+  edit_id: exports_external.string(),
+  timestamp: exports_external.string(),
+  tool_name: exports_external.string(),
+  target_file: exports_external.string(),
+  rationale: exports_external.string(),
+  risk_level: RiskLevelSchema,
+  test_files: exports_external.array(exports_external.string()),
+  patch_size_bytes: exports_external.number(),
+  applied: exports_external.boolean(),
+  warnings: exports_external.array(exports_external.string())
+});
 var EDIT_ID_RE = /^edit_(\d{8})_(\d{4,})$/;
 
 class EditLog {
@@ -18349,9 +18361,16 @@ class EditLog {
       const trimmed = line.trim();
       if (trimmed.length === 0)
         continue;
+      let parsed;
       try {
-        out.push(JSON.parse(trimmed));
-      } catch {}
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      const validated = EditLogEntrySchema.safeParse(parsed);
+      if (validated.success) {
+        out.push(validated.data);
+      }
     }
     return out;
   }
@@ -18416,6 +18435,64 @@ function formatDayKey(d) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
+// package.json
+var package_default = {
+  name: "@hiniachi/meta-edit",
+  version: "0.1.2",
+  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  license: "MIT",
+  author: "nia <nia@yukinofurumachi.com>",
+  type: "module",
+  bin: {
+    "meta-edit": "dist/cli.js",
+    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+  },
+  main: "./dist/server.js",
+  files: [
+    "dist/",
+    "docs/SPEC.md",
+    ".claude-plugin/",
+    "hooks/",
+    "README.md",
+    "LICENSE"
+  ],
+  scripts: {
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    test: "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    typecheck: "tsc --noEmit",
+    start: "bun run src/cli.ts"
+  },
+  engines: {
+    node: ">=20"
+  },
+  dependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    diff: "^9",
+    zod: "^3.23.0"
+  },
+  devDependencies: {
+    "@types/bun": "^1.3.13",
+    "@types/diff": "^8",
+    "@types/node": "^22.0.0",
+    typescript: "^5.6.0"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hiniachi/meta-edit.git"
+  },
+  keywords: [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+};
+
+// src/version.ts
+var VERSION = package_default.version;
 
 // src/server.ts
 function createServer(options = {}) {
@@ -18429,7 +18506,7 @@ function createServer(options = {}) {
   });
   const server = new Server({
     name: "meta-edit",
-    version: "0.1.1"
+    version: VERSION
   }, {
     capabilities: {
       tools: {}
@@ -18896,7 +18973,7 @@ async function main(argv) {
       return 0;
     case "--version":
     case "-v":
-      out.write(`meta-edit 0.1.1
+      out.write(`meta-edit ${VERSION}
 `);
       return 0;
     case "serve":
@@ -18956,7 +19033,7 @@ async function main(argv) {
   }
 }
 function printHelp() {
-  process.stdout.write(`meta-edit 0.1.1
+  process.stdout.write(`meta-edit ${VERSION}
 
 Usage:
   meta-edit serve                          Run the MCP stdio server.
@@ -18980,4 +19057,4 @@ main(process.argv).then((code) => {
   process.exit(1);
 });
 
-//# debugId=E5E98E3AFACF7F4E64756E2164756E21
+//# debugId=CC405D578124C57064756E2164756E21
