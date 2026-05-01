@@ -1457,44 +1457,52 @@ describe("evaluateBashCommand — issue #31 /dev/fd alias bypass", () => {
   });
 });
 
-describe("evaluateBashCommand — dogfood-001 in-repo redirect deny", () => {
-  // Pre-fix: only specific verbs were enumerated as deny patterns
-  // (cat >, sed -i, mv, ...). printf, echo, jq, and any future write
-  // verb fell through to allow when the redirect target was an in-repo
-  // path. The structural fix denies any `>` / `>>` / `>|` whose target
-  // is not on the safe-sink allowlist.
+describe("evaluateBashCommand — dogfood-001 in-repo redirect (warn since v0.1.5)", () => {
+  // Pre-v0.1.5: redirects whose target was outside the safe-sink
+  // allowlist (/dev/null, /tmp/, /var/tmp/, /run/, /sys/) were denied
+  // outright. v0.1.5 loosened that to a structured warn (SPEC §5.2):
+  // the verb-denylist (cat >, sed -i, tee, mv, dd of=, ...) keeps
+  // well-known bypasses on deny, and protected-path writes
+  // (.meta-edit/state/**, .meta-edit/tmp/**) are still denied earlier.
+  // The remaining case — an unenumerated write verb (printf, echo, jq
+  // --rawfile, future utilities) redirecting outside the safe sinks —
+  // is permitted with a permissionDecisionReason nudging toward an
+  // edit_* tool.
 
-  it("denies printf > test-playground/ (the dogfood-001 reproduction)", () => {
+  it("warns on printf > test-playground/ (the dogfood-001 reproduction)", () => {
     const r = evaluateBashCommand('printf "%s" leak > test-playground/sample.ts');
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("safe-sink allowlist");
+    expect(r.reason).toContain("edit_*");
   });
 
-  it("denies echo > out.log (relative in-repo target)", () => {
+  it("warns on echo > out.log (relative in-repo target)", () => {
     expect(
       evaluateBashCommand("echo hello > out.log").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
-  it("denies printf >> append to in-repo path", () => {
+  it("warns on printf >> append to in-repo path", () => {
     expect(
       evaluateBashCommand("printf x >> notes.md").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
-  it("denies noclobber-override >| to in-repo path", () => {
+  it("warns on noclobber-override >| to in-repo path", () => {
     expect(
       evaluateBashCommand("printf x >| notes.md").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
-  it("denies redirect to absolute path outside the safe-sink list", () => {
-    // /home/user/repo/x is not on the safe prefixes (/tmp, /var/tmp,
-    // /run, /sys), so it is denied even though it is absolute. This
-    // matches the existing isInRepoWriteTarget contract.
+  it("warns on redirect to absolute path outside the safe-sink list", () => {
+    // /home/user/something.txt is not on the safe prefixes (/tmp,
+    // /var/tmp, /run, /sys). Pre-v0.1.5 this was deny; v0.1.5 surfaces
+    // it as warn. The verb-denylist still catches the well-known
+    // bypasses (`cat >`, `sed -i`, `tee`, ...), so allowing this case
+    // is the targeted false-positive relief documented in SPEC §5.2.
     expect(
       evaluateBashCommand("printf x > /home/user/something.txt").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
   it("allows printf > /dev/null (safe exact target)", () => {
@@ -1522,10 +1530,84 @@ describe("evaluateBashCommand — dogfood-001 in-repo redirect deny", () => {
 
   it("allows 2>&1 fd-duplication without misreading as redirect", () => {
     // `2>&1` is fd duplication, not a write redirect. Must not trip the
-    // in-repo deny.
+    // structural-redirect warn.
     expect(
       evaluateBashCommand("bun test 2>&1 | head").decision,
     ).toBe("allow");
+  });
+
+  // ---- v0.1.5 regression guards: warn must not weaken adjacent denies ----
+
+  it("still denies printf > .meta-edit/state/edits.jsonl (protected path)", () => {
+    // touchesProtectedPathTokenized fires before the structural redirect
+    // check. Even with the latter loosened to warn, audit-log tampering
+    // remains deny.
+    const r = evaluateBashCommand(
+      "printf hi > .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain(".meta-edit");
+  });
+
+  it("still denies echo >> .meta-edit/tmp/x (protected tmp path)", () => {
+    const r = evaluateBashCommand("echo hi >> .meta-edit/tmp/scratch");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still denies cat > src/foo.ts (verb-denylist hit)", () => {
+    // DENY_SUBSTRINGS "cat >" still fires before the structural redirect
+    // warn. Verb-side semantics are unchanged.
+    const r = evaluateBashCommand("cat > src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still denies sed -i s/x/y/ src/foo.ts (verb-denylist hit)", () => {
+    expect(
+      evaluateBashCommand("sed -i s/x/y/ src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("still denies tee src/foo.ts (verb-denylist hit)", () => {
+    expect(
+      evaluateBashCommand("echo hi | tee src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("warns on bash -c \"printf x > src/foo.ts\" (warn propagates from shell-hosted recursion)", () => {
+    // Shell-hosted recursion now propagates `warn` (not just `deny`).
+    // The inner segment redirects to an in-repo path; the outer hosted
+    // wrapper has nothing else to deny on, so the outer surfaces warn.
+    const r = evaluateBashCommand('bash -c "printf x > src/foo.ts"');
+    expect(r.decision).toBe("warn");
+    expect(r.reason).toContain("safe-sink");
+  });
+
+  it("denies bash -c \"sed -i s/x/y/ src/foo.ts\" (verb-deny inside hosted payload still wins)", () => {
+    // Shell-hosted recursion: inner DENY_SUBSTRINGS hit overrides any
+    // outer warn. The deny-wins-over-warn rule is the load-bearing
+    // invariant of the warn refactor.
+    const r = evaluateBashCommand('bash -c "sed -i s/x/y/ src/foo.ts"');
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("sed -i");
+  });
+
+  it("denies bash -c \"printf x > .meta-edit/state/edits.jsonl\" (protected-path inside hosted payload still wins over warn)", () => {
+    const r = evaluateBashCommand(
+      'bash -c "printf x > .meta-edit/state/edits.jsonl"',
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain(".meta-edit");
+  });
+
+  it("denies a chain of (warn-segment ; verb-deny segment) — deny wins across segments", () => {
+    // `printf > out.log` alone would warn; `sed -i ...` alone denies.
+    // Combined: top-level segment iteration must surface deny (the
+    // warn cannot whitewash a downstream deny).
+    const r = evaluateBashCommand(
+      "printf x > out.log ; sed -i s/x/y/ src/foo.ts",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("sed -i");
   });
 });
 
@@ -1588,25 +1670,33 @@ describe("evaluateBashCommand — dogfood-005 quote-aware scans", () => {
 describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
   // Bugs surfaced by the post-implementation subagent review and
   // pinned here so a future regression fails loudly.
+  //
+  // v0.1.5 note: cases that exercised the structural redirect-allowlist
+  // (printf to non-safe-sink targets) now surface as `warn` instead of
+  // `deny`. The path-normalization and CR/LF-detachment correctness
+  // properties (the actual things this block guards) are still
+  // verified — we just assert on `warn` rather than `deny`. Cases that
+  // exercise verb-deny or other scoped denies (e.g. mv after CR) keep
+  // their `deny` assertion.
 
-  it("denies safe-prefix-then-traversal target (/tmp/../in-repo)", () => {
-    // Lexical startsWith was bypassable: `/tmp/../home/user/meta-edit/...`
+  it("warns on safe-prefix-then-traversal target (/tmp/../in-repo)", () => {
+    // path-normalization correctness: `/tmp/../home/user/meta-edit/...`
     // literally starts with `/tmp/` but resolves OUTSIDE the safe sink.
-    // isInRepoWriteTarget now path.normalize()s the target before
-    // checking the prefix.
+    // isInRepoWriteTarget path.normalize()s before the prefix check, so
+    // the structural-redirect rule still fires (now as warn).
     expect(
       evaluateBashCommand(
         "printf x > /tmp/../home/user/something/foo.ts",
       ).decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
-  it("denies double-up-traversal from /var/tmp", () => {
+  it("warns on double-up-traversal from /var/tmp", () => {
     expect(
       evaluateBashCommand(
         "printf x > /var/tmp/../../home/user/foo.ts",
       ).decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
   it("still allows /tmp/foo (the post-normalize prefix check is unchanged for clean targets)", () => {
@@ -1615,26 +1705,27 @@ describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
     ).toBe("allow");
   });
 
-  it("denies CR-detached redirect target (printf x >\\rin-repo.ts)", () => {
+  it("warns on CR-detached redirect target (printf x >\\rin-repo.ts)", () => {
     // Pre-fix: primarySplitSegments treats `\r` as a segment boundary,
     // detaching the target from `>`. Post-fix: the redirect operator
     // pulls following \r/\n/U+2028/U+2029 into a normal space before
-    // segment splitting runs.
+    // segment splitting runs, so the structural-redirect rule still
+    // fires (now as warn).
     expect(
       evaluateBashCommand("printf x >\rsrc/foo.ts").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
-  it("denies LF-detached redirect target (printf x >\\nin-repo.ts)", () => {
+  it("warns on LF-detached redirect target (printf x >\\nin-repo.ts)", () => {
     expect(
       evaluateBashCommand("printf x >\nsrc/foo.ts").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
   it("still treats CR as a segment boundary outside the redirect-operator carve-out", () => {
     // `cargo fmt\rmv a b`: \r is NOT after a redirect operator, so the
-    // primary-split CR carve-out still applies and `mv` is denied.
-    // Pinning the carve-out's narrow scope.
+    // primary-split CR carve-out still applies and `mv` is denied via
+    // DENY_PREFIX_PATTERNS. Pinning the carve-out's narrow scope.
     expect(
       evaluateBashCommand("cargo fmt\rmv a b").decision,
     ).toBe("deny");
@@ -1673,11 +1764,13 @@ describe("evaluateBashCommand — Codex PR #42 review fixes", () => {
       expect(r.decision).toBe("deny");
     });
 
-    it("denies bash -c with redirect to in-repo path (not protected)", () => {
-      // The recursive evaluation also picks up the structural in-repo
-      // redirect deny inside the wrapper.
+    it("warns on bash -c with redirect to in-repo path (not protected)", () => {
+      // The recursive evaluation propagates the structural in-repo
+      // redirect signal inside the wrapper. v0.1.5: this is `warn`
+      // rather than `deny` (SPEC §5.2). Protected-path writes inside
+      // the wrapper still deny — see the cases above.
       const r = evaluateBashCommand('bash -c "printf x > src/foo.ts"');
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("still allows bash -c with redirect to /tmp", () => {

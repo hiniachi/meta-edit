@@ -16,7 +16,12 @@
 //     }
 //   }
 
-import { readStdin, replyAllow, replyDeny } from "./hook-runtime.js";
+import {
+  readStdin,
+  replyAllow,
+  replyAllowWithWarning,
+  replyDeny,
+} from "./hook-runtime.js";
 import { evaluateBashCommand } from "./bash-write-policy.js";
 
 async function main(): Promise<number> {
@@ -35,6 +40,11 @@ async function main(): Promise<number> {
   const decision = evaluateBashCommand(command, cwd ? { cwd } : {});
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-bash-write-bypass");
+  }
+  if (decision.decision === "warn") {
+    return replyAllowWithWarning(
+      decision.reason ?? "redirect target outside safe-sink allowlist",
+    );
   }
   return replyAllow();
 }

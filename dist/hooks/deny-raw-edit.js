@@ -79,6 +79,19 @@ function replyDeny(reason) {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
+function replyAllowWithWarning(reason) {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      permissionDecisionReason: reason
+    }
+  };
+  process.stdout.write(JSON.stringify(payload));
+  process.stderr.write(`[meta-edit] ${reason}
+`);
+  return 0;
+}
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
@@ -177,4 +190,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=22908B36786D1C5664756E2164756E21
+//# debugId=EFBD34B8E1E546FF64756E2164756E21

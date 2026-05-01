@@ -753,3 +753,88 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
   two promotion options (re-read before each rename, or
   advisory lockfile). Not blocking the v0.1.2 merge per project
   owner direction.
+
+## v0.1.5: redirect-target allowlist deny → warn
+
+- Completed: 2026-05-01
+- What works:
+  - `src/hooks/bash-write-policy.ts`: `HookDecision` extended with
+    `"warn"`. `evaluateBashCommand` now collects the first warn
+    across segments while still short-circuiting on any deny;
+    `evaluateSegment` captures shell-hosted-recursion warns and the
+    structural redirect-to-outside-safe-sink warn into a `firstWarn`
+    slot, and surfaces it only if no later deny check fires. The
+    `redirectsToInRepoPath` block previously returned
+    `decision: "deny"`; it now sets `firstWarn` to a
+    `decision: "warn"` with a reason that points the AI at
+    `edit_create_file` / `edit_refactor_only` and notes the
+    deny-restore possibility.
+  - `recursivelyEvaluateArg` now propagates both `deny` and `warn`
+    back to `evaluateShellHostedPayload`, so warns inside `bash -c`
+    / `eval` payloads reach the outer decision when no inner deny
+    was found.
+  - `src/hooks/hook-runtime.ts`: new `replyAllowWithWarning(reason)`
+    helper that writes
+    `{ permissionDecision: "allow", permissionDecisionReason }` on
+    stdout AND mirrors the same text on stderr (the stderr surface
+    is the load-bearing signal for human-in-the-loop visibility;
+    the JSON `reason` is the documented Claude Code surface).
+  - `src/hooks/deny-bash-write-bypass.ts`: dispatches `warn` to
+    `replyAllowWithWarning` and `deny` to `replyDeny` as before.
+  - SPEC §5.2 rewritten to document "Structural redirect-target
+    warn" in place of the deny semantics. SPEC §8 threat-model line
+    updated. SPEC §11 records the warn → deny restore as routine
+    upkeep, not a v0.2 classifier candidate.
+  - `OBSERVED-FAILURES.md` gains a "Phase 4 (deny-bash-write-bypass)
+    — v0.1.5 redirect-allowlist warn → deny restore candidate"
+    entry with three concrete restore triggers and a step-by-step
+    revert procedure.
+  - `CLAUDE.md` §3 in-scope bullet now references the warn-only
+    redirect surface and points at SPEC §5.2 / OBSERVED-FAILURES.
+- Known issues:
+  - The contract that `permissionDecision: "allow"` carries
+    `permissionDecisionReason` to the AI is host-dependent.
+    Claude Code currently surfaces it; if a future host elides it,
+    the stderr fallback in `replyAllowWithWarning` is the load-
+    bearing signal. Documented in `hook-runtime.ts`'s comment.
+  - This is a `edit_policy_change`-class change (loosens a
+    restriction). Rationale (per SPEC §11 / OBSERVED-FAILURES):
+    safe-sink allowlist had a structural false-positive surface on
+    legitimate redirects to outside-repo absolute paths
+    (`~/.cache/`, `$RUNNER_TEMP`, `/home/user/scratch/`); the
+    verb-denylist and protected-path checks remain on `deny`, so
+    the well-known bypasses (`cat >`, `sed -i`, `tee`, `mv`,
+    `dd of=`, heredoc-with-redirect, inline interpreter writes,
+    decode-and-execute) and `.meta-edit/state/**` /
+    `.meta-edit/tmp/**` writes are unchanged.
+- Tests added:
+  - `src/hooks/bash-write-policy.test.ts`: the dogfood-001 describe
+    block was renamed to "(warn since v0.1.5)" and its `deny`
+    assertions flipped to `warn` (with the reason still asserting
+    `"safe-sink allowlist"` and now also `"edit_*"`). New
+    regression guards inside the same block:
+    - `printf > .meta-edit/state/edits.jsonl` still `deny`
+      (protected-path scan precedes the structural redirect)
+    - `echo >> .meta-edit/tmp/x` still `deny`
+    - `cat > src/foo.ts` still `deny` (`DENY_SUBSTRINGS`)
+    - `sed -i s/x/y/ src/foo.ts` still `deny`
+    - `echo hi | tee src/foo.ts` still `deny`
+    - `bash -c "printf x > src/foo.ts"` now `warn` (warn
+      propagates from shell-hosted recursion)
+    - `bash -c "sed -i s/x/y/ src/foo.ts"` still `deny`
+      (verb-deny inside hosted payload wins over warn)
+    - `bash -c "printf x > .meta-edit/state/edits.jsonl"` still
+      `deny`
+    - `printf x > out.log ; sed -i s/x/y/ src/foo.ts` still `deny`
+      (deny wins across segments)
+  - `dogfood-001 self-review fixes` block: the path-normalization
+    cases (`/tmp/../in-repo`, `/var/tmp/../../home/...`) and the
+    CR/LF-detached-redirect cases now assert `warn`. The
+    CR-segment-boundary `cargo fmt\rmv a b` case stays `deny`.
+  - `Codex PR #42` P1-1 block: the
+    `bash -c "printf x > src/foo.ts"` case flipped from `deny` to
+    `warn`. The protected-path-write-inside-hosted-payload cases
+    stay `deny`.
+- Spec deviations: none. SPEC and code stay in lockstep per
+  CLAUDE.md §4.
+  owner direction.

@@ -52,3 +52,36 @@ export function replyDeny(reason: string): number {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
+
+// "Allow with a structured warning". Emits permissionDecision = "allow"
+// (so Claude Code does not block the call) plus a permissionDecisionReason
+// carrying the warning text, AND mirrors the same text to stderr. The
+// dual surface is intentional:
+//
+//   - permissionDecisionReason: the documented field for surfacing a
+//     hook's rationale to the agent. Whether Claude Code feeds the reason
+//     back to the model on `allow` (vs only on `deny`/`ask`) is host-
+//     dependent — empirically this works in current Claude Code, but if
+//     a future host elides it, the stderr fallback below still reaches
+//     the user via the hook transcript.
+//
+//   - stderr: Claude Code captures hook stderr into the visible
+//     transcript, so a human reviewer sees the warning even if the agent
+//     does not. This is the load-bearing surface for human-in-the-loop
+//     correctness.
+//
+// Used by deny-bash-write-bypass for the structural redirect-to-outside-
+// safe-sink case (SPEC §5.2, v0.1.5+). See bash-write-policy.ts for the
+// rationale for warn instead of deny on that surface.
+export function replyAllowWithWarning(reason: string): number {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      permissionDecisionReason: reason,
+    },
+  };
+  process.stdout.write(JSON.stringify(payload));
+  process.stderr.write(`[meta-edit] ${reason}\n`);
+  return 0;
+}

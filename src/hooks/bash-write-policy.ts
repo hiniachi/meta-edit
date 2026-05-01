@@ -12,8 +12,17 @@
 //      allowlist pattern.
 //   2. If the command matches any allowlist pattern (formatter, codegen),
 //      it is allowed.
-//   3. If the command matches any deny pattern, it is denied.
-//   4. Otherwise the command is allowed.
+//   3. If the command matches any deny pattern (verb denylist /
+//      DENY_SUBSTRINGS / heredoc-with-redirect / dangerous tee / dd-of=
+//      / inline interpreter writes / decode-and-execute), it is denied.
+//   4. If the command structurally redirects (`>` / `>>` / `>|`) to a
+//      target outside the safe-sink allowlist (/dev/null, /tmp/,
+//      /var/tmp/, /run/, /sys/), it is WARNED — allowed but with a
+//      `permissionDecisionReason` nudging the AI toward an edit_* tool.
+//      This was deny in v0.1.4 and prior; loosened in v0.1.5 (SPEC §5.2)
+//      because the safe-sink allowlist had a structural false-positive
+//      surface on legitimate redirects to outside-repo absolute paths.
+//   5. Otherwise the command is allowed.
 //
 // The allowlist exists because formatters and code generators are part of
 // normal development workflows. They are conventionally semantic-
@@ -24,8 +33,13 @@ import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
 import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
 
+// `warn` is allow-with-message: the hook does not block the command but
+// emits a `permissionDecisionReason` so the AI sees a structured nudge
+// toward an `edit_*` tool. Currently only the structural redirect-to-
+// outside-safe-sink check produces warn (SPEC §5.2). `deny` always wins
+// over `warn` when both fire on the same command.
 export type HookDecision = {
-  decision: "allow" | "deny";
+  decision: "allow" | "deny" | "warn";
   reason?: string;
 };
 
@@ -223,12 +237,17 @@ export function evaluateBashCommand(
     return { decision: "allow" };
   }
 
+  let firstWarn: HookDecision | null = null;
   for (const segment of segments) {
     const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
+    if (decision.decision === "warn" && firstWarn === null) {
+      firstWarn = decision;
+    }
   }
+  if (firstWarn !== null) return firstWarn;
   return { decision: "allow" };
 }
 
@@ -346,27 +365,48 @@ function evaluateSegment(
   //   P1-1: protected-path writes inside shell-hosted payloads
   //         (`bash -c "printf x > .meta-edit/state/..."`)
   //   P1-2: wrapper-prefixed eval (`sudo eval "..."`, `env eval "..."`)
-  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
-  if (hostedDeny !== null) {
-    return hostedDeny;
+  // `warn` from the recursion is held on `firstWarn` so a later deny
+  // check on the same outer segment still wins; if nothing else denies,
+  // the inner warn surfaces at the end of the function.
+  let firstWarn: HookDecision | null = null;
+  const hosted = evaluateShellHostedPayload(rawSegment, opts);
+  if (hosted !== null) {
+    if (hosted.decision === "deny") return hosted;
+    if (hosted.decision === "warn") firstWarn = hosted;
   }
 
-  // dogfood-001 + dogfood-005: structural deny for any `>` / `>>` / `>|`
+  // dogfood-001 + dogfood-005: structural WARN for any `>` / `>>` / `>|`
   // redirect whose target is not on the documented safe-sink allowlist
   // (/dev/null, /dev/std{out,err}, /dev/zero, /tmp/, /var/tmp/, /run/,
   // /sys/). Replaces the per-verb deny enumeration that left holes for
-  // every new write verb (printf, echo, jq with --rawfile, ...). Reading
-  // from any source, redirecting to a safe sink remains allowed; redirect
-  // targets that resolve in-repo (relative paths) or to arbitrary
-  // absolute paths outside the safe-sink list are denied.
-  if (redirectsToInRepoPath(rawSegment)) {
-    return {
-      decision: "deny",
+  // every new write verb (printf, echo, jq with --rawfile, ...).
+  //
+  // Loosened from `deny` to `warn` in v0.1.5 (SPEC §5.2): the verb-
+  // denylist (DENY_SUBSTRINGS / DENY_VERBS / DENY_PREFIX_PATTERNS) keeps
+  // the well-known bypasses (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`,
+  // ...) on `deny`, and protected-path writes (.meta-edit/state/**,
+  // .meta-edit/tmp/**) are still denied earlier in this function via
+  // touchesProtectedPathTokenized + redirectsToProtected. The remaining
+  // case — an unenumerated write verb (`printf`, `echo`, `jq --rawfile`,
+  // future utilities) redirecting to an in-repo or arbitrary absolute
+  // path — is permitted with a `permissionDecisionReason` so the AI is
+  // nudged toward an edit_* tool but the redirect is not blocked.
+  // Background: the safe-sink allowlist had a structural false-positive
+  // surface on legitimate redirects to outside-repo absolute paths
+  // (`~/.cache/`, `$RUNNER_TEMP`, `/home/user/scratch/`); deny→warn is
+  // the smallest change that removes that surface while keeping verb-
+  // and protected-path denies intact. See OBSERVED-FAILURES.md for
+  // the deny-restore trigger.
+  if (redirectsToInRepoPath(rawSegment) && firstWarn === null) {
+    firstWarn = {
+      decision: "warn",
       reason:
-        "command redirects (`>` / `>>` / `>|`) to a path that is not on " +
-        "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
-        "/sys/). Use an edit_* tool for in-repo writes; capture command " +
-        "output to /tmp/ or /dev/null if you need a sink.",
+        "command redirects (`>` / `>>` / `>|`) to a path outside the " +
+        "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
+        "/sys/). For in-repo writes prefer an edit_* tool (e.g. " +
+        "edit_create_file, edit_refactor_only); this redirect is " +
+        "permitted but is recorded as a bypass-risk and may be " +
+        "tightened to deny in a future version.",
     };
   }
 
@@ -454,6 +494,9 @@ function evaluateSegment(
     };
   }
 
+  // No deny matched. If the structural redirect-warn (or a recursed warn
+  // from a shell-hosted payload) was captured earlier, surface it now.
+  if (firstWarn !== null) return firstWarn;
   return { decision: "allow" };
 }
 
@@ -1481,7 +1524,10 @@ function recursivelyEvaluateArg(
   // escape forms are handled there.
   const deEscaped = arg.replace(/\\/g, "");
   const decision = evaluateBashCommand(deEscaped, opts);
-  return decision.decision === "deny" ? decision : null;
+  if (decision.decision === "deny" || decision.decision === "warn") {
+    return decision;
+  }
+  return null;
 }
 
 // Peel WRAPPER_VERBS and env assignments off the head, then check whether

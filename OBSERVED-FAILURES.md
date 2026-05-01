@@ -16,6 +16,85 @@ gaps were both resolved in v0.1.2 PR B and PR C respectively;
 their entries now live under "Resolved (promoted to MVP)" below. -->
 
 
+## Phase 4 (deny-bash-write-bypass) — v0.1.5 redirect-allowlist warn → deny restore candidate
+
+v0.1.5 loosened the structural redirect-target check from `deny` to
+`warn` (SPEC §5.2). Pre-v0.1.5: any `>` / `>>` / `>|` whose target was
+not on the safe-sink allowlist (`/dev/null`, `/dev/stdout`,
+`/dev/stderr`, `/dev/zero`, `/tmp/`, `/var/tmp/`, `/run/`, `/sys/`)
+was denied outright. Post-v0.1.5: the same structural rule emits
+`permissionDecision: "allow"` plus a `permissionDecisionReason`
+nudging the AI toward an `edit_*` tool, and mirrors the message on
+stderr for human-in-the-loop visibility. The verb-denylist
+(`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, heredoc-with-redirect,
+inline interpreter writes, decode-and-execute), the protected-path
+checks (`.meta-edit/state/**`, `.meta-edit/tmp/**`), and the
+shell-hosted recursion deny remain on `deny`. `deny` always wins
+over `warn` when both fire on the same command.
+
+The reason for the loosening: the redirect-target allowlist had a
+structural false-positive surface on legitimate redirects to outside-
+repo absolute paths (`~/.cache/...`, `$RUNNER_TEMP`,
+`/home/user/scratch/...`, etc.). These had no safe-sink entry and
+were uniformly denied, costing real friction in development workflows
+that are not the design's actual concern (in-repo writes via typed
+tools).
+
+### Restore trigger (warn → deny)
+
+Restore the deny when *any* of the following hold:
+
+1. **Edit log signal**: an analysis of edit logs across multiple
+   sessions shows that unenumerated write verbs (`printf > foo.ts`,
+   `echo > out.log`, `jq --rawfile ... > fixtures/x.json`, etc.) are
+   being routed around the typed tools at non-trivial frequency
+   (>5% of bash-write-bypass warnings turn into actual in-repo writes
+   the AI then doesn't follow up with a typed tool).
+2. **Review signal**: code reviews on PRs produced by AI sessions
+   repeatedly find `bash-write-bypass` warnings in the transcript
+   that the AI ignored (i.e., the warn surface is being treated as
+   a green light rather than a yellow one).
+3. **Protocol signal**: a future Claude Code release stops surfacing
+   `permissionDecisionReason` for `allow` decisions, leaving stderr
+   as the only carrier. If the stderr surface alone proves
+   insufficient (AI does not consume stderr in tool results), the
+   warn route is no longer effective and should revert to deny.
+
+### Restore procedure
+
+1. `src/hooks/bash-write-policy.ts`:
+   - In `evaluateSegment`, change the `redirectsToInRepoPath` block
+     from `decision: "warn"` back to `decision: "deny"` and revert
+     the `firstWarn = ...` capture to an early `return`.
+   - Remove the `firstWarn` plumbing in `evaluateBashCommand` and
+     `evaluateSegment` if no other warn-emitting check exists.
+   - Keep `recursivelyEvaluateArg` propagating `warn` only if a
+     warn-emitting check still exists upstream; otherwise simplify
+     it back to deny-only.
+   - Optionally remove the `"warn"` member from `HookDecision`.
+2. `src/hooks/deny-bash-write-bypass.ts`: drop the `decision === "warn"`
+   branch and the `replyAllowWithWarning` import.
+3. `src/hooks/hook-runtime.ts`: keep `replyAllowWithWarning` only if
+   another future warn surface uses it; delete otherwise.
+4. `src/hooks/bash-write-policy.test.ts`:
+   - Re-flip the `dogfood-001 in-repo redirect (warn since v0.1.5)`
+     describe back to `deny`.
+   - Re-flip the affected cases in `dogfood-001 self-review fixes`
+     and the `P1-1: protected-path writes inside shell-hosted
+     payloads` block (the `bash -c "printf x > src/foo.ts"` test).
+   - Drop the v0.1.5-specific regression guards that no longer
+     apply.
+5. `docs/SPEC.md`: revert §5.2's "Structural redirect-target warn"
+   subsection back to the v0.1.4 deny wording, plus the threat-model
+   line in §8 and the upkeep note in §11.
+6. `OBSERVED-FAILURES.md`: move this entry to "Resolved (promoted to
+   MVP)" with the trigger that fired.
+
+If only the *structural* redirect rule is restored to deny while
+some other warn surface (e.g. a future "soft policy" channel)
+remains, keep the `warn` decision member and the runtime helper
+even if the bash hook no longer uses it; the cost is one branch.
+
 ## Phase 8 (apply) residual gaps
 
 ### MEDIUM: Phase-1 read vs Phase-3 rename TOCTOU on the content-pair flow
