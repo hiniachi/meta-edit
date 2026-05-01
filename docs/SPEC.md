@@ -98,6 +98,17 @@ type EditToolResult = {
   applied: boolean;
   edit_id: string;                            // e.g. "edit_20260427_0001"
   warnings: string[];
+  audit_error?: string;                       // Present whenever an audit-log
+                                              // write fails (validation-
+                                              // rejection or post-apply).
+                                              // The caller MUST check
+                                              // `applied` for apply status;
+                                              // `audit_error` indicates only
+                                              // that the audit trail is
+                                              // incomplete for this edit_id.
+                                              // Distinguishes audit-log
+                                              // failures from validation
+                                              // warnings.
 };
 ```
 

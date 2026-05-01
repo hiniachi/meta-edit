@@ -127,6 +127,56 @@ describe("makeApplyingHandler", () => {
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe("DRIFTED\n");
   });
 
+  it("surfaces audit_error post-apply even when applyChanges returns applied=false", async () => {
+    // Round-4 (defect 1): the runtime always appends an audit record after
+    // applyChanges runs, regardless of result.applied (stale old_content
+    // returns applied:false but the attempt is still meaningful and
+    // audited). If that post-apply append fails, callers MUST get the
+    // audit_error signal — `applied` alone does not gate audit-trail
+    // completeness.
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "DRIFTED\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tests/foo.test.ts"), "test\n", "utf8");
+
+    const failingLog = {
+      nextEditId: () => "edit_20260430_0001",
+      append: () => {
+        const err = new Error("simulated EROFS") as NodeJS.ErrnoException;
+        err.code = "EROFS";
+        throw err;
+      },
+    };
+
+    const handler = makeApplyingHandler({
+      ctx: { repoRoot: tmpRoot },
+      log: failingLog,
+      applyChanges,
+      now: fixedNow,
+    });
+
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "stale content + audit failure",
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+      changes: [
+        // Stale: disk has "DRIFTED\n" but request says "alpha\n".
+        // applyChanges returns applied:false, then log.append throws.
+        { file: "src/foo.ts", old_content: "alpha\n", new_content: "beta\n" },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("EROFS");
+    expect(result.audit_error).toContain("edit_20260430_0001");
+    // Disk untouched (apply rejected on stale check) — but audit_error fires.
+    expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
+      "DRIFTED\n",
+    );
+  });
+
   it("does not throw if log.append fails after a successful apply", async () => {
     fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(tmpRoot, "src/foo.ts"), "alpha\n", "utf8");
@@ -163,20 +213,30 @@ describe("makeApplyingHandler", () => {
 
     expect(appendCalls).toBe(1);
     expect(result.applied).toBe(true);
+    // Issue 029 (a7-04): log-append failures now surface on the structured
+    // `audit_error` field, not buried inside `warnings`. The `warnings` array
+    // is reserved for routine validation/apply notices so callers can
+    // distinguish audit-trail gaps from validation issues without string
+    // matching.
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("failed to append edit log");
+    expect(result.audit_error).toContain("ENOSPC");
+    expect(result.audit_error).toContain("audit record may be missing");
     expect(
-      result.warnings.some(
-        (w) =>
-          w.includes("failed to append edit log") &&
-          w.includes("ENOSPC") &&
-          w.includes("audit record may be missing"),
-      ),
-    ).toBe(true);
+      result.warnings.some((w) => w.includes("failed to append edit log")),
+    ).toBe(false);
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
       "beta\n",
     );
   });
 
-  it("does not throw if log.append fails on a validation rejection", async () => {
+  it("surfaces audit_error when log.append fails on a validation rejection", async () => {
+    // Round-4 (defect 2): previously the rejection-record audit-append error
+    // was silently discarded. If `.meta-edit/state` is write-restricted, the
+    // rejection event vanished from the audit log with NO caller signal —
+    // a security hole. The unified `audit_error` semantics surface the
+    // failure regardless of apply outcome; callers inspect `applied`
+    // separately to determine whether bytes hit disk.
     const failingLog = {
       nextEditId: () => "edit_20260430_0001",
       append: () => {
@@ -205,11 +265,15 @@ describe("makeApplyingHandler", () => {
 
     expect(result.applied).toBe(false);
     expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
+    // The audit failure for the rejection record is now surfaced.
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("failed to append edit log");
+    expect(result.audit_error).toContain("EACCES");
+    expect(result.audit_error).toContain("edit_20260430_0001");
+    // warnings remain reserved for validation/apply notices, never log failures.
     expect(
-      result.warnings.some(
-        (w) => w.includes("failed to append edit log") && w.includes("EACCES"),
-      ),
-    ).toBe(true);
+      result.warnings.some((w) => w.includes("failed to append edit log")),
+    ).toBe(false);
   });
 
   it("logs patch_size_bytes=0 on validation failure (no diff synthesis on rejected requests)", async () => {

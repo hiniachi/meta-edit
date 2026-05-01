@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   MAX_CHANGE_BYTES,
+  makeApplyingHandler,
   validateRequest,
+  type ApplyChangesFn,
   type Change,
+  type EditLogLike,
   type EditToolRequest,
   type ValidationContext,
 } from "./common.js";
@@ -46,6 +49,51 @@ describe("validateRequest", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.warnings.some((w) => w.includes("rationale"))).toBe(true);
+      }
+    });
+
+    // Issue 019 (a5-02): the test above only checks substring "rationale".
+    // The two below pin the exact warning string and the exact-count shape
+    // so a future rename or accidental control-flow change is caught.
+    it("emits exactly one warning for whitespace-only rationale when all other fields are valid", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({ rationale: "   " }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        // Pin the exact warning message so renames are caught.
+        expect(r.warnings).toContain("rationale must be non-empty");
+        // Only one warning must be present: the rationale warning.
+        // If downstream checks also fire for an otherwise-valid request,
+        // the warnings array will be longer and this assertion catches it.
+        expect(r.warnings).toHaveLength(1);
+      }
+    });
+
+    it("emits rationale warning and continues to accumulate other warnings (does not early-return)", () => {
+      // validateRequest does NOT early-return after the rationale check.
+      // Confirm that a request with both a blank rationale AND an invalid
+      // target_file produces both warnings — verifying the documented
+      // behaviour that validation accumulates multiple errors in one pass.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          rationale: "   ",
+          target_file: "../outside.ts",
+          changes: [makeChange("../outside.ts")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some((w) => w.includes("rationale must be non-empty")),
+        ).toBe(true);
+        expect(
+          r.warnings.some((w) => w.includes("escapes repository root")),
+        ).toBe(true);
       }
     });
   });
@@ -394,6 +442,103 @@ describe("validateRequest", () => {
       }
     });
 
+    // Issue 020 (a5-03): the existing test above pins string-identical
+    // duplicates only. The case below covers two changes whose paths
+    // canonicalize to the same physical file via embedded dot-segments
+    // ("src/./foo.ts" vs "src/foo.ts"). path.resolve folds the dot
+    // segment so both entries surface as the same canonical and the
+    // duplicate guard fires. Either that guard or the scope guard must
+    // reject; ok:true is unacceptable because applyChanges would then
+    // catch the duplicate at apply time with an "internal error"
+    // assertion instead of a clean validation rejection.
+    it("rejects a request with two changes that resolve to the same canonical via path normalization", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/./foo.ts", "alpha", "beta"),
+          ],
+        }),
+        ctx,
+      );
+      // Either the duplicate-canonical guard fires (paths normalized
+      // identically) or the scope guard fires (paths not normalized,
+      // "src/./foo.ts" not in allowed set). Either is acceptable; what
+      // is NOT acceptable is ok:true.
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("foo.ts") &&
+              (w.includes("multiple entries") || w.includes("scope")),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    // a5-03 strengthen: cover `../` dot-dot segment normalization.
+    // "src/nested/../foo.ts" and "src/foo.ts" both resolve to the same
+    // canonical via path.resolve, so the duplicate-canonical guard must fire.
+    it("rejects two changes that alias the same file via ../ dot-dot segments", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/nested/../foo.ts", "alpha", "beta"),
+          ],
+        }),
+        ctx,
+      );
+      // path.resolve folds "src/nested/../foo.ts" → "src/foo.ts" so both
+      // canonicals match. The duplicate-canonical guard (not the scope guard)
+      // must fire: both entries map to the same canonical "src/foo.ts", which
+      // IS in the allowed set, so the scope guard would pass them — only the
+      // duplicate-canonical guard can catch this alias.
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("multiple entries") && w.includes("foo.ts"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("duplicate-canonical guard fires before applyChanges internal assertion", () => {
+      // If validateRequest lets through duplicate canonicals, applyChanges
+      // catches them as an internal-error assertion (apply.ts:100-104).
+      // This pins the rejection at validation time, not apply time.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/foo.ts", "beta", "gamma"),
+          ],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) => w.includes("multiple entries") && w.includes("src/foo.ts"),
+          ),
+        ).toBe(true);
+        // Must NOT come from applyChanges' defensive assertion — that would
+        // mean the rejection slipped past validateRequest.
+        expect(r.warnings.every((w) => !w.includes("internal error"))).toBe(true);
+      }
+    });
+
     it("accepts a change touching target_file and listed test_files", () => {
       const r = validateRequest(
         "edit_boundary_condition",
@@ -612,5 +757,146 @@ describe("validateRequest with real filesystem (symlink)", () => {
     } finally {
       fs.unlinkSync(loopPath);
     }
+  });
+});
+
+// Issue 029 (a7-04): when log.append throws, the failure must surface as a
+// structured `audit_error` field on the response — not be silently merged into
+// `warnings` (which carries routine validation notices). Mixing the two
+// signals destroys audit integrity: a caller cannot distinguish between
+// "applied edit + clean log" and "applied edit + missing audit record".
+describe("appendLogSafely audit-integrity", () => {
+  let repoRoot: string;
+
+  beforeAll(() => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-logfail-"));
+    fs.writeFileSync(path.join(repoRoot, "src.ts"), "const x = 1;\n", "utf8");
+  });
+  afterAll(() => {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  /** Fake log whose append always throws the supplied error. */
+  function makeFailingLog(error: Error): EditLogLike {
+    let callCount = 0;
+    return {
+      nextEditId(_now?: Date): string {
+        return `edit_20260501_${String(++callCount).padStart(4, "0")}`;
+      },
+      append(_entry): void {
+        throw error;
+      },
+    };
+  }
+
+  /** Fake applyChanges that reports success without touching disk. */
+  const noopApply: ApplyChangesFn = (_repoRoot, _changes) => ({
+    applied: true,
+    warnings: [],
+    touchedAbsolutePaths: [],
+  });
+
+  function logFailRequest(): EditToolRequest {
+    return {
+      target_file: "src.ts",
+      rationale: "tighten guard",
+      risk_level: "low",
+      test_files: ["tests/src.test.ts"],
+      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
+    };
+  }
+
+  it("response.audit_error is set with the disk-full message when log.append throws", async () => {
+    const diskFullError = Object.assign(new Error("disk full"), {
+      code: "ENOSPC",
+    });
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+    expect(result.applied).toBe(true);
+
+    // The structured contract: a typed `audit_error` field, distinct from
+    // routine validation warnings. Callers and monitoring tools can react
+    // to log failures without string-matching the warnings array.
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toMatch(/disk full/);
+    expect(result.audit_error).toMatch(/ENOSPC/);
+    expect(result.audit_error).toMatch(/edit_20260501_0001/);
+  });
+
+  it("response.warnings does NOT mix log-failure with validation warnings", async () => {
+    const diskFullError = new Error("disk full");
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+
+    // After the fix, log errors live in `audit_error`, not `warnings`. A caller
+    // using `response.warnings.length === 0` to check "clean" edits is no
+    // longer misled when there is a log failure.
+    expect(result.warnings.length).toBe(0);
+    expect(result.audit_error).toMatch(/disk full/);
+  });
+
+  it("response.audit_error is absent (undefined) when log.append succeeds", async () => {
+    const ctx: ValidationContext = { repoRoot };
+    const okLog: EditLogLike = {
+      nextEditId(): string {
+        return "edit_20260501_0099";
+      },
+      append(_entry): void {
+        /* succeed */
+      },
+    };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: okLog,
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+    expect(result.applied).toBe(true);
+    expect(result.audit_error).toBeUndefined();
+  });
+
+  // Round-4 (defect 2): audit_error is also surfaced on validation-rejection
+  // paths. Previously the rejection-record audit append silently discarded
+  // its error, leaving callers blind to audit-log unavailability. The
+  // unified contract is "an audit-log write failed for this request",
+  // independent of apply outcome.
+  it("response.audit_error is set when log.append throws on validation rejection", async () => {
+    const diskFullError = Object.assign(new Error("disk full"), {
+      code: "ENOSPC",
+    });
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    // empty rationale triggers a validation failure before any apply
+    const result = await handler("edit_boundary_condition", {
+      target_file: "src.ts",
+      rationale: "   ",
+      risk_level: "low",
+      test_files: ["tests/src.test.ts"],
+      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toMatch(/disk full/);
+    expect(result.audit_error).toMatch(/ENOSPC/);
+    expect(result.audit_error).toMatch(/edit_20260501_0001/);
   });
 });

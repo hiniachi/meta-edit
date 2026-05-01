@@ -52,6 +52,16 @@ export type EditToolResult = {
   applied: boolean;
   edit_id: string;
   warnings: string[];
+  // Issue 029 (a7-04) + Round-4: set IFF an edit-log append threw, on EITHER
+  // the validation-rejection path OR the post-apply path. Distinct from
+  // `warnings` so callers/monitoring can react to audit-trail gaps without
+  // string-matching the routine validation-warning channel.
+  //
+  // The field's only contract is "an audit-log write failed for this
+  // request". Callers MUST inspect `applied` separately to determine apply
+  // outcome — `audit_error` says nothing about whether bytes hit disk, only
+  // that the audit trail is incomplete for this edit_id.
+  audit_error?: string;
 };
 
 export type ValidationContext = {
@@ -290,7 +300,17 @@ export function makeApplyingHandler(
       // work on a request that was about to be rejected. We log
       // `patch_size_bytes: 0` on validation failure — there is no
       // applied diff to measure.
-      const finalWarnings = appendLogSafely(log, {
+      //
+      // Round-4 (defect 2): the rejection-record audit-append CAN fail
+      // (e.g. `.meta-edit/state` write-restricted) and previously the
+      // error was silently discarded — callers had NO signal that the
+      // audit trail was incomplete for the rejected request, which is
+      // a security hole. Surface the failure as `audit_error` so the
+      // audit-failure channel is honest about every request the server
+      // processes, regardless of apply outcome. Callers inspect
+      // `applied` separately to determine whether bytes hit disk;
+      // `audit_error` only signals "the audit trail is incomplete".
+      const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
         ...baseEntry,
         patch_size_bytes: 0,
         applied: false,
@@ -300,6 +320,7 @@ export function makeApplyingHandler(
         applied: false,
         edit_id: editId,
         warnings: finalWarnings,
+        ...(audit_error !== undefined ? { audit_error } : {}),
       };
     }
 
@@ -323,9 +344,18 @@ export function makeApplyingHandler(
     // The new content is already on disk if result.applied. We MUST NOT
     // throw out of the handler here even if log.append fails: the
     // client would see the call as failed and likely retry, causing
-    // duplicate edits. appendLogSafely surfaces the log failure as a
-    // warning instead.
-    const finalWarnings = appendLogSafely(log, {
+    // duplicate edits. appendLogSafely surfaces the log failure on a
+    // structured `audit_error` field — distinct from the `warnings`
+    // channel that carries routine validation notices.
+    //
+    // Round-4 (defect 1): `audit_error` propagates regardless of
+    // `result.applied`. applyChanges can return `applied: false` for
+    // recoverable causes (e.g. stale old_content at apply.ts:204,208) —
+    // the attempt is still audited, and a log-write failure here still
+    // leaves the audit trail incomplete. Callers inspect `applied`
+    // separately to determine whether bytes hit disk; `audit_error`
+    // means only "the audit trail is incomplete for this edit_id".
+    const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
       ...baseEntry,
       patch_size_bytes: patchSize,
       applied: result.applied,
@@ -335,6 +365,7 @@ export function makeApplyingHandler(
       applied: result.applied,
       edit_id: editId,
       warnings: finalWarnings,
+      ...(audit_error !== undefined ? { audit_error } : {}),
     };
   };
 }
@@ -342,17 +373,21 @@ export function makeApplyingHandler(
 function appendLogSafely(
   log: EditLogLike,
   entry: import("../state/edit-log.js").EditLogEntry,
-): string[] {
+): { warnings: string[]; audit_error?: string } {
   try {
     log.append(entry);
-    return entry.warnings;
+    return { warnings: entry.warnings };
   } catch (e) {
     const code = (e as NodeJS.ErrnoException | undefined)?.code;
     const msg = (e as Error | undefined)?.message ?? String(e);
-    return [
-      ...entry.warnings,
-      `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
-    ];
+    // Issue 029 (a7-04): keep `warnings` reserved for validation/apply
+    // notices and report log-append failure on a structured `audit_error`
+    // field. Mixing the two destroys audit integrity — a caller cannot
+    // distinguish "applied + clean log" from "applied + missing log".
+    return {
+      warnings: entry.warnings,
+      audit_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
+    };
   }
 }
 
