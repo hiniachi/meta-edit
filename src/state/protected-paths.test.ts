@@ -59,3 +59,27 @@ describe("isProtectedPath", () => {
     expect(isProtectedPath(".Meta-Edit/Tmp/scratch.txt")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// C3 — Exact directory name without trailing slash
+// ---------------------------------------------------------------------------
+describe("isProtectedPath — exact directory name without trailing slash (C3)", () => {
+  it("returns true for '.meta-edit/state' (no trailing slash)", () => {
+    // The protected prefix is ".meta-edit/state/". The bare directory name
+    // ".meta-edit/state" is semantically within the protected set but the
+    // startsWith check fails because the input has no trailing slash.
+    expect(isProtectedPath(".meta-edit/state")).toBe(true);
+  });
+
+  it("returns true for '.meta-edit/tmp' (no trailing slash)", () => {
+    expect(isProtectedPath(".meta-edit/tmp")).toBe(true);
+  });
+
+  it("returns true for './.meta-edit/state' (leading ./ stripped, no trailing slash)", () => {
+    expect(isProtectedPath("./.meta-edit/state")).toBe(true);
+  });
+
+  it("returns true for './.meta-edit/tmp' (leading ./ stripped, no trailing slash)", () => {
+    expect(isProtectedPath("./.meta-edit/tmp")).toBe(true);
+  });
+});
