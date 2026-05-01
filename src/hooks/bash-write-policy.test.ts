@@ -1109,3 +1109,23 @@ describe("evaluateBashCommand — a1-05 perl/ruby/php inline writes", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-06 busybox prefix bypass", () => {
+  it("denies busybox mv (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox mv src/a.ts src/b.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies busybox sed -i (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox sed -i 's/x/y/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies busybox cp (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox cp src/foo.ts src/bar.ts").decision,
+    ).toBe("deny");
+  });
+});

@@ -629,6 +629,11 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "stdbuf",
   "chrt",
   "taskset",
+  // Multi-call binaries that forward their first argument as the
+  // applet name (`busybox mv a b`, `toybox cp a b`). Same wrapper
+  // shape as `sudo`/`env`, no extra option grammar required.
+  "busybox",
+  "toybox",
 ]);
 
 // Verbs whose mere invocation is denied. `dd` is included because its
