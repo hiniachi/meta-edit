@@ -54,12 +54,32 @@ export class EditLog {
   }
 
   nextEditId(now: Date = new Date()): string {
+    // Issue a6-03: two EditLog instances against the same on-disk log
+    // previously collided on edit_id because each seeded its in-memory
+    // counter from disk only on the first call for a day, then both
+    // incremented independently in memory.
+    //
+    // Fix: re-scan the on-disk log on every nextEditId call and use
+    // max(in-memory counter, on-disk max) as the basis for the next id.
+    // This is O(N) in log size per call but the call frequency is bound
+    // by the rate of edit_* tool invocations, which is human-paced;
+    // O(N) per call is acceptable for the MVP scale (SPEC §11 allows
+    // multi-process file-locking solutions to be deferred).
+    //
+    // Why max() of both counters: the in-memory counter handles
+    // sequential calls *without* an intervening append (the existing
+    // "increments sequentially within the same day" test exercises
+    // this: three nextEditId calls back-to-back must return 1, 2, 3).
+    // The on-disk scan handles concurrent instances where another
+    // instance has appended between our calls.
     const key = formatDayKey(now);
     if (this.todayKey !== key) {
       this.todayKey = key;
-      this.todayCounter = this.scanMaxCounterForKey(key);
+      this.todayCounter = 0;
     }
-    this.todayCounter += 1;
+    const onDisk = this.scanMaxCounterForKey(key);
+    const base = Math.max(this.todayCounter, onDisk);
+    this.todayCounter = base + 1;
     const nnnn = String(this.todayCounter).padStart(4, "0");
     return `edit_${key}_${nnnn}`;
   }

@@ -117,6 +117,80 @@ describe("EditLog.nextEditId", () => {
   });
 });
 
+describe("EditLog concurrent-instance safety", () => {
+  // Regression for issue a6-03: two EditLog instances constructed
+  // against the same on-disk log must not produce duplicate edit_ids.
+  it("two instances on the same path do not produce duplicate edit_ids", () => {
+    const d = new Date(2026, 3, 30);
+
+    // Both instances start from the same (empty) log.
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    const ids: string[] = [];
+
+    // Alternate appends: log1, log2, log1, log2 ...
+    for (let i = 0; i < 6; i++) {
+      const active = i % 2 === 0 ? log1 : log2;
+      const id = active.nextEditId(d);
+      ids.push(id);
+      active.append(
+        entry({
+          edit_id: id,
+          rationale: `entry ${i}`,
+          risk_level: "low",
+          test_files: [],
+          patch_size_bytes: 1,
+          tool_name: "edit_refactor_only",
+        }),
+      );
+    }
+
+    // All six IDs must be unique.
+    const unique = new Set(ids);
+    expect(unique.size).toBe(ids.length);
+  });
+
+  it("large-entry concurrent appends produce no interleaved bytes within a line", () => {
+    // Each entry has a >4 KB rationale to stress kernel write atomicity.
+    const largeRationale = "x".repeat(5000);
+    const d = new Date(2026, 3, 30);
+
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    for (let i = 0; i < 4; i++) {
+      const active = i % 2 === 0 ? log1 : log2;
+      const id = active.nextEditId(d);
+      active.append(
+        entry({
+          edit_id: id,
+          rationale: largeRationale,
+          risk_level: "low",
+          test_files: [],
+          patch_size_bytes: largeRationale.length,
+          tool_name: "edit_refactor_only",
+        }),
+      );
+    }
+
+    // Every line in the raw file must be individually valid JSON.
+    const raw = fs.readFileSync(
+      path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"),
+      "utf8",
+    );
+    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+
+    for (const line of lines) {
+      // Must parse without throwing (no interleaved bytes from another write).
+      expect(() => JSON.parse(line)).not.toThrow();
+      const parsed = JSON.parse(line) as { rationale?: string };
+      expect(parsed.rationale).toBe(largeRationale);
+    }
+  });
+});
+
 describe("EditLog.append symlink defense", () => {
   it("refuses to append when .meta-edit/state is a symlink", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit"), { recursive: true });
