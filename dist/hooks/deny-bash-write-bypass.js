@@ -365,12 +365,9 @@ function evaluateSegment(rawSegment, opts = {}) {
       };
     }
   }
-  const hostingHit = matchesShellHostingDeny(rawSegment);
-  if (hostingHit !== null) {
-    return {
-      decision: "deny",
-      reason: denyReason(hostingHit)
-    };
+  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
+  if (hostedDeny !== null) {
+    return hostedDeny;
   }
   if (redirectsToInRepoPath(rawSegment)) {
     return {
@@ -986,33 +983,61 @@ function* iterRedirectTargets(s) {
   }
 }
 var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
-function matchesShellHostingDeny(rawSegment) {
+function evaluateShellHostedPayload(rawSegment, opts) {
   const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
   if (cMatch !== null && typeof cMatch.index === "number") {
     const argStart = cMatch.index + cMatch[0].length;
     const arg = readShellArg(rawSegment, argStart);
-    const hit = scanArgForDenySubstring(arg);
+    const hit = recursivelyEvaluateArg(arg, opts);
     if (hit !== null)
       return hit;
   }
-  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
-  const evalMatch = trimmed.match(/^eval\b\s*/);
-  if (evalMatch !== null) {
-    const argStart = evalMatch[0].length;
-    const arg = readShellArg(trimmed, argStart);
-    const hit = scanArgForDenySubstring(arg);
+  const evalArg = extractEvalArg(rawSegment);
+  if (evalArg !== null) {
+    const hit = recursivelyEvaluateArg(evalArg, opts);
     if (hit !== null)
       return hit;
   }
   return null;
 }
-function scanArgForDenySubstring(arg) {
+function recursivelyEvaluateArg(arg, opts) {
   if (arg === null || arg.length === 0)
     return null;
-  const normalized = collapsePathDoublings(arg.replace(/\\/g, ""));
-  for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle))
-      return needle;
+  const deEscaped = arg.replace(/\\/g, "");
+  const decision = evaluateBashCommand(deEscaped, opts);
+  return decision.decision === "deny" ? decision : null;
+}
+function extractEvalArg(rawSegment) {
+  let s = stripLeadingEnvAssignments(rawSegment.trimStart());
+  for (let safety = 0;safety < 32; safety++) {
+    s = stripLeadingEnvAssignments(s);
+    const m = s.match(/^(\S+)/);
+    if (m === null || m[0] === undefined)
+      return null;
+    const word = m[0];
+    const baseStart = word.lastIndexOf("/");
+    const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
+    if (base === "eval") {
+      const argStart = word.length + (s.slice(word.length).match(/^\s+/)?.[0].length ?? 0);
+      return readShellArg(s, argStart);
+    }
+    if (!WRAPPER_VERBS.has(base))
+      return null;
+    const valueOpts = WRAPPER_VALUE_OPTS[base];
+    s = s.slice(word.length).replace(/^\s+/, "");
+    while (true) {
+      const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
+      if (optMatch === null || optMatch[0] === undefined)
+        break;
+      const opt = optMatch[0];
+      s = s.slice(opt.length).replace(/^\s+/, "");
+      if (valueOpts !== undefined && !opt.includes("=") && valueOpts.has(opt)) {
+        const valMatch = s.match(/^\S+/);
+        if (valMatch !== null && valMatch[0] !== undefined) {
+          s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+        }
+      }
+    }
   }
   return null;
 }
@@ -1469,4 +1494,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=52C7BB93AD0448DF64756E2164756E21
+//# debugId=E26DD0AD2F3B257B64756E2164756E21

@@ -318,17 +318,19 @@ function evaluateSegment(
     }
   }
 
-  // Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`)
+  // Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`,
+  // including wrapper-prefixed forms like `sudo bash -c` / `env eval`)
   // pass an arbitrary quoted string for the host shell to RE-PARSE and
-  // execute. The quote-stripped DENY_SUBSTRINGS scan above can no longer
-  // see the embedded code; recover the literal string and rescan it.
-  // Compensates for the dogfood-005 quote-stripping trade-off.
-  const hostingHit = matchesShellHostingDeny(rawSegment);
-  if (hostingHit !== null) {
-    return {
-      decision: "deny",
-      reason: denyReason(hostingHit),
-    };
+  // execute. The outer quote-stripping above blanks that payload, so
+  // re-extract the literal argument and recursively evaluate it through
+  // the full policy. Compensates for the dogfood-005 quote-stripping
+  // trade-off and closes the Codex P1 reviews:
+  //   P1-1: protected-path writes inside shell-hosted payloads
+  //         (`bash -c "printf x > .meta-edit/state/..."`)
+  //   P1-2: wrapper-prefixed eval (`sudo eval "..."`, `env eval "..."`)
+  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
+  if (hostedDeny !== null) {
+    return hostedDeny;
   }
 
   // dogfood-001 + dogfood-005: structural deny for any `>` / `>>` / `>|`
@@ -1302,41 +1304,97 @@ function* iterRedirectTargets(s: string): IterableIterator<string> {
 
 // `bash -c "<cmd>"` / `sh -c "<cmd>"` / `eval "<cmd>"`: when the agent
 // stuffs a write-bypass into a shell-hosting wrapper's quoted argument,
-// the outer quote-stripping pass blanks the payload before the
-// DENY_SUBSTRINGS scan sees it. Recover the literal argument here and
-// rescan it (also stripping backslashes so `s\ed -i` inside the arg
-// reads as `sed -i`). Returns the matched needle, or null.
+// the outer quote-stripping pass blanks the payload before any of the
+// per-segment scans see it. Recover the literal argument and re-evaluate
+// it through the full policy pipeline so every check that runs on a
+// top-level command (DENY_SUBSTRINGS, protected-path needles, in-repo
+// redirect deny, heredoc, decode-and-execute, ...) also runs on the
+// wrapper's payload.
+//
+// Codex P1-1 review: a needle-only rescan missed protected-path writes
+// like `bash -c "printf x > .meta-edit/state/edits.jsonl"` because the
+// protected-path detector lives in evaluateSegment, not in the rescan.
+// Recursing through evaluateBashCommand fixes that uniformly without
+// the rescan having to mirror every per-segment check.
 const SHELL_HOSTING_C_RE =
   /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 
-function matchesShellHostingDeny(rawSegment: string): string | null {
+function evaluateShellHostedPayload(
+  rawSegment: string,
+  opts: EvaluateBashOptions,
+): HookDecision | null {
   const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
   if (cMatch !== null && typeof cMatch.index === "number") {
     const argStart = cMatch.index + cMatch[0].length;
     const arg = readShellArg(rawSegment, argStart);
-    const hit = scanArgForDenySubstring(arg);
+    const hit = recursivelyEvaluateArg(arg, opts);
     if (hit !== null) return hit;
   }
-  // `eval` may sit at the head of the segment, optionally behind env
-  // assignments. Wrappers like `sudo`, `env`, etc. also place eval
-  // anywhere in the wrapper chain — peel them with extractCommandVerb's
-  // sibling helpers so `sudo eval "..."` is caught the same as `eval "..."`.
-  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
-  const evalMatch = trimmed.match(/^eval\b\s*/);
-  if (evalMatch !== null) {
-    const argStart = evalMatch[0].length;
-    const arg = readShellArg(trimmed, argStart);
-    const hit = scanArgForDenySubstring(arg);
+  // `eval` may appear behind env assignments OR behind any of the
+  // standard WRAPPER_VERBS (sudo, env, doas, xargs, nice, ...). The
+  // previous implementation only looked at `^eval` after env stripping,
+  // so `sudo eval "..."` and `env eval "..."` walked through unchecked.
+  // Codex P1-2 review: peel the wrapper chain via the same helper
+  // extractCommandVerb uses, then recurse into eval's argument.
+  const evalArg = extractEvalArg(rawSegment);
+  if (evalArg !== null) {
+    const hit = recursivelyEvaluateArg(evalArg, opts);
     if (hit !== null) return hit;
   }
   return null;
 }
 
-function scanArgForDenySubstring(arg: string | null): string | null {
+function recursivelyEvaluateArg(
+  arg: string | null,
+  opts: EvaluateBashOptions,
+): HookDecision | null {
   if (arg === null || arg.length === 0) return null;
-  const normalized = collapsePathDoublings(arg.replace(/\\/g, ""));
-  for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle)) return needle;
+  // Strip backslash escapes so `s\ed -i` inside the arg reads as `sed
+  // -i`. The recursive call walks the de-escaped form through the same
+  // pipeline that already de-escapes top-level commands, so additional
+  // escape forms are handled there.
+  const deEscaped = arg.replace(/\\/g, "");
+  const decision = evaluateBashCommand(deEscaped, opts);
+  return decision.decision === "deny" ? decision : null;
+}
+
+// Peel WRAPPER_VERBS and env assignments off the head, then check whether
+// the next token is `eval`. Returns the dequoted argument string when an
+// eval invocation is found, or null otherwise. Mirrors the wrapper-peel
+// chain in extractCommandVerb so the set of recognized wrappers stays in
+// sync.
+function extractEvalArg(rawSegment: string): string | null {
+  let s = stripLeadingEnvAssignments(rawSegment.trimStart());
+  for (let safety = 0; safety < 32; safety++) {
+    s = stripLeadingEnvAssignments(s);
+    const m = s.match(/^(\S+)/);
+    if (m === null || m[0] === undefined) return null;
+    const word = m[0];
+    const baseStart = word.lastIndexOf("/");
+    const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
+    if (base === "eval") {
+      const argStart = word.length + (s.slice(word.length).match(/^\s+/)?.[0].length ?? 0);
+      return readShellArg(s, argStart);
+    }
+    if (!WRAPPER_VERBS.has(base)) return null;
+    const valueOpts = WRAPPER_VALUE_OPTS[base];
+    s = s.slice(word.length).replace(/^\s+/, "");
+    while (true) {
+      const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
+      if (optMatch === null || optMatch[0] === undefined) break;
+      const opt = optMatch[0];
+      s = s.slice(opt.length).replace(/^\s+/, "");
+      if (
+        valueOpts !== undefined &&
+        !opt.includes("=") &&
+        valueOpts.has(opt)
+      ) {
+        const valMatch = s.match(/^\S+/);
+        if (valMatch !== null && valMatch[0] !== undefined) {
+          s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+        }
+      }
+    }
   }
   return null;
 }

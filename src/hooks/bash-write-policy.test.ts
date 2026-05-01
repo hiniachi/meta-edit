@@ -1640,3 +1640,100 @@ describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — Codex PR #42 review fixes", () => {
+  // Two P1 regressions surfaced by Codex on the dogfood PR. Pinned here
+  // so the next refactor of the shell-hosting rescan does not regress.
+
+  describe("P1-1: protected-path writes inside shell-hosted payloads", () => {
+    // The dogfood-005 quote-stripping change blanked the payload of
+    // bash -c / eval before touchesProtectedPath ran, so writes to
+    // .meta-edit/state/** inside the wrapper's quoted argument
+    // false-allowed. Fix: recursively evaluate the extracted argument
+    // through the full policy.
+
+    it("denies bash -c \"printf x > .meta-edit/state/edits.jsonl\"", () => {
+      const r = evaluateBashCommand(
+        'bash -c "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies eval \"printf x > .meta-edit/state/edits.jsonl\"", () => {
+      const r = evaluateBashCommand(
+        'eval "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sh -c with redirect to .meta-edit/tmp", () => {
+      const r = evaluateBashCommand(
+        'sh -c "echo hi > .meta-edit/tmp/scratch.json"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies bash -c with redirect to in-repo path (not protected)", () => {
+      // The recursive evaluation also picks up the structural in-repo
+      // redirect deny inside the wrapper.
+      const r = evaluateBashCommand('bash -c "printf x > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("still allows bash -c with redirect to /tmp", () => {
+      // The recursion must not over-deny: a write to a safe sink remains
+      // allowed inside the wrapper.
+      const r = evaluateBashCommand('bash -c "printf x > /tmp/notes.md"');
+      expect(r.decision).toBe("allow");
+    });
+  });
+
+  describe("P1-2: wrapper-prefixed eval (sudo eval, env eval)", () => {
+    // matchesShellHostingDeny only checked `^eval` after env stripping,
+    // so `sudo eval "..."` and `env eval "..."` walked through. Fix:
+    // peel WRAPPER_VERBS the same way extractCommandVerb does before
+    // looking for eval.
+
+    it("denies sudo eval \"cat > src/foo.ts\"", () => {
+      const r = evaluateBashCommand('sudo eval "cat > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies env eval \"sed -i s/x/y/ src/foo.ts\"", () => {
+      const r = evaluateBashCommand(
+        'env eval "sed -i s/x/y/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies doas eval \"...\"", () => {
+      const r = evaluateBashCommand('doas eval "cat > src/foo.ts"');
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo -u root eval \"...\" (sudo with value-taking option)", () => {
+      // Wrapper option grammar must be peeled too: `-u root` consumes
+      // both tokens before reaching `eval`.
+      const r = evaluateBashCommand(
+        'sudo -u root eval "cat > src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies FOO=bar sudo eval \"...\" (env-assignment-prefixed wrapper)", () => {
+      const r = evaluateBashCommand(
+        'FOO=bar sudo eval "sed -i s/a/b/ src/foo.ts"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies sudo eval with protected-path write (combined P1-1 + P1-2)", () => {
+      // Both regressions stacked — must be caught by both fixes
+      // working together.
+      const r = evaluateBashCommand(
+        'sudo eval "printf x > .meta-edit/state/edits.jsonl"',
+      );
+      expect(r.decision).toBe("deny");
+    });
+  });
+});
