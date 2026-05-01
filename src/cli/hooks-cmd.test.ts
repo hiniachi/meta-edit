@@ -10,6 +10,7 @@ import {
   settingsPathForScope,
   parseHooksArgs,
   META_EDIT_HOOK_COMMANDS,
+  META_EDIT_RAW_EDIT_MATCHER,
   type HookMatcherEntry,
   type SettingsShape,
 } from "./hooks-cmd.js";
@@ -40,11 +41,36 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
+describe("META_EDIT_RAW_EDIT_MATCHER constant (a3-02 install-hooks coverage)", () => {
+  it("includes NotebookEdit so install-hooks emits a 4-tool matcher", () => {
+    // The runtime policy in deny-raw-edit denies NotebookEdit (a3-02), but
+    // that only fires if Claude Code's PreToolUse routing actually invokes
+    // the hook for NotebookEdit calls. Routing is matcher-driven, so the
+    // matcher string written by `meta-edit install-hooks` MUST list
+    // NotebookEdit. If this constant drifts back to the 3-tool form,
+    // a3-02 silently regresses end-to-end.
+    expect(META_EDIT_RAW_EDIT_MATCHER).toBe(
+      "Edit|Write|MultiEdit|NotebookEdit",
+    );
+  });
+
+  it("install writes a matcher entry that names NotebookEdit", () => {
+    const r = installMetaEditHooks({});
+    const rawEditEntry = r.hooks?.PreToolUse?.find((e) =>
+      e.hooks.some((h) => h.command === META_EDIT_HOOK_COMMANDS.rawEdit),
+    );
+    expect(rawEditEntry?.matcher).toBe("Edit|Write|MultiEdit|NotebookEdit");
+    expect(rawEditEntry?.matcher).toContain("NotebookEdit");
+  });
+});
+
 describe("installMetaEditHooks (pure)", () => {
   it("creates the hooks block on an empty settings object", () => {
     const r = installMetaEditHooks({});
     expect(r.hooks?.PreToolUse?.length).toBe(2);
-    expect(r.hooks?.PreToolUse?.[0]?.matcher).toBe("Edit|Write|MultiEdit");
+    expect(r.hooks?.PreToolUse?.[0]?.matcher).toBe(
+      "Edit|Write|MultiEdit|NotebookEdit",
+    );
     expect(r.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toBe(
       META_EDIT_HOOK_COMMANDS.rawEdit,
     );
@@ -76,7 +102,7 @@ describe("installMetaEditHooks (pure)", () => {
       hooks: {
         PreToolUse: [
           {
-            matcher: "Edit|Write|MultiEdit",
+            matcher: "Edit|Write|MultiEdit|NotebookEdit",
             hooks: [{ type: "command", command: "user-custom-edit-hook" }],
           },
         ],
@@ -84,7 +110,7 @@ describe("installMetaEditHooks (pure)", () => {
     };
     const after = installMetaEditHooks(before);
     const editEntry = after.hooks?.PreToolUse?.find(
-      (e) => e.matcher === "Edit|Write|MultiEdit",
+      (e) => e.matcher === "Edit|Write|MultiEdit|NotebookEdit",
     );
     expect(editEntry?.hooks.length).toBe(2);
     const cmds = editEntry?.hooks.map((h) => h.command);
@@ -128,11 +154,11 @@ describe("installMetaEditHooks (pure)", () => {
     expect(() => installMetaEditHooks(before)).not.toThrow();
   });
 
-  it("adds a full Edit|Write|MultiEdit entry even when a narrower user matcher already has our hook", () => {
+  it("adds a full Edit|Write|MultiEdit|NotebookEdit entry even when a narrower user matcher already has our hook", () => {
     // A user-edited narrower matcher (Edit|Write) is NOT treated as
-    // sufficient because MultiEdit would be unprotected. install adds
-    // a new exact-matcher entry alongside; the duplicate firing on
-    // Edit/Write is idempotent (deny is deny).
+    // sufficient because MultiEdit and NotebookEdit would be
+    // unprotected. install adds a new exact-matcher entry alongside;
+    // the duplicate firing on Edit/Write is idempotent (deny is deny).
     const before: SettingsShape = {
       hooks: {
         PreToolUse: [
@@ -151,7 +177,7 @@ describe("installMetaEditHooks (pure)", () => {
     );
     expect(editMatchers?.length).toBe(2);
     expect(editMatchers?.map((e) => e.matcher).sort()).toEqual(
-      ["Edit|Write", "Edit|Write|MultiEdit"].sort(),
+      ["Edit|Write", "Edit|Write|MultiEdit|NotebookEdit"].sort(),
     );
   });
 
