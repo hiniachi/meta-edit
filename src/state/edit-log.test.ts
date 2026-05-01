@@ -160,6 +160,71 @@ describe("EditLog.append symlink defense", () => {
     expect(process.cwd()).toBe(originalCwd);
   });
 
+  // Regression tests for issue a6-02: the fail-closed branch in
+  // EditLog.append that refuses to write the audit log when the
+  // platform does not expose a usable O_NOFOLLOW. The branch is
+  // structurally unreachable on Linux/macOS without injection because
+  // fs.constants.O_NOFOLLOW is a non-zero number there.
+  it("throws a descriptive error when O_NOFOLLOW is 0 (platform lacks support)", () => {
+    const original = fs.constants.O_NOFOLLOW;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      fs.constants,
+      "O_NOFOLLOW",
+    );
+    try {
+      Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+        value: 0,
+        configurable: true,
+        writable: true,
+      });
+
+      const log = new EditLog(tmpRoot);
+      expect(() => log.append(entry())).toThrow(
+        /this platform does not expose O_NOFOLLOW/,
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", originalDescriptor);
+      } else {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+          value: original,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+  });
+
+  it("throws a descriptive error when O_NOFOLLOW is non-numeric (platform lacks support)", () => {
+    const original = fs.constants.O_NOFOLLOW;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      fs.constants,
+      "O_NOFOLLOW",
+    );
+    try {
+      Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+
+      const log = new EditLog(tmpRoot);
+      expect(() => log.append(entry())).toThrow(
+        /this platform does not expose O_NOFOLLOW/,
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", originalDescriptor);
+      } else {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+          value: original,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+  });
+
   it("refuses to append when edits.jsonl is itself a symlink", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
     const target = path.join(tmpRoot, "outside.jsonl");
