@@ -16558,7 +16558,8 @@ var TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   "edit_policy_change",
-  "edit_docs_only"
+  "edit_docs_only",
+  "edit_create_file"
 ];
 var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only");
 var TOOL_DESCRIPTIONS = {
@@ -17109,6 +17110,50 @@ Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
 mislead future readers (including future AI agents). Treat
 documentation as a contract with future readers.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_create_file: `Create a new file at a path that does not yet exist on disk.
+The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
+to overwrite an existing file or follow a symlink at the leaf.
+
+Use this tool when:
+- Adding a new source module, helper, or class file
+- Adding a new test file when fulfilling another tool's test obligations
+- Adding new configuration files, fixtures, or example assets
+- Scaffolding code for which no in-place modify path applies
+
+Required tests (you MUST cover):
+1. The newly-created file must be exercised by at least one test that
+   imports, loads, or otherwise consumes it. Files that are not exercised
+   by any test are dead on arrival.
+2. If the new file is itself a test file, it must contain at least one
+   explicit assertion. The mere existence of a test file is not a test.
+
+test_files must be non-empty (you must declare which test covers the new
+code). For each entry in \`changes\`, \`old_content\` MUST be the empty
+string — the file does not yet exist. \`new_content\` is the full content
+to write.
+
+This tool MUST NOT be used when:
+- The target path already exists; modifying an existing file is the job
+  of one of the modify-only edit_* tools
+- The new path lands inside a protected directory (.meta-edit/state/**,
+  .meta-edit/tmp/**)
+- The change is a rename or move (delete-and-add); the modify/create
+  shape cannot represent rename atomically and the audit log would not
+  reflect the original file's deletion
+- The file is a binary payload; the string-based content shape will
+  corrupt non-UTF-8 data
+
+Rationale: the other modify-only edit_* tools cannot represent file
+creation. Without an explicit creation tool, agents resort to bash
+redirects, undermining the typed-tool surface meta-edit exists to defend.
+Creation has a different precondition profile (no current state to check)
+and a strong post-condition (the file did not exist; now it does), and
+the audit log records it explicitly so reviewers see new-file additions
+distinct from in-place edits.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -18186,6 +18231,7 @@ function validateRequest(toolName, request, ctx) {
     warnings.push(`changes total payload is ${totalBytes} bytes; exceeds the ${MAX_CHANGE_BYTES}-byte limit`);
     return { ok: false, warnings };
   }
+  const isCreate = toolName === "edit_create_file";
   const touched = [];
   const changes = [];
   for (const c of request.changes) {
@@ -18197,9 +18243,16 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-    if (c.old_content === c.new_content) {
-      warnings.push(`change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`);
-      continue;
+    if (isCreate) {
+      if (c.old_content !== "") {
+        warnings.push(`change for "${c.file}" has non-empty old_content; for edit_create_file old_content must be empty (the file does not yet exist on disk)`);
+        continue;
+      }
+    } else {
+      if (c.old_content === c.new_content) {
+        warnings.push(`change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`);
+        continue;
+      }
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
@@ -18261,7 +18314,7 @@ function makeStubHandler(ctx) {
   };
 }
 function makeApplyingHandler(deps) {
-  const { ctx, log, applyChanges } = deps;
+  const { ctx, log, applyChanges, applyCreates } = deps;
   const now = deps.now ?? (() => new Date);
   return async (toolName, args) => {
     const ts = now();
@@ -18295,7 +18348,8 @@ function makeApplyingHandler(deps) {
       synthesized += createTwoFilesPatch(c.file, c.file, c.old_content, c.new_content, "old", "new");
     }
     const patchSize = Buffer.byteLength(synthesized, "utf8");
-    const result = applyChanges(ctx.repoRoot, validation.changes);
+    const applyFn = toolName === "edit_create_file" ? applyCreates : applyChanges;
+    const result = applyFn(ctx.repoRoot, validation.changes);
     const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
       ...baseEntry,
       patch_size_bytes: patchSize,
@@ -18417,22 +18471,22 @@ var inputSchema = {
       type: "array",
       minItems: 1,
       maxItems: 100,
-      description: "One or more content-pair changes. The server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. Modify-only — no create / delete / rename.",
+      description: "One or more content-pair changes. For modify-only tools the server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. For edit_create_file the server opens each path with O_CREAT|O_EXCL|O_NOFOLLOW, refuses if anything already exists at the path or follows a symlink at the leaf, and writes new_content; old_content MUST be the empty string. The shape does not represent delete or rename.",
       items: {
         type: "object",
         required: ["file", "old_content", "new_content"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path of the file to modify. Must already exist on disk."
+            description: "Repository-relative path of the file. For modify-only tools the file must already exist on disk; for edit_create_file the file must NOT exist on disk."
           },
           old_content: {
             type: "string",
-            description: "Exact current content of the file. The server compares byte-for-byte at apply time and rejects the call if disk content differs."
+            description: "For modify-only tools: exact current content of the file (the server compares byte-for-byte at apply time and rejects the call if disk content differs). For edit_create_file: MUST be the empty string (the file does not yet exist)."
           },
           new_content: {
             type: "string",
-            description: "New content to write to the file. Atomically replaces the file on success."
+            description: "New content to write to the file. For modify-only tools, atomically replaces the existing file on success; for edit_create_file, the new file is created with this content."
           }
         },
         additionalProperties: false
@@ -18682,6 +18736,132 @@ function cleanupTemp(p) {
   try {
     fs4.unlinkSync(p);
   } catch {}
+}
+function applyCreates(repoRoot, changes, options = {}) {
+  const warnings = [];
+  const O_NOFOLLOW = options.oNofollow !== undefined ? options.oNofollow : PLATFORM_O_NOFOLLOW;
+  if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+    return {
+      applied: false,
+      warnings: [
+        "this platform does not expose O_NOFOLLOW; meta-edit refuses to write without symlink-leaf protection"
+      ]
+    };
+  }
+  let realRoot;
+  try {
+    realRoot = fs4.realpathSync(path4.resolve(repoRoot));
+  } catch {
+    return {
+      applied: false,
+      warnings: [`repository root could not be canonicalized: ${repoRoot}`]
+    };
+  }
+  const staged = [];
+  const seenCanonical = new Set;
+  for (const ch of changes) {
+    if (seenCanonical.has(ch.canonical)) {
+      warnings.push(`internal error: applyCreates received duplicate canonical "${ch.canonical}" — validateRequest should have rejected this. No write performed.`);
+      return { applied: false, warnings };
+    }
+    seenCanonical.add(ch.canonical);
+    const lexicalAbs = path4.join(realRoot, ch.canonical);
+    if (isProtectedPath(ch.canonical)) {
+      warnings.push(`apply-time canonical for "${ch.canonical}" lands in a protected directory; refusing`);
+      return { applied: false, warnings };
+    }
+    const lexicalParent = path4.dirname(lexicalAbs);
+    let realParent;
+    try {
+      realParent = fs4.realpathSync(lexicalParent);
+    } catch (e) {
+      const code = e?.code;
+      warnings.push(`parent directory for "${ch.canonical}" cannot be resolved (${code ?? "ERR"}); applyCreates does not implicitly mkdir, so the parent must exist before creation`);
+      return { applied: false, warnings };
+    }
+    if (realParent !== realRoot && !realParent.startsWith(realRoot + path4.sep)) {
+      warnings.push(`apply-time parent for "${ch.canonical}" escapes the repository root; refusing`);
+      return { applied: false, warnings };
+    }
+    const reCanonicalParent = normalizeRepoRelative(path4.relative(realRoot, realParent));
+    if (reCanonicalParent.length > 0 && isProtectedPath(reCanonicalParent)) {
+      warnings.push(`apply-time parent for "${ch.canonical}" lands in a protected directory; refusing`);
+      return { applied: false, warnings };
+    }
+    const absolute = path4.join(realParent, path4.basename(ch.canonical));
+    let preexists = false;
+    try {
+      fs4.lstatSync(absolute);
+      preexists = true;
+    } catch (e) {
+      const code = e?.code;
+      if (code !== "ENOENT") {
+        warnings.push(`apply-time preflight lstat for "${ch.canonical}" failed (${code ?? "ERR"}); refusing`);
+        return { applied: false, warnings };
+      }
+    }
+    if (preexists) {
+      warnings.push(`change.file "${ch.canonical}" already exists on disk; edit_create_file refuses to overwrite (use a modify-only edit_* tool instead)`);
+      return { applied: false, warnings };
+    }
+    staged.push({
+      canonical: ch.canonical,
+      absolute,
+      parent: realParent,
+      lexicalParent,
+      output: ch.newContent
+    });
+  }
+  const touchedAbsolutePaths = [];
+  const partialWriteWarning = () => {
+    if (touchedAbsolutePaths.length > 0) {
+      warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already created before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
+    }
+  };
+  for (const w of staged) {
+    let nowParent;
+    try {
+      nowParent = fs4.realpathSync(w.lexicalParent);
+    } catch (e) {
+      const code = e?.code;
+      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": parent realpath threw ${code ?? "ERR"} before open`);
+      partialWriteWarning();
+      return { applied: false, warnings };
+    }
+    if (nowParent !== w.parent) {
+      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": parent canonical drifted from "${w.parent}" to "${nowParent}" before open`);
+      partialWriteWarning();
+      return { applied: false, warnings };
+    }
+    let fd = null;
+    try {
+      fd = fs4.openSync(w.absolute, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_EXCL | O_NOFOLLOW, 420);
+      fs4.writeFileSync(fd, w.output, { encoding: "utf8" });
+      fs4.fsyncSync(fd);
+    } catch (e) {
+      const code = e?.code;
+      const reason = code === "EEXIST" ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)` : code === "ELOOP" ? `change.file "${w.canonical}" resolves through a symlink at the leaf; O_NOFOLLOW refused` : `failed to create "${w.canonical}": ${code ?? "ERR"}`;
+      warnings.push(reason);
+      partialWriteWarning();
+      return { applied: false, warnings };
+    } finally {
+      if (fd !== null) {
+        try {
+          fs4.closeSync(fd);
+        } catch {}
+      }
+    }
+    try {
+      const dirFd = fs4.openSync(w.parent, fs4.constants.O_RDONLY);
+      try {
+        fs4.fsyncSync(dirFd);
+      } finally {
+        fs4.closeSync(dirFd);
+      }
+    } catch {}
+    touchedAbsolutePaths.push(w.absolute);
+  }
+  return { applied: true, warnings, touchedAbsolutePaths };
 }
 
 // src/state/edit-log.ts
@@ -19000,7 +19180,8 @@ function createServer(options = {}) {
   const handler = makeApplyingHandler({
     ctx: context,
     log,
-    applyChanges
+    applyChanges,
+    applyCreates
   });
   const server = new Server({
     name: "meta-edit",
@@ -19578,4 +19759,4 @@ export {
   main
 };
 
-//# debugId=661A8DB50D96993C64756E2164756E21
+//# debugId=EFC7F78F558C15B664756E2164756E21

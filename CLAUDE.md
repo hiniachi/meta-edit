@@ -8,9 +8,9 @@ This file gives Claude Code the context, scope, and discipline required to imple
 
 ## 1. What you are building
 
-`meta-edit` is an MCP server that replaces the AI agent's raw file editing tools with a family of eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. There is no detection, no classification, no verification — the bet is that **a deliberately structured tool surface, with obligations encoded in tool descriptions, changes AI editing behavior on its own**.
+`meta-edit` is an MCP server that replaces the AI agent's raw file editing tools with a family of nineteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. There is no detection, no classification, no verification — the bet is that **a deliberately structured tool surface, with obligations encoded in tool descriptions, changes AI editing behavior on its own**.
 
-The eighteen tools are:
+The nineteen tools are:
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -22,6 +22,7 @@ edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
 edit_policy_change            edit_docs_only
+edit_create_file
 ```
 
 The full descriptions are in `SPEC.md` §4. Those descriptions are the product. The rest is plumbing.
@@ -43,7 +44,7 @@ That is the entire reading list.
 
 Everything in `SPEC.md`. Specifically:
 
-- Seventeen `edit_*` MCP tools, each with the description from `SPEC.md` §4
+- Nineteen `edit_*` MCP tools, each with the description from `SPEC.md` §4
 - Two hooks: `deny-raw-edit`, `deny-bash-write-bypass`
 - Argument validation (rationale non-empty, test_files non-empty where required, target_file inside repo, target_file not in protected paths, patch applies cleanly)
 - Edit log at `.meta-edit/state/edits.jsonl`
@@ -75,7 +76,7 @@ If the user asks for any of these, say "out of scope per `SPEC.md` §11; either 
 
 ## 4. The most important file
 
-`src/tools/descriptions.ts` contains the eighteen descriptions from `SPEC.md` §4, verbatim.
+`src/tools/descriptions.ts` contains the nineteen descriptions from `SPEC.md` §4, verbatim.
 
 ```typescript
 export const TOOL_DESCRIPTIONS = {
@@ -85,7 +86,7 @@ Use this tool when:
 - Renaming variables, functions, or types
 ...`,
 
-  // ... eighteen total
+  // ... nineteen total
 } as const;
 ```
 
@@ -108,17 +109,17 @@ Five phases. Each phase must work end-to-end before the next.
 
 - Repo layout per `SPEC.md` §10
 - `package.json`, `tsconfig.json`, build runs
-- MCP server registers eighteen tool stubs (names only, descriptions present, handlers are no-ops returning `applied: false`)
+- MCP server registers nineteen tool stubs (names only, descriptions present, handlers are no-ops returning `applied: false`)
 - CLI prints "not implemented" for `log` and `summary`, runs the server for `serve`
 - README points to `SPEC.md`
 
 ### Phase 2: Descriptions and validation (1 day)
 
-- `src/tools/descriptions.ts` with all eighteen descriptions verbatim from `SPEC.md` §4
+- `src/tools/descriptions.ts` with all nineteen descriptions verbatim from `SPEC.md` §4
 - `src/tools/common.ts` with the shared `EditToolRequest` schema using zod
 - Argument validation: non-empty rationale, non-empty test_files for tools other than `edit_refactor_only` and `edit_test_only_change`, target_file inside repo, target_file not in protected paths
 - Tests for validation rejection on each rule
-- Verify by connecting Claude Code: all eighteen tools appear in the tool list with their full descriptions visible
+- Verify by connecting Claude Code: all nineteen tools appear in the tool list with their full descriptions visible
 
 ### Phase 3: Patch application and edit log (1 day)
 
@@ -148,7 +149,7 @@ Five phases. Each phase must work end-to-end before the next.
 
 ## 6. Self-application
 
-Once Phase 3 is done, edits to this repo go through `edit_*` tools. Use `meta-edit serve` from the local checkout, register it as an MCP server in your Claude Code settings, and edit the project through its own eighteen tools.
+Once Phase 3 is done, edits to this repo go through `edit_*` tools. Use `meta-edit serve` from the local checkout, register it as an MCP server in your Claude Code settings, and edit the project through its own nineteen tools.
 
 This is the rigorous test of the design. If the descriptions don't guide your behavior on this codebase, they won't guide other AIs on theirs.
 
@@ -182,9 +183,9 @@ If a specific failure pattern feels common enough to warrant detection, write it
 
 ### 7.4 The "make it generic" temptation
 
-You will want to abstract the eighteen tool handlers into one generic handler that takes a `kind` argument. Don't.
+You will want to abstract the nineteen tool handlers into one generic handler that takes a `kind` argument. Don't.
 
-The whole point of eighteen separate tools is that tool selection itself is the reasoning step. If you collapse them into one tool, the design is destroyed. Each tool is registered separately with its own description, even if the handler logic is shared via helpers.
+The whole point of nineteen separate tools is that tool selection itself is the reasoning step. If you collapse them into one tool, the design is destroyed. Each tool is registered separately with its own description, even if the handler logic is shared via helpers.
 
 The MCP tool surface is the product. Don't optimize it away.
 
@@ -257,10 +258,10 @@ The log is how the next session picks up.
 
 ## 12. Reference invariants
 
-- **Scope**: Seventeen tools + two hooks + edit log + CLI summary. That is all.
+- **Scope**: Nineteen tools + two hooks + edit log + CLI summary. That is all.
 - **Descriptions are verbatim**: `SPEC.md` §4 → `descriptions.ts`, no paraphrasing.
 - **No detection in MVP**: classification, mismatch detection, mutation, regression — all forbidden.
-- **No abstractions over the tool surface**: eighteen separate registrations.
+- **No abstractions over the tool surface**: nineteen separate registrations.
 - **Self-application**: once Phase 3 is done, this repo edits itself through its own tools.
 - **The single planned future**: if descriptions are insufficient, v0.2 adds a lightweight diff classifier. Nothing else is planned.
 
@@ -272,6 +273,6 @@ The value of this project is in its restraint. Most AI quality gates try to dete
 
 If it works, we will have shown that **a well-designed tool surface is more useful than a complex verification surface**. That's worth finding out cleanly, by running it and watching what happens. Don't add machinery that muddles the signal.
 
-Write eighteen tools. Wire them up. Add the two hooks. Write the log. Build the CLI summary. Stop.
+Write nineteen tools. Wire them up. Add the two hooks. Write the log. Build the CLI summary. Stop.
 
 Then watch what happens when AI agents try to edit code through them.

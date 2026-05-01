@@ -9,3 +9,4 @@ coverage/
 .env.local
 *.tsbuildinfo
 issues/drafts/
+test-playground/

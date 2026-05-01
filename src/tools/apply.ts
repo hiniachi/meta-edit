@@ -410,3 +410,262 @@ function cleanupTemp(p: string): void {
     // ignore — temp file may not exist
   }
 }
+
+// Apply create-only changes for the `edit_create_file` tool.
+//
+// Contract (paired with src/tools/common.ts validateRequest's create branch):
+// for each entry, `oldContent` is the empty string by upstream validation
+// and the file MUST NOT exist on disk. The server opens the final target
+// directly with O_CREAT | O_EXCL | O_NOFOLLOW so EEXIST is the kernel-level
+// race-safe enforcement of the "did not exist" precondition; the preflight
+// lstat is purely for an early failure with a friendlier message and to
+// guarantee the all-or-nothing behaviour on multi-file creates when no
+// race occurs.
+//
+// Unlike the modify path there is no temp + rename: the EEXIST check
+// IS the atomic precondition, and a temp+rename would defeat it (rename
+// silently overwrites). On multi-file creates a later open() failing with
+// EEXIST after earlier creates succeeded leaves a partial-write state
+// surfaced via warning, mirroring the modify path's diagnostics.
+export function applyCreates(
+  repoRoot: string,
+  changes: ContentChange[],
+  options: ApplyOptions = {},
+): ApplyResult {
+  const warnings: string[] = [];
+  const O_NOFOLLOW =
+    options.oNofollow !== undefined ? options.oNofollow : PLATFORM_O_NOFOLLOW;
+
+  if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+    return {
+      applied: false,
+      warnings: [
+        "this platform does not expose O_NOFOLLOW; meta-edit refuses to write without symlink-leaf protection",
+      ],
+    };
+  }
+
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(path.resolve(repoRoot));
+  } catch {
+    return {
+      applied: false,
+      warnings: [`repository root could not be canonicalized: ${repoRoot}`],
+    };
+  }
+
+  type StagedCreate = {
+    canonical: string;
+    // Absolute path built from `realParent` + leaf basename — NOT from the
+    // original lexical path. This matters when an ancestor in the lexical
+    // path was a symlink: realpath-of-ancestor at staging time captures
+    // the canonical parent, and the open MUST use that canonical parent
+    // so a same-string-but-flipped ancestor symlink between staging and
+    // open cannot redirect the write through a freshly-pointed link.
+    absolute: string;
+    parent: string;
+    // The original lexical parent string we realpath'd. Re-realpath'ing
+    // THIS at drift-check time (rather than re-realpath'ing the already-
+    // resolved `parent`) is what catches an ancestor-symlink flip whose
+    // canonical form drifts between staging and open.
+    lexicalParent: string;
+    output: string;
+  };
+  const staged: StagedCreate[] = [];
+  const seenCanonical = new Set<string>();
+
+  for (const ch of changes) {
+    if (seenCanonical.has(ch.canonical)) {
+      warnings.push(
+        `internal error: applyCreates received duplicate canonical "${ch.canonical}" — validateRequest should have rejected this. No write performed.`,
+      );
+      return { applied: false, warnings };
+    }
+    seenCanonical.add(ch.canonical);
+
+    const lexicalAbs = path.join(realRoot, ch.canonical);
+
+    // Reject early when the canonical lands in a protected dir. The same
+    // check ran at validate time, but apply re-asserts so a future caller
+    // that bypasses validation (e.g. unit tests, future internal call
+    // sites) cannot land writes in the audit area.
+    if (isProtectedPath(ch.canonical)) {
+      warnings.push(
+        `apply-time canonical for "${ch.canonical}" lands in a protected directory; refusing`,
+      );
+      return { applied: false, warnings };
+    }
+
+    const lexicalParent = path.dirname(lexicalAbs);
+    let realParent: string;
+    try {
+      realParent = fs.realpathSync(lexicalParent);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      warnings.push(
+        `parent directory for "${ch.canonical}" cannot be resolved (${code ?? "ERR"}); applyCreates does not implicitly mkdir, so the parent must exist before creation`,
+      );
+      return { applied: false, warnings };
+    }
+
+    if (
+      realParent !== realRoot &&
+      !realParent.startsWith(realRoot + path.sep)
+    ) {
+      warnings.push(
+        `apply-time parent for "${ch.canonical}" escapes the repository root; refusing`,
+      );
+      return { applied: false, warnings };
+    }
+
+    // The parent dir's canonical (after realpath) must not itself land in
+    // the protected area. A novel-looking leaf under .meta-edit/state/...
+    // is still a write into the audit area.
+    const reCanonicalParent = normalizeRepoRelative(
+      path.relative(realRoot, realParent),
+    );
+    if (
+      reCanonicalParent.length > 0 &&
+      isProtectedPath(reCanonicalParent)
+    ) {
+      warnings.push(
+        `apply-time parent for "${ch.canonical}" lands in a protected directory; refusing`,
+      );
+      return { applied: false, warnings };
+    }
+
+    // Build the absolute path from the canonicalized parent + leaf so the
+    // open does not traverse any ancestor symlink that was canonicalized
+    // away at staging time. A subsequent flip of an ancestor symlink would
+    // be caught by the drift check (which re-realpaths the *original*
+    // lexical parent — see Phase 2) before this absolute path is opened.
+    const absolute = path.join(realParent, path.basename(ch.canonical));
+
+    // Preflight: the leaf must NOT exist (file, dir, or symlink). lstat
+    // hits the symlink itself rather than its target, so a dangling
+    // symlink at the leaf path is treated as preexisting and rejected.
+    let preexists = false;
+    try {
+      fs.lstatSync(absolute);
+      preexists = true;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        warnings.push(
+          `apply-time preflight lstat for "${ch.canonical}" failed (${code ?? "ERR"}); refusing`,
+        );
+        return { applied: false, warnings };
+      }
+    }
+    if (preexists) {
+      warnings.push(
+        `change.file "${ch.canonical}" already exists on disk; edit_create_file refuses to overwrite (use a modify-only edit_* tool instead)`,
+      );
+      return { applied: false, warnings };
+    }
+
+    staged.push({
+      canonical: ch.canonical,
+      absolute,
+      parent: realParent,
+      lexicalParent,
+      output: ch.newContent,
+    });
+  }
+
+  // Phase 2 — open each final target with O_CREAT|O_EXCL|O_NOFOLLOW. We
+  // do NOT pre-write a temp and rename: rename silently overwrites, which
+  // would defeat the create-only contract. The kernel's atomic O_EXCL is
+  // the race-safe enforcement.
+  const touchedAbsolutePaths: string[] = [];
+  const partialWriteWarning = (): void => {
+    if (touchedAbsolutePaths.length > 0) {
+      warnings.push(
+        `partial write: ${touchedAbsolutePaths.length} file(s) were already created before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`,
+      );
+    }
+  };
+
+  for (const w of staged) {
+    // Re-realpath the *original lexical* parent immediately before open
+    // to shrink the parent-dir TOCTOU window. Re-resolving `w.parent` (the
+    // already-canonical form) would miss the case where a flipped ancestor
+    // symlink in the lexical path now points elsewhere — its realpath would
+    // still equal itself. Re-resolving from the lexical string forces the
+    // walk to follow whichever symlink content is current. Drift is then
+    // a string mismatch against the staging-time canonical. String-equality
+    // drift detection only catches drift to a different canonical *string*
+    // — bind mounts that yield the same realpath are out of scope.
+    let nowParent: string;
+    try {
+      nowParent = fs.realpathSync(w.lexicalParent);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      warnings.push(
+        `parent directory TOCTOU detected for "${w.canonical}": parent realpath threw ${code ?? "ERR"} before open`,
+      );
+      partialWriteWarning();
+      return { applied: false, warnings };
+    }
+    if (nowParent !== w.parent) {
+      warnings.push(
+        `parent directory TOCTOU detected for "${w.canonical}": parent canonical drifted from "${w.parent}" to "${nowParent}" before open`,
+      );
+      partialWriteWarning();
+      return { applied: false, warnings };
+    }
+
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(
+        w.absolute,
+        // eslint-disable-next-line no-bitwise
+        fs.constants.O_WRONLY |
+          fs.constants.O_CREAT |
+          fs.constants.O_EXCL |
+          O_NOFOLLOW,
+        0o644,
+      );
+      fs.writeFileSync(fd, w.output, { encoding: "utf8" });
+      fs.fsyncSync(fd);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      const reason =
+        code === "EEXIST"
+          ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)`
+          : code === "ELOOP"
+            ? `change.file "${w.canonical}" resolves through a symlink at the leaf; O_NOFOLLOW refused`
+            : `failed to create "${w.canonical}": ${code ?? "ERR"}`;
+      warnings.push(reason);
+      partialWriteWarning();
+      return { applied: false, warnings };
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // ignore close errors
+        }
+      }
+    }
+
+    // Best-effort: fsync the parent dir so the create is durable. On some
+    // filesystems and on macOS, directory fsync is either a no-op or
+    // rejected; treat any failure as non-fatal.
+    try {
+      const dirFd = fs.openSync(w.parent, fs.constants.O_RDONLY);
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // best-effort durability; ignore.
+    }
+
+    touchedAbsolutePaths.push(w.absolute);
+  }
+
+  return { applied: true, warnings, touchedAbsolutePaths };
+}

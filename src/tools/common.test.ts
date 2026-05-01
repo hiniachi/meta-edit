@@ -641,11 +641,12 @@ describe("validateRequest", () => {
       }
     });
 
-    it("accepts the new shape for every one of the eighteen edit_* tools", () => {
+    it("accepts the new shape for every one of the nineteen edit_* tools", () => {
       // Smoke test: validate each tool's typical request shape passes.
       // For tools requiring test_files, use the default test_files entry;
       // for edit_test_only_change, target only itself; for refactor /
-      // docs, no test_files.
+      // docs, no test_files; for edit_create_file, old_content must be
+      // empty (the file does not yet exist on disk).
       for (const name of TOOL_NAMES) {
         let req: EditToolRequest;
         if (name === "edit_test_only_change") {
@@ -656,11 +657,113 @@ describe("validateRequest", () => {
           });
         } else if (name === "edit_refactor_only" || name === "edit_docs_only") {
           req = baseRequest({ test_files: [] });
+        } else if (name === "edit_create_file") {
+          req = baseRequest({
+            target_file: "src/new.ts",
+            changes: [makeChange("src/new.ts", "", "fresh\n")],
+          });
         } else {
           req = baseRequest();
         }
         const r = validateRequest(name, req, ctx);
         expect(r.ok).toBe(true);
+      }
+    });
+  });
+
+  describe("edit_create_file create-mode rules", () => {
+    it("rejects edit_create_file when test_files is empty", () => {
+      const r = validateRequest(
+        "edit_create_file",
+        baseRequest({
+          target_file: "src/new.ts",
+          changes: [makeChange("src/new.ts", "", "fresh\n")],
+          test_files: [],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some((w) =>
+            w.includes("test_files must be non-empty for edit_create_file"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects edit_create_file when any change carries non-empty old_content", () => {
+      // create-mode contract: old_content must be the empty string because
+      // the file does not yet exist on disk. A non-empty old_content would
+      // imply the agent thinks the file exists, which contradicts the tool
+      // selection.
+      const r = validateRequest(
+        "edit_create_file",
+        baseRequest({
+          target_file: "src/new.ts",
+          changes: [makeChange("src/new.ts", "stale\n", "fresh\n")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("src/new.ts") &&
+              w.includes("old_content must be empty"),
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("accepts edit_create_file with empty old_content and non-empty new_content", () => {
+      const r = validateRequest(
+        "edit_create_file",
+        baseRequest({
+          target_file: "src/new.ts",
+          changes: [makeChange("src/new.ts", "", "fresh\n")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.changes[0]?.oldContent).toBe("");
+        expect(r.changes[0]?.newContent).toBe("fresh\n");
+      }
+    });
+
+    it("accepts edit_create_file creating an empty file (old=new=\"\") — bypasses the modify-mode no-op rejection", () => {
+      // In modify mode, old===new is rejected as a no-op (the file already
+      // has that content; nothing changes). In create mode, old===""===new
+      // is a valid empty-file creation: the file goes from non-existent to
+      // existent, which is observable on disk.
+      const r = validateRequest(
+        "edit_create_file",
+        baseRequest({
+          target_file: "src/empty.ts",
+          changes: [makeChange("src/empty.ts", "", "")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+    });
+
+    it("rejects edit_create_file targeting a path inside a protected directory", () => {
+      const r = validateRequest(
+        "edit_create_file",
+        baseRequest({
+          target_file: ".meta-edit/state/seed.json",
+          changes: [makeChange(".meta-edit/state/seed.json", "", "{}\n")],
+          test_files: ["tests/seed.test.ts"],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some((w) => w.includes("protected")),
+        ).toBe(true);
       }
     });
   });
@@ -815,6 +918,7 @@ describe("appendLogSafely audit-integrity", () => {
       ctx,
       log: makeFailingLog(diskFullError),
       applyChanges: noopApply,
+      applyCreates: noopApply,
     });
 
     const result = await handler("edit_boundary_condition", logFailRequest());
@@ -836,6 +940,7 @@ describe("appendLogSafely audit-integrity", () => {
       ctx,
       log: makeFailingLog(diskFullError),
       applyChanges: noopApply,
+      applyCreates: noopApply,
     });
 
     const result = await handler("edit_boundary_condition", logFailRequest());
@@ -861,6 +966,7 @@ describe("appendLogSafely audit-integrity", () => {
       ctx,
       log: okLog,
       applyChanges: noopApply,
+      applyCreates: noopApply,
     });
 
     const result = await handler("edit_boundary_condition", logFailRequest());
@@ -882,6 +988,7 @@ describe("appendLogSafely audit-integrity", () => {
       ctx,
       log: makeFailingLog(diskFullError),
       applyChanges: noopApply,
+      applyCreates: noopApply,
     });
 
     // empty rationale triggers a validation failure before any apply

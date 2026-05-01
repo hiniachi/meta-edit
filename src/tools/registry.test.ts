@@ -5,10 +5,10 @@ import {
   TOOLS_REQUIRING_TEST_FILES,
 } from "./descriptions.js";
 
-describe("eighteen tools", () => {
-  it("registers exactly eighteen tool names", () => {
-    expect(TOOL_NAMES.length).toBe(18);
-    expect(new Set(TOOL_NAMES).size).toBe(18);
+describe("nineteen tools", () => {
+  it("registers exactly nineteen tool names", () => {
+    expect<number>(TOOL_NAMES.length).toBe(19);
+    expect(new Set(TOOL_NAMES).size).toBe(19);
   });
 
   it("has a non-empty description for each tool", () => {
@@ -26,10 +26,30 @@ describe("eighteen tools", () => {
     );
   });
 
+  it("registers edit_create_file with a verbatim creation description", () => {
+    expect(TOOL_NAMES).toContain("edit_create_file");
+    // Description must mention the explicit non-existent precondition and the
+    // O_CREAT|O_EXCL|O_NOFOLLOW open contract — these are the load-bearing
+    // properties that distinguish creation from modify.
+    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
+      "Create a new file",
+    );
+    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
+      "O_CREAT | O_EXCL | O_NOFOLLOW",
+    );
+  });
+
   it("treats edit_docs_only as test-files-optional, like edit_refactor_only", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_docs_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_refactor_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_test_only_change");
+  });
+
+  it("requires test_files for edit_create_file", () => {
+    // Per dogfood-006: bootstrapping new files always introduces new code
+    // that needs coverage; creation without declared tests is the bootstrap
+    // anti-pattern this tool exists to displace.
+    expect(TOOLS_REQUIRING_TEST_FILES).toContain("edit_create_file");
   });
 
   it("includes the universal General principles block verbatim in every description", () => {

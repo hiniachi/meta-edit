@@ -154,6 +154,7 @@ export function validateRequest(
     return { ok: false, warnings };
   }
 
+  const isCreate = toolName === "edit_create_file";
   const touched: string[] = [];
   const changes: ContentChange[] = [];
   for (const c of request.changes) {
@@ -165,17 +166,34 @@ export function validateRequest(
       warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
       continue;
     }
-    // Reject no-op changes (old_content === new_content). Pre-PR-D the
-    // jsdiff parser rejected zero-hunk patches; the content-pair flow
-    // would otherwise accept them and still stage+rename the file,
-    // bumping mtime / inode and triggering downstream watchers /
-    // rebuilds for a semantically empty edit. Codex GitHub bot review
-    // on PR #29 (P2) caught this regression.
-    if (c.old_content === c.new_content) {
-      warnings.push(
-        `change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`,
-      );
-      continue;
+    if (isCreate) {
+      // edit_create_file precondition: the file does not yet exist on
+      // disk, so old_content carries no information and MUST be the
+      // empty string. A non-empty old_content here means the agent is
+      // treating this as a modify and chose the wrong tool.
+      if (c.old_content !== "") {
+        warnings.push(
+          `change for "${c.file}" has non-empty old_content; for edit_create_file old_content must be empty (the file does not yet exist on disk)`,
+        );
+        continue;
+      }
+      // The modify-mode no-op rejection (old===new) does NOT apply to
+      // create. old==="" and new==="" is a valid empty-file creation:
+      // the file goes from non-existent to existent, which is observable
+      // on disk and worth recording in the audit trail.
+    } else {
+      // Reject no-op changes (old_content === new_content). Pre-PR-D the
+      // jsdiff parser rejected zero-hunk patches; the content-pair flow
+      // would otherwise accept them and still stage+rename the file,
+      // bumping mtime / inode and triggering downstream watchers /
+      // rebuilds for a semantically empty edit. Codex GitHub bot review
+      // on PR #29 (P2) caught this regression.
+      if (c.old_content === c.new_content) {
+        warnings.push(
+          `change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`,
+        );
+        continue;
+      }
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
@@ -271,13 +289,14 @@ export type ApplyingHandlerDependencies = {
   ctx: ValidationContext;
   log: EditLogLike;
   applyChanges: ApplyChangesFn;
+  applyCreates: ApplyChangesFn;
   now?: () => Date;
 };
 
 export function makeApplyingHandler(
   deps: ApplyingHandlerDependencies,
 ): ToolHandler {
-  const { ctx, log, applyChanges } = deps;
+  const { ctx, log, applyChanges, applyCreates } = deps;
   const now = deps.now ?? (() => new Date());
 
   return async (toolName, args) => {
@@ -340,7 +359,13 @@ export function makeApplyingHandler(
     }
     const patchSize = Buffer.byteLength(synthesized, "utf8");
 
-    const result = applyChanges(ctx.repoRoot, validation.changes);
+    // Dispatch to the create-vs-modify apply path on tool name. The two
+    // share their pre-write canonicalization and protected-path checks
+    // but differ on whether the leaf must already exist (modify) or must
+    // not exist (create with O_CREAT|O_EXCL|O_NOFOLLOW).
+    const applyFn =
+      toolName === "edit_create_file" ? applyCreates : applyChanges;
+    const result = applyFn(ctx.repoRoot, validation.changes);
     // The new content is already on disk if result.applied. We MUST NOT
     // throw out of the handler here even if log.append fails: the
     // client would see the call as failed and likely retry, causing
