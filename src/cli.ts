@@ -10,6 +10,7 @@ import {
   runUninstallHooks,
 } from "./cli/hooks-cmd.js";
 import { VERSION } from "./version.js";
+import { SPEC_URL } from "./docs-urls.js";
 
 export async function main(argv: string[]): Promise<number> {
   const [, , subcommand, ...rest] = argv;
@@ -100,7 +101,7 @@ Usage:
   meta-edit --version                      Show version.
   meta-edit --help                         Show this help.
 
-See docs/SPEC.md for full specification.
+See ${SPEC_URL} for full specification.
 `);
 }
 

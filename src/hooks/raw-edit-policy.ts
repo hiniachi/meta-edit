@@ -5,6 +5,8 @@
 // fires on PreToolUse and denies those primitives outright, so the agent
 // has no fallback path that bypasses the nineteen typed tools.
 
+import { SPEC_TOOLS_URL } from "../docs-urls.js";
+
 export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "Edit",
   "Write",
@@ -36,8 +38,9 @@ export function evaluateRawEdit(toolName: string): HookDecision {
       reason:
         `meta-edit forbids the raw "${toolName}" tool. ` +
         `Choose one of the nineteen edit_* tools that match the kind of ` +
-        `change you are making (see docs/SPEC.md §4). If no edit_* tool ` +
-        `fits, stop and ask the user before bypassing the typed surface.`,
+        `change you are making (full list: ${SPEC_TOOLS_URL}). If no ` +
+        `edit_* tool fits, stop and ask the user before bypassing the ` +
+        `typed surface.`,
     };
   }
   return { decision: "allow" };

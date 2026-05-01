@@ -22,6 +22,7 @@
 
 import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
+import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
 
 export type HookDecision = {
   decision: "allow" | "deny";
@@ -797,8 +798,8 @@ function denyReason(pattern: string): string {
   return (
     `command matches deny pattern "${pattern}". meta-edit reserves ` +
     `direct file writes for the nineteen edit_* tools; if a formatter ` +
-    `or codegen needs to run, route it through the allowlist (see ` +
-    `docs/SPEC.md §5.2).`
+    `or codegen needs to run, route it through the allowlist ` +
+    `(${SPEC_BASH_HOOK_URL}).`
   );
 }
 
