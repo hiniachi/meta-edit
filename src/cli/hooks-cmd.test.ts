@@ -16,33 +16,11 @@ import {
 } from "./hooks-cmd.js";
 import { RAW_EDIT_TOOLS } from "../hooks/raw-edit-policy.js";
 
-let tmpRoot: string;
-let collectedOut: string[];
-let collectedErr: string[];
-const out: NodeJS.WritableStream = {
-  write: ((s: string) => {
-    collectedOut.push(s);
-    return true;
-  }),
-} as unknown as NodeJS.WritableStream;
-const err: NodeJS.WritableStream = {
-  write: ((s: string) => {
-    collectedErr.push(s);
-    return true;
-  }),
-} as unknown as NodeJS.WritableStream;
-
-beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-hooks-cmd-"));
-  collectedOut = [];
-  collectedErr = [];
-});
-
-afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-});
-
-describe("META_EDIT_RAW_EDIT_MATCHER constant (a3-02 install-hooks coverage)", () => {
+// ---------------------------------------------------------------------------
+// Drift-prevention tests — pure constant/import checks, NO filesystem setup.
+// Isolated in their own describe so a read-only /tmp never blocks them.
+// ---------------------------------------------------------------------------
+describe("matcher constant integrity", () => {
   it("includes NotebookEdit so install-hooks emits a 4-tool matcher", () => {
     // The runtime policy in deny-raw-edit denies NotebookEdit (a3-02), but
     // that only fires if Claude Code's PreToolUse routing actually invokes
@@ -391,6 +369,32 @@ describe("uninstallMetaEditHooks (pure)", () => {
 });
 
 describe("runInstallHooks (effectful)", () => {
+  let tmpRoot: string;
+  let collectedOut: string[];
+  let collectedErr: string[];
+  const out: NodeJS.WritableStream = {
+    write: ((s: string) => {
+      collectedOut.push(s);
+      return true;
+    }),
+  } as unknown as NodeJS.WritableStream;
+  const err: NodeJS.WritableStream = {
+    write: ((s: string) => {
+      collectedErr.push(s);
+      return true;
+    }),
+  } as unknown as NodeJS.WritableStream;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-hooks-cmd-"));
+    collectedOut = [];
+    collectedErr = [];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
   it("creates settings.json under --scope project", () => {
     runInstallHooks({ scope: "project", cwd: tmpRoot, out, err });
     const target = settingsPathForScope("project", { cwd: tmpRoot });
