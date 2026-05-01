@@ -171,7 +171,13 @@ export function evaluateBashCommand(command: string): HookDecision {
   // interpreter and deny outright. Read-only downstream consumers
   // (`base64 -d | grep`, `base64 -d | hexdump`) remain allowed because
   // the downstream verb is not a shell.
-  if (matchesDecodeAndExecute(command)) {
+  //
+  // Codex round-2 review (a1-02): scan against the quote-stripped form
+  // so that legitimate string literals containing the bypass shape
+  // (`printf 'base64 -d | bash\n'`) are not denied. A determined
+  // attacker can hide the actual pipe behind `eval "..."` — that case
+  // is already handled by matchesEvalDeferredString.
+  if (matchesDecodeAndExecute(stripQuotedContent(command))) {
     return {
       decision: "deny",
       reason:
@@ -264,7 +270,14 @@ function evaluateSegment(rawSegment: string): HookDecision {
   // separately, not `>&`) on the same segment always writes a file.
   // Allowed read-only form `cat <<EOF | grep foo` does not match because
   // the `>` is required.
-  if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(normalized)) {
+  //
+  // Codex round-2 review (a1-01): scan the quote-stripped form so that
+  // legitimate string literals like `grep '<<EOF > src/foo.ts'` and
+  // `echo "cat <<EOF > src/foo.ts"` are not denied. False-negative on
+  // a quote-escaped bypass is preferable here; eval-based deferred
+  // execution is already covered separately.
+  const heredocScan = stripQuotedContent(normalized);
+  if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
     return {
       decision: "deny",
       reason:
@@ -637,6 +650,61 @@ function extractSubstitutionInners(seg: string): string[] {
     i++;
   }
   return inners;
+}
+
+// Replace the *contents* of single- and double-quoted regions with
+// space placeholders, preserving the quote chars themselves so quote
+// state remains balanced for any downstream parser that re-walks the
+// string. Used to make heredoc / decode-and-exec scans ignore literal
+// string arguments. NOTE: heredoc bodies (`<<EOF ... EOF`) are real
+// code, not string literals — they are intentionally NOT stripped here.
+//
+// Conservative trade-off: we err on the side of FALSE-NEGATIVE for
+// quote-escaped bypass forms (`echo 'sed -i ...'` no longer denies
+// the embedded sed -i text). Determined attackers can defeat this
+// hook in many other ways already; the goal is to stop tripping on
+// agent strings that mention bypass patterns by accident or in docs.
+// See codex round-2 review (a1-01, a1-02).
+function stripQuotedContent(s: string): string {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'") {
+      out += "'";
+      i++;
+      while (i < s.length && s[i] !== "'") {
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += "'";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += '"';
+      i++;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === "\\" && i + 1 < s.length) {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+      }
+      if (i < s.length) {
+        out += '"';
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 function denyReason(pattern: string): string {

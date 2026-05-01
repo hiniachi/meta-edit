@@ -1040,6 +1040,18 @@ describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
       evaluateBashCommand("cat <<EOF > src/foo.ts\nhello\nEOF").decision,
     ).toBe("deny");
   });
+
+  it("allows grep with quoted heredoc-shaped literal", () => {
+    expect(
+      evaluateBashCommand("grep '<<EOF > src/foo.ts'").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo with quoted heredoc-shaped literal", () => {
+    expect(
+      evaluateBashCommand('echo "cat <<EOF > src/foo.ts"').decision,
+    ).toBe("allow");
+  });
 });
 
 describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
@@ -1049,6 +1061,12 @@ describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
         "echo 'c2VkIC1pIHMveC95LyBzcmMvZm9vLnRzCg==' | base64 -d | bash",
       ).decision,
     ).toBe("deny");
+  });
+
+  it("allows printf with quoted base64-shaped literal", () => {
+    expect(
+      evaluateBashCommand("printf 'base64 -d | bash\\n'").decision,
+    ).toBe("allow");
   });
 });
 
