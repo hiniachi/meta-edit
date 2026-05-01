@@ -54,34 +54,35 @@ export class EditLog {
   }
 
   nextEditId(now: Date = new Date()): string {
-    // Issue a6-03: two EditLog instances against the same on-disk log
-    // previously collided on edit_id because each seeded its in-memory
-    // counter from disk only on the first call for a day, then both
-    // incremented independently in memory.
+    // Issue a6-03 (codex round 1): two EditLog instances on the same
+    // on-disk log previously collided on edit_id when both scanned the
+    // log BEFORE either had appended. Re-scanning on every call (the
+    // round-0 fix) closes the alternating-call case but loses the
+    // read/read/write/write race because both scans return the same
+    // max counter.
     //
-    // Fix: re-scan the on-disk log on every nextEditId call and use
-    // max(in-memory counter, on-disk max) as the basis for the next id.
-    // This is O(N) in log size per call but the call frequency is bound
-    // by the rate of edit_* tool invocations, which is human-paced;
-    // O(N) per call is acceptable for the MVP scale (SPEC §11 allows
-    // multi-process file-locking solutions to be deferred).
-    //
-    // Why max() of both counters: the in-memory counter handles
-    // sequential calls *without* an intervening append (the existing
-    // "increments sequentially within the same day" test exercises
-    // this: three nextEditId calls back-to-back must return 1, 2, 3).
-    // The on-disk scan handles concurrent instances where another
-    // instance has appended between our calls.
+    // Round-1 fix: bind id allocation to a cross-process mutex
+    // (mkdir-based file lock at <state>/.lock) AND persist the
+    // allocated counter to a sidecar file (<state>/counter.json) so
+    // a second instance entering the lock immediately observes the
+    // bumped value, even if no append has happened yet. The lock is
+    // held only across the read-counter / bump / write-counter steps;
+    // append takes its own short lock.
     const key = formatDayKey(now);
     if (this.todayKey !== key) {
       this.todayKey = key;
       this.todayCounter = 0;
     }
-    const onDisk = this.scanMaxCounterForKey(key);
-    const base = Math.max(this.todayCounter, onDisk);
-    this.todayCounter = base + 1;
-    const nnnn = String(this.todayCounter).padStart(4, "0");
-    return `edit_${key}_${nnnn}`;
+    this.ensureStateDir();
+    return this.withFileLock(() => {
+      const onDiskLog = this.scanMaxCounterForKey(key);
+      const onDiskCounter = this.readCounterFile(key);
+      const base = Math.max(this.todayCounter, onDiskLog, onDiskCounter);
+      this.todayCounter = base + 1;
+      this.writeCounterFile(key, this.todayCounter);
+      const nnnn = String(this.todayCounter).padStart(4, "0");
+      return `edit_${key}_${nnnn}`;
+    });
   }
 
   append(entry: EditLogEntry): void {
@@ -92,6 +93,48 @@ export class EditLog {
     // make the tool overwrite an unrelated file. We guard each ancestor
     // explicitly with lstat (symlink-aware) before mkdir, and use
     // O_NOFOLLOW on the final open so the leaf swap is also caught.
+    this.ensureStateDir();
+    // Re-check: mkdirSync of an intermediate that was created during
+    // this call may have followed a parent symlink we didn't see. Walk
+    // again from the top and reject if any segment is now a symlink.
+    ensureNoSymlinkOnPath(this.statePath);
+
+    const line = JSON.stringify(entry) + "\n";
+    const O_NOFOLLOW = fs.constants.O_NOFOLLOW;
+    if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
+      throw new Error(
+        "this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection",
+      );
+    }
+    // Issue a6-03 (codex round 1): hold the same cross-process lock
+    // around the actual write so concurrent appends serialize cleanly,
+    // matching the lock used during id allocation.
+    this.withFileLock(() => {
+      let fd: number | null = null;
+      try {
+        fd = fs.openSync(
+          this.logPath,
+          // eslint-disable-next-line no-bitwise
+          fs.constants.O_WRONLY |
+            fs.constants.O_APPEND |
+            fs.constants.O_CREAT |
+            O_NOFOLLOW,
+          0o600,
+        );
+        fs.writeSync(fd, line, null, "utf8");
+      } finally {
+        if (fd !== null) {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    });
+  }
+
+  private ensureStateDir(): void {
     ensureNoSymlinkOnPath(this.statePath);
     // Issue a6-04: the audit-log directory must not be world-readable.
     // mkdirSync without an explicit mode uses 0o777 & ~umask (typically
@@ -116,39 +159,94 @@ export class EditLog {
         /* ignore — fs may reject chmod on certain platforms */
       }
     }
-    // Re-check: mkdirSync of an intermediate that was created during
-    // this call may have followed a parent symlink we didn't see. Walk
-    // again from the top and reject if any segment is now a symlink.
-    ensureNoSymlinkOnPath(this.statePath);
+  }
 
-    const line = JSON.stringify(entry) + "\n";
-    const O_NOFOLLOW = fs.constants.O_NOFOLLOW;
-    if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
-      throw new Error(
-        "this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection",
-      );
-    }
-    let fd: number | null = null;
-    try {
-      fd = fs.openSync(
-        this.logPath,
-        // eslint-disable-next-line no-bitwise
-        fs.constants.O_WRONLY |
-          fs.constants.O_APPEND |
-          fs.constants.O_CREAT |
-          O_NOFOLLOW,
-        0o600,
-      );
-      fs.writeSync(fd, line, null, "utf8");
-    } finally {
-      if (fd !== null) {
-        try {
-          fs.closeSync(fd);
-        } catch {
-          /* ignore */
+  private withFileLock<T>(fn: () => T): T {
+    // Cross-process advisory lock via mkdir: POSIX-portable, atomic
+    // (mkdir is atomic on EXT4/APFS/most local filesystems). EEXIST
+    // means another process holds the lock; we busy-spin with a short
+    // sleep until it's released. Stale-lock recovery is handled by the
+    // try/finally rmdir (process death is the only way to leak it; in
+    // that case the user manually removes <state>/.lock — acceptable
+    // for the MVP per SPEC §11).
+    const lockPath = path.join(this.statePath, ".lock");
+    const start = Date.now();
+    const TIMEOUT_MS = 30_000;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        fs.mkdirSync(lockPath);
+        break;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST") throw e;
+        if (Date.now() - start > TIMEOUT_MS) {
+          throw new Error(
+            `meta-edit: timed out waiting for edit-log lock at ${lockPath}; ` +
+              `if no other meta-edit process is running, remove this directory manually.`,
+          );
+        }
+        // Brief busy-wait. Math.random() jitter avoids lockstep retries
+        // when many waiters are queued.
+        const until = Date.now() + 2 + Math.floor(Math.random() * 3);
+        while (Date.now() < until) {
+          /* spin */
         }
       }
     }
+    try {
+      return fn();
+    } finally {
+      try {
+        fs.rmdirSync(lockPath);
+      } catch {
+        /* ignore — lock dir was removed by something else */
+      }
+    }
+  }
+
+  private readCounterFile(key: string): number {
+    // Sidecar counter file: <state>/counter.json — { "<YYYYMMDD>": N }.
+    // Used as an atomic reservation marker so two `nextEditId` calls
+    // entering the lock back-to-back observe the bumped counter even
+    // if no `append` has happened yet between them.
+    const counterPath = path.join(this.statePath, "counter.json");
+    let text: string;
+    try {
+      text = fs.readFileSync(counterPath, "utf8");
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return 0;
+      // a6-03 fail-closed (codex round 1): any non-ENOENT error reading
+      // the counter file is treated as fatal; a corrupt counter file
+      // could otherwise cause silent id reuse.
+      throw e;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return 0;
+    }
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      key in (parsed as Record<string, unknown>)
+    ) {
+      const v = (parsed as Record<string, unknown>)[key];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+        return Math.floor(v);
+      }
+    }
+    return 0;
+  }
+
+  private writeCounterFile(key: string, value: number): void {
+    const counterPath = path.join(this.statePath, "counter.json");
+    // Keep only the current day's counter — old days are recoverable
+    // from the log itself if needed and pruning keeps the file tiny.
+    const payload = JSON.stringify({ [key]: value });
+    fs.writeFileSync(counterPath, payload, { encoding: "utf8", mode: 0o600 });
   }
 
   readAll(): EditLogEntry[] {

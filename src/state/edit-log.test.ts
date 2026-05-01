@@ -151,6 +151,35 @@ describe("EditLog concurrent-instance safety", () => {
     expect(unique.size).toBe(ids.length);
   });
 
+  // Stronger regression for issue a6-03 (codex round 1): the previous
+  // test alternated nextEditId+append so the on-disk scan in the second
+  // instance always saw the first instance's append. This test exercises
+  // the actual read/read/write/write interleaving that the disk-scan
+  // approach cannot win without a cross-process lock — both instances
+  // assign an id BEFORE either has written, so the only way to keep ids
+  // unique is to bind id allocation to the lock that protects the write.
+  it("read/read/write/write interleaving still produces unique edit_ids", () => {
+    const d = new Date(2026, 3, 30);
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    // Both grab ids before either writes.
+    const idA = log1.nextEditId(d);
+    const idB = log2.nextEditId(d);
+
+    // The two ids must differ even though no append has happened yet.
+    expect(idA).not.toBe(idB);
+
+    // The writes must also each succeed and produce a distinct id when
+    // the actual append step runs (the lock binds id+write together).
+    log1.append(entry({ edit_id: idA, rationale: "A", test_files: [], tool_name: "edit_refactor_only" }));
+    log2.append(entry({ edit_id: idB, rationale: "B", test_files: [], tool_name: "edit_refactor_only" }));
+
+    const back = log1.readAll();
+    const idsOnDisk = new Set(back.map((e) => e.edit_id));
+    expect(idsOnDisk.size).toBe(2);
+  });
+
   it("large-entry concurrent appends produce no interleaved bytes within a line", () => {
     // Each entry has a >4 KB rationale to stress kernel write atomicity.
     const largeRationale = "x".repeat(5000);
