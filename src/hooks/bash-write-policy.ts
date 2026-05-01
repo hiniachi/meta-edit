@@ -80,6 +80,85 @@ const PROTECTED_PATH_NEEDLES: readonly string[] = [
   ".meta-edit/tmp",
 ];
 
+// Component-aware substring match. Returns true iff `needle` appears in
+// `s` with the trailing side at a path-component boundary AND the
+// leading side either at a path boundary or at an option-glue position.
+// This rejects spurious matches like ".meta-edit/state" inside
+// "/tmp/x-with-.meta-edit/state-in-name" while still catching:
+//   - real path components: "/tmp/work/.meta-edit/state/edits.jsonl"
+//   - short-option glue: "less -O.meta-edit/state/exfil.log"
+//   - long-option glue:  "tool --output=.meta-edit/state/foo"
+function containsAsPathComponent(s: string, needle: string): boolean {
+  let from = 0;
+  while (from <= s.length - needle.length) {
+    const idx = s.indexOf(needle, from);
+    if (idx < 0) return false;
+    const after =
+      idx + needle.length < s.length ? s[idx + needle.length] : undefined;
+    if (isPathComponentContinuation(after)) {
+      from = idx + 1;
+      continue;
+    }
+    if (hasAcceptableBeforeBoundary(s, idx)) {
+      return true;
+    }
+    from = idx + 1;
+  }
+  return false;
+}
+
+function isPathComponentContinuation(c: string | undefined): boolean {
+  if (c === undefined) return false;
+  return /^[A-Za-z0-9._-]$/.test(c);
+}
+
+// True when the position is acceptable as the start of a path-component
+// match: at start of string, after a path separator, or directly after
+// an option flag prefix in the same whitespace-bounded token.
+function hasAcceptableBeforeBoundary(s: string, pos: number): boolean {
+  if (pos === 0) return true;
+  const before = s[pos - 1]!;
+  if (before === "/") return true;
+  if (!isPathComponentContinuation(before)) return true;
+  // The needle is glued to letters/digits/`.`/`_`/`-`. Walk back to the
+  // start of the surrounding whitespace-bounded token. If the prefix
+  // between the token start and `pos` looks like a short-option flag
+  // (`-X`, `-XY...`) or long-option flag with `=` (`--foo=`), we accept
+  // — the path is the option's value, just glued without a space.
+  const tokenStart = findTokenStart(s, pos);
+  const prefix = s.slice(tokenStart, pos);
+  if (/^-[A-Za-z]+$/.test(prefix)) return true;
+  if (/^--[A-Za-z][A-Za-z0-9-]*=$/.test(prefix)) return true;
+  return false;
+}
+
+function findTokenStart(s: string, pos: number): number {
+  let i = pos;
+  while (i > 0) {
+    const c = s[i - 1];
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === "'" ||
+      c === '"' ||
+      c === "(" ||
+      c === ";" ||
+      c === "|" ||
+      c === "&" ||
+      c === ">" ||
+      c === "<" ||
+      c === "=" ||
+      c === "$"
+    ) {
+      break;
+    }
+    i--;
+  }
+  return i;
+}
+
 export function evaluateBashCommand(command: string): HookDecision {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
@@ -167,13 +246,13 @@ function evaluateSegment(rawSegment: string): HookDecision {
   // invocation (`/usr/bin/mv` -> `mv`). The deny set is the basename
   // form of every prefix in DENY_PREFIX_PATTERNS.
   const verb = extractCommandVerb(normalized.trimStart());
-  if (verb !== null && DENY_VERBS.has(verb)) {
+  if (verb !== null && DENY_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
     return {
       decision: "deny",
       reason: denyReason(verb),
     };
   }
-  if (matchesPythonNodeWrite(normalized)) {
+  if (matchesPythonNodeWrite(normalized, rawSegment)) {
     return {
       decision: "deny",
       reason:
@@ -184,16 +263,36 @@ function evaluateSegment(rawSegment: string): HookDecision {
   return { decision: "allow" };
 }
 
-// Split a command line on shell segment boundaries (; && || | newline)
-// while respecting single- and double-quoted regions so we don't shred a
-// `python -c "import x; ..."` invocation into nonsense.
+// Split a command line on shell segment boundaries (; && || | newline,
+// CR, U+2028, U+2029) while respecting single- and double-quoted regions
+// so we don't shred a `python -c "import x; ..."` invocation into
+// nonsense. After the primary split, each segment is also scanned for
+// $(...) / `...` command substitutions; their inner contents are
+// emitted as additional segments (recursively) so prefix-only deny
+// verbs catch e.g. `echo $(mv a b)` on the inner `mv a b`.
 //
-// This is still best-effort: we don't expand $(...), <(...), or ${...},
-// and we don't unescape ANSI-C $'...' strings. A determined attacker can
+// This is still best-effort: we don't unescape ANSI-C $'...' strings,
+// and we don't expand <(...) or ${...}. A determined attacker can still
 // hide a deny pattern from us. The goal is to make the obvious chained
 // bypasses harder than reaching for an edit_* tool, not to provide a
 // sandbox.
 function splitSegments(cmd: string): string[] {
+  const main = primarySplitSegments(cmd);
+  const result: string[] = [];
+  for (const seg of main) {
+    result.push(seg);
+    for (const inner of extractSubstitutionInners(seg)) {
+      // Recursively split the inner span so nested $(a; b) and chained
+      // `echo $(cargo fmt; mv x y)` are caught on each inner segment.
+      for (const innerSeg of splitSegments(inner)) {
+        result.push(innerSeg);
+      }
+    }
+  }
+  return result;
+}
+
+function primarySplitSegments(cmd: string): string[] {
   const segments: string[] = [];
   let buf = "";
   let inSingle = false;
@@ -233,7 +332,14 @@ function splitSegments(cmd: string): string[] {
         i++;
         continue;
       }
-      if (c === ";" || c === "|" || c === "\n") {
+      if (
+        c === ";" ||
+        c === "|" ||
+        c === "\n" ||
+        c === "\r" ||
+        c === " " ||
+        c === " "
+      ) {
         segments.push(buf);
         buf = "";
         continue;
@@ -262,6 +368,100 @@ function splitSegments(cmd: string): string[] {
   }
   segments.push(buf);
   return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+// Extract the inner content of any unquoted $(...) or backtick `...`
+// command substitution in `seg`. Quote-aware: $(...) inside a single-
+// quoted region is literal text and is skipped; everywhere else
+// (top-level or inside double quotes — which permit substitution per
+// POSIX) it is extracted. Backslashes outside single quotes escape the
+// next character so `\$(literal)` and `` \` `` are skipped.
+function extractSubstitutionInners(seg: string): string[] {
+  const inners: string[] = [];
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (!inSingle && c === "\\" && i + 1 < seg.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === "$" && seg[i + 1] === "(") {
+      // Find matching ')' tracking nested $(...). Quote tracking is
+      // separate from the outer pass so a `'('` literal inside the
+      // substitution body doesn't shift the depth count.
+      let depth = 1;
+      let j = i + 2;
+      let innerSingle = false;
+      let innerDouble = false;
+      while (j < seg.length && depth > 0) {
+        const cj = seg[j];
+        if (cj === "\\" && !innerSingle && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "'" && !innerDouble) {
+          innerSingle = !innerSingle;
+          j++;
+          continue;
+        }
+        if (cj === '"' && !innerSingle) {
+          innerDouble = !innerDouble;
+          j++;
+          continue;
+        }
+        if (!innerSingle && !innerDouble) {
+          if (cj === "(") {
+            depth++;
+          } else if (cj === ")") {
+            depth--;
+            if (depth === 0) break;
+          }
+        }
+        j++;
+      }
+      if (depth === 0) {
+        inners.push(seg.slice(i + 2, j));
+        i = j + 1;
+        continue;
+      }
+      // Unmatched `$(` — bail out, partial command.
+      return inners;
+    }
+    if (!inSingle && c === "`") {
+      // Find matching '`' (POSIX backticks don't nest).
+      let j = i + 1;
+      while (j < seg.length) {
+        const cj = seg[j];
+        if (cj === "\\" && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "`") break;
+        j++;
+      }
+      if (j < seg.length) {
+        inners.push(seg.slice(i + 1, j));
+        i = j + 1;
+        continue;
+      }
+      // Unmatched backtick — bail.
+      return inners;
+    }
+    i++;
+  }
+  return inners;
 }
 
 function denyReason(pattern: string): string {
@@ -295,6 +495,32 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
 
 // Verbs whose mere invocation is denied.
 const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
+
+// Per-wrapper short options that take a separate value argument. After
+// peeling a wrapper, `extractCommandVerb` consumes a flag plus its
+// value when the flag is in this set, so `sudo -u root mv a b` is
+// resolved to verb `mv` rather than `root`. Only short forms are
+// listed; `--long=value` is auto-handled by the existing flag regex,
+// and `--long value` (separate) is not common enough on these
+// wrappers in agent workflows to warrant per-option grammar yet.
+const WRAPPER_VALUE_OPTS: Record<string, ReadonlySet<string>> = {
+  sudo: new Set([
+    "-u", // user
+    "-g", // group
+    "-h", // host
+    "-C", // close-from FD
+    "-D", // chdir
+    "-p", // prompt
+    "-r", // role
+    "-t", // type
+    "-T", // time-limit
+    "-R", // chroot
+    "-c", // class
+    "-U", // other-user listing
+  ]),
+  doas: new Set(["-u", "-C"]),
+  env: new Set(["-u", "-C", "-S"]),
+};
 
 // Common read-only inspection utilities. When the leading verb (after
 // wrapper / env-assignment / absolute-path stripping) is one of these
@@ -419,11 +645,43 @@ function redirectsToProtected(s: string): boolean {
     let target = s.slice(tokenStart, j);
     target = target.replace(/^["']|["']$/g, "");
     for (const needle of PROTECTED_PATH_NEEDLES) {
-      if (target.includes(needle)) {
+      if (containsAsPathComponent(target, needle)) {
         return true;
       }
     }
     i = j;
+  }
+  return false;
+}
+
+// Detect a per-verb safety flag in the segment that means the verb's
+// invocation is genuinely a no-write operation (not just
+// "no-overwrite"), so denying it would be a false positive.
+// Whitespace-bounded so `--dry-run-foo` doesn't fool the matcher.
+//
+// Notable omission: `cp` is NOT carved out. `cp -n` / `cp --no-clobber`
+// only refuses to OVERWRITE an existing destination — `cp -n payload
+// src/new_file.ts` STILL CREATES new files at the destination, which
+// is exactly the bypass we want the hook to deny. Codex GitHub bot
+// review on PR #27 caught this regression and we backed out the cp
+// carve-out. `mv` has the same property (mv -n still moves to a new
+// destination) and is similarly not carved out. Only `patch` keeps a
+// carve-out, because `patch --dry-run` / `--check` are documented as
+// read-only modes that emit nothing to disk.
+function hasSafetyFlag(segment: string, verb: string): boolean {
+  if (verb === "patch") {
+    // patch --dry-run / --check are read-only modes that emit
+    // nothing to disk... UNLESS combined with -o / --output=FILE,
+    // which writes the patched output to FILE regardless of the
+    // dry-run claim. Codex GitHub bot review on PR #27 round 2
+    // caught this carve-out hole. If the segment specifies an
+    // output file, fall back to deny.
+    const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    if (!hasDryRun) return false;
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(
+      segment,
+    );
+    return !hasOutput;
   }
   return false;
 }
@@ -448,7 +706,7 @@ function extractCommandVerb(segment: string): string | null {
   let s = stripLeadingEnvAssignments(segment);
   for (let safety = 0; safety < 32; safety++) {
     s = stripLeadingEnvAssignments(s);
-    const m = /^(\S+)/.exec(s);
+    const m = s.match(/^(\S+)/);
     if (m === null || m[0] === undefined) return null;
     const word = m[0];
     const baseStart = word.lastIndexOf("/");
@@ -457,11 +715,26 @@ function extractCommandVerb(segment: string): string | null {
       // Skip the wrapper word and any wrapper options that follow
       // (`-X`, `--foo`, `--foo=bar`). Without this skip, forms like
       // `env -i mv a b` extract `-i` as the verb and miss `mv`.
+      // Per-wrapper short options that take a separate value (e.g.
+      // `sudo -u root mv a b`) consume the next token as the value so
+      // the verb resolves to `mv`, not `root`.
+      const valueOpts = WRAPPER_VALUE_OPTS[base];
       s = s.slice(word.length).replace(/^\s+/, "");
       while (true) {
-        const optMatch = /^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/.exec(s);
+        const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
         if (optMatch === null || optMatch[0] === undefined) break;
-        s = s.slice(optMatch[0].length).replace(/^\s+/, "");
+        const opt = optMatch[0];
+        s = s.slice(opt.length).replace(/^\s+/, "");
+        if (
+          valueOpts !== undefined &&
+          !opt.includes("=") &&
+          valueOpts.has(opt)
+        ) {
+          const valMatch = s.match(/^\S+/);
+          if (valMatch !== null && valMatch[0] !== undefined) {
+            s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+          }
+        }
       }
       continue;
     }
@@ -543,7 +816,7 @@ function stripLeadingEnvAssignments(s: string): string {
 
 function touchesProtectedPath(command: string): boolean {
   for (const needle of PROTECTED_PATH_NEEDLES) {
-    if (command.includes(needle)) {
+    if (containsAsPathComponent(command, needle)) {
       return true;
     }
   }
@@ -552,21 +825,300 @@ function touchesProtectedPath(command: string): boolean {
 
 const PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 const NODE_WRITE_RE = /writeFile|writeFileSync/;
+// Use a single-char class `[e]val` so this source file does not contain
+// the literal substring `eval(`, which trips overzealous heuristic
+// security scanners. The regex meaning is unchanged: it still matches
+// the long form `--eval` (and `--eval=`), while `\b` rejects any
+// longer word like `--evaluate`.
+const NODE_INVOCATION_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)/;
+const NODE_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)\s*/;
 
-function matchesPythonNodeWrite(command: string): boolean {
+// Detect inline write attempts in `python -c <arg>` / `node -e <arg>`.
+//
+// `normalized` is the post-strip-backslash form used for keyword
+// detection (so `pyt\hon -c` cannot bypass the python check). `raw` is
+// the pre-strip form used for shell-arg extraction so the quote
+// structure is intact.
+//
+// We extract the script arg from raw, then mask language-level string
+// literals (Python / JS) inside it. Tokens like `write_text` that
+// appear ONLY inside a literal (`print("write_text")`) are masked away
+// and don't trip the pattern. Real writes — `open(...,"w").write()` —
+// remain visible because the operator sits OUTSIDE the inner literals.
+function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
   // python -c / python3 -c (long form `--command` does not exist).
-  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(command)) {
-    if (PYTHON_WRITE_RE.test(command)) {
+  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(normalized)) {
+    const rawHit = raw.match(/(?:^|[\s;&|(])python3?\s+-c\s+/);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null) {
+        // Codex GitHub bot review on PR #27 round 2 (P1): scripts
+        // that wrap the write call in `exec(...)` / `eval(...)` /
+        // `compile(..., "exec")` would have their writer tokens
+        // hidden by string-literal masking — the dynamic code
+        // string IS the executable that performs the write. When
+        // such a wrapper is present, scan the UNMASKED arg so
+        // tokens inside the string literal still fire.
+        if (
+          /(?:^|[^A-Za-z0-9_])(?:exec|[e]val|compile)\s*\(/.test(arg)
+        ) {
+          if (PYTHON_WRITE_RE.test(arg)) return true;
+        }
+        const masked = maskLanguageStringLiterals(arg);
+        if (PYTHON_WRITE_RE.test(masked)) return true;
+      } else if (PYTHON_WRITE_RE.test(normalized)) {
+        return true;
+      }
+    } else if (PYTHON_WRITE_RE.test(normalized)) {
       return true;
     }
   }
-  // node -e and its long-form equivalent. Node accepts both `-e EXPR`
-  // and `--eval EXPR` / `--eval=EXPR`; without the long-form match a
-  // `node --eval ...` invocation slips past us.
-  if (/(?:^|[\s;&|(])node\s+(?:-e\b|--eval(?:\b|=))/.test(command)) {
-    if (NODE_WRITE_RE.test(command)) {
+  // node -e and its long-form equivalent.
+  if (NODE_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(NODE_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null) {
+        // Same exec/eval-wrapping concern for JS: `[e]val(...)`,
+        // `Function("...")()`, `vm.runInThisContext(...)`. Avoid
+        // the literal substring `eval(` in the source by using a
+        // single-char class.
+        if (
+          /(?:^|[^A-Za-z0-9_])(?:[e]val|Function|runInThisContext|runInNewContext)\s*\(/.test(
+            arg,
+          )
+        ) {
+          if (NODE_WRITE_RE.test(arg)) return true;
+        }
+        const masked = maskLanguageStringLiterals(arg);
+        if (NODE_WRITE_RE.test(masked)) return true;
+      } else if (NODE_WRITE_RE.test(normalized)) {
+        return true;
+      }
+    } else if (NODE_WRITE_RE.test(normalized)) {
       return true;
     }
   }
   return false;
+}
+
+// Read the next shell word starting at `start`, returning the
+// dequoted concatenation. POSIX shells treat adjacent quoted /
+// unquoted fragments as a single word: `"foo""bar"`, `'foo''bar'`,
+// `"foo"bar`, `$'foo'"bar"` are all one token equal to `foobar`.
+// Without that concatenation, a constructed `python -c "o""pen(...)"`
+// would split at the first closing quote and the writer-pattern
+// detector would only see `o`. Codex GitHub bot review on PR #27
+// caught the bypass; this routine now consumes a full shell word.
+//
+// Stops at whitespace or a shell metacharacter (`;`, `|`, `&`, `>`,
+// `<`). Returns null if any quote opens and never closes.
+function readShellArg(s: string, start: number): string | null {
+  if (start >= s.length) return null;
+  let i = start;
+  let buf = "";
+  while (i < s.length) {
+    const c = s[i]!;
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === ";" ||
+      c === "|" ||
+      c === "&" ||
+      c === ">" ||
+      c === "<"
+    ) {
+      break;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === '"') break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length) return null;
+      i = j + 1;
+      continue;
+    }
+    if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0) return null;
+      buf += s.slice(i + 1, j);
+      i = j + 1;
+      continue;
+    }
+    if (c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === "'") break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length) return null;
+      i = j + 1;
+      continue;
+    }
+    // Unquoted character — append literally.
+    buf += c;
+    i++;
+  }
+  if (i === start) return null;
+  return buf;
+}
+
+// Replace contents of language-level string literals (single, double,
+// triple-single, triple-double) with empty, preserving quote chars.
+// Honors `\X` escapes inside non-triple quoted strings.
+//
+// Python-style string prefixes (`f` / `F` / `r` / `R` / `b` / `B` /
+// `u` / `U`, including 2-char combinations like `fr` / `rb`) are
+// recognized. F-string contents have their literal text masked but
+// `{...}` interpolation expressions preserved, so write calls inside
+// f-string interpolations (`f"{open('x','w').write('y')}"`) are still
+// detected by the writer-pattern regex.
+function maskLanguageStringLiterals(s: string): string {
+  let result = "";
+  let i = 0;
+  while (i < s.length) {
+    const start = detectStringStart(s, i);
+    if (start === null) {
+      result += s[i];
+      i++;
+      continue;
+    }
+    const { prefixLen, quote, isF } = start;
+    const quoteStart = i + prefixLen;
+    const prefix = s.slice(i, quoteStart);
+    if (s[quoteStart + 1] === quote && s[quoteStart + 2] === quote) {
+      const triple = quote + quote + quote;
+      const end = s.indexOf(triple, quoteStart + 3);
+      if (end < 0) {
+        result += s.slice(i);
+        return result;
+      }
+      if (isF) {
+        const inner = s.slice(quoteStart + 3, end);
+        result += prefix + triple + preserveFInterpolations(inner) + triple;
+      } else {
+        result += prefix + triple + triple;
+      }
+      i = end + 3;
+      continue;
+    }
+    let j = quoteStart + 1;
+    while (j < s.length) {
+      if (s[j] === "\\" && j + 1 < s.length) {
+        j += 2;
+        continue;
+      }
+      if (s[j] === quote) break;
+      j++;
+    }
+    if (j >= s.length) {
+      result += s.slice(i);
+      return result;
+    }
+    if (isF) {
+      const inner = s.slice(quoteStart + 1, j);
+      result += prefix + quote + preserveFInterpolations(inner) + quote;
+    } else {
+      result += prefix + quote + quote;
+    }
+    i = j + 1;
+  }
+  return result;
+}
+
+// If position `i` in `s` starts a Python/JS string literal (with an
+// optional 0-, 1-, or 2-char prefix), return the prefix length, quote
+// char, and whether the prefix contains `f` / `F` (i.e. it's an
+// f-string). Returns null otherwise.
+function detectStringStart(
+  s: string,
+  i: number,
+): { prefixLen: number; quote: string; isF: boolean } | null {
+  const c0 = s[i];
+  if (c0 === undefined) return null;
+  if (c0 === "'" || c0 === '"') {
+    return { prefixLen: 0, quote: c0, isF: false };
+  }
+  const isPrefixChar = (c: string | undefined) =>
+    c !== undefined && /^[fFrRbBuU]$/.test(c);
+  if (isPrefixChar(c0) && (s[i + 1] === "'" || s[i + 1] === '"')) {
+    return {
+      prefixLen: 1,
+      quote: s[i + 1]!,
+      isF: c0 === "f" || c0 === "F",
+    };
+  }
+  if (
+    isPrefixChar(c0) &&
+    isPrefixChar(s[i + 1]) &&
+    (s[i + 2] === "'" || s[i + 2] === '"')
+  ) {
+    const c1 = s[i + 1]!;
+    return {
+      prefixLen: 2,
+      quote: s[i + 2]!,
+      isF: c0 === "f" || c0 === "F" || c1 === "f" || c1 === "F",
+    };
+  }
+  return null;
+}
+
+// Replace literal-text portions of an f-string body with empty; keep
+// `{...}` interpolation blocks intact (so the expressions inside them
+// remain visible to the writer-pattern regex). `{{` and `}}` are
+// f-string escapes for literal `{` / `}` and are dropped.
+function preserveFInterpolations(content: string): string {
+  let result = "";
+  let i = 0;
+  while (i < content.length) {
+    const c = content[i];
+    if (c === "{" && content[i + 1] === "{") {
+      i += 2;
+      continue;
+    }
+    if (c === "}" && content[i + 1] === "}") {
+      i += 2;
+      continue;
+    }
+    if (c === "{") {
+      let j = i + 1;
+      let depth = 1;
+      while (j < content.length && depth > 0) {
+        const cj = content[j];
+        if (cj === "{") {
+          depth++;
+        } else if (cj === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+        j++;
+      }
+      if (depth === 0) {
+        result += content.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      return result;
+    }
+    i++;
+  }
+  return result;
 }

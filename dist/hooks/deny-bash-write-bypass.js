@@ -99,6 +99,57 @@ var PROTECTED_PATH_NEEDLES = [
   ".meta-edit/state",
   ".meta-edit/tmp"
 ];
+function containsAsPathComponent(s, needle) {
+  let from = 0;
+  while (from <= s.length - needle.length) {
+    const idx = s.indexOf(needle, from);
+    if (idx < 0)
+      return false;
+    const after = idx + needle.length < s.length ? s[idx + needle.length] : undefined;
+    if (isPathComponentContinuation(after)) {
+      from = idx + 1;
+      continue;
+    }
+    if (hasAcceptableBeforeBoundary(s, idx)) {
+      return true;
+    }
+    from = idx + 1;
+  }
+  return false;
+}
+function isPathComponentContinuation(c) {
+  if (c === undefined)
+    return false;
+  return /^[A-Za-z0-9._-]$/.test(c);
+}
+function hasAcceptableBeforeBoundary(s, pos) {
+  if (pos === 0)
+    return true;
+  const before = s[pos - 1];
+  if (before === "/")
+    return true;
+  if (!isPathComponentContinuation(before))
+    return true;
+  const tokenStart = findTokenStart(s, pos);
+  const prefix = s.slice(tokenStart, pos);
+  if (/^-[A-Za-z]+$/.test(prefix))
+    return true;
+  if (/^--[A-Za-z][A-Za-z0-9-]*=$/.test(prefix))
+    return true;
+  return false;
+}
+function findTokenStart(s, pos) {
+  let i = pos;
+  while (i > 0) {
+    const c = s[i - 1];
+    if (c === " " || c === "\t" || c === `
+` || c === "\r" || c === "'" || c === '"' || c === "(" || c === ";" || c === "|" || c === "&" || c === ">" || c === "<" || c === "=" || c === "$") {
+      break;
+    }
+    i--;
+  }
+  return i;
+}
 function evaluateBashCommand(command) {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
@@ -137,13 +188,13 @@ function evaluateSegment(rawSegment) {
     }
   }
   const verb = extractCommandVerb(normalized.trimStart());
-  if (verb !== null && DENY_VERBS.has(verb)) {
+  if (verb !== null && DENY_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
     return {
       decision: "deny",
       reason: denyReason(verb)
     };
   }
-  if (matchesPythonNodeWrite(normalized)) {
+  if (matchesPythonNodeWrite(normalized, rawSegment)) {
     return {
       decision: "deny",
       reason: `inline "python -c" / "node -e" with write_text, .write, open(..., 'w'), or writeFile* is a bash bypass; use an edit_* tool instead.`
@@ -152,6 +203,19 @@ function evaluateSegment(rawSegment) {
   return { decision: "allow" };
 }
 function splitSegments(cmd) {
+  const main = primarySplitSegments(cmd);
+  const result = [];
+  for (const seg of main) {
+    result.push(seg);
+    for (const inner of extractSubstitutionInners(seg)) {
+      for (const innerSeg of splitSegments(inner)) {
+        result.push(innerSeg);
+      }
+    }
+  }
+  return result;
+}
+function primarySplitSegments(cmd) {
   const segments = [];
   let buf = "";
   let inSingle = false;
@@ -188,7 +252,7 @@ function splitSegments(cmd) {
         continue;
       }
       if (c === ";" || c === "|" || c === `
-`) {
+` || c === "\r" || c === "\u2028" || c === "\u2029") {
         segments.push(buf);
         buf = "";
         continue;
@@ -208,6 +272,89 @@ function splitSegments(cmd) {
   }
   segments.push(buf);
   return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+function extractSubstitutionInners(seg) {
+  const inners = [];
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (!inSingle && c === "\\" && i + 1 < seg.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === "$" && seg[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      let innerSingle = false;
+      let innerDouble = false;
+      while (j < seg.length && depth > 0) {
+        const cj = seg[j];
+        if (cj === "\\" && !innerSingle && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "'" && !innerDouble) {
+          innerSingle = !innerSingle;
+          j++;
+          continue;
+        }
+        if (cj === '"' && !innerSingle) {
+          innerDouble = !innerDouble;
+          j++;
+          continue;
+        }
+        if (!innerSingle && !innerDouble) {
+          if (cj === "(") {
+            depth++;
+          } else if (cj === ")") {
+            depth--;
+            if (depth === 0)
+              break;
+          }
+        }
+        j++;
+      }
+      if (depth === 0) {
+        inners.push(seg.slice(i + 2, j));
+        i = j + 1;
+        continue;
+      }
+      return inners;
+    }
+    if (!inSingle && c === "`") {
+      let j = i + 1;
+      while (j < seg.length) {
+        const cj = seg[j];
+        if (cj === "\\" && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "`")
+          break;
+        j++;
+      }
+      if (j < seg.length) {
+        inners.push(seg.slice(i + 1, j));
+        i = j + 1;
+        continue;
+      }
+      return inners;
+    }
+    i++;
+  }
+  return inners;
 }
 function denyReason(pattern) {
   return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the eighteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
@@ -229,6 +376,24 @@ var WRAPPER_VERBS = new Set([
   "taskset"
 ]);
 var DENY_VERBS = new Set(["mv", "cp", "patch"]);
+var WRAPPER_VALUE_OPTS = {
+  sudo: new Set([
+    "-u",
+    "-g",
+    "-h",
+    "-C",
+    "-D",
+    "-p",
+    "-r",
+    "-t",
+    "-T",
+    "-R",
+    "-c",
+    "-U"
+  ]),
+  doas: new Set(["-u", "-C"]),
+  env: new Set(["-u", "-C", "-S"])
+};
 var READ_ONLY_VERBS = new Set([
   "tail",
   "head",
@@ -294,11 +459,21 @@ function redirectsToProtected(s) {
     let target = s.slice(tokenStart, j);
     target = target.replace(/^["']|["']$/g, "");
     for (const needle of PROTECTED_PATH_NEEDLES) {
-      if (target.includes(needle)) {
+      if (containsAsPathComponent(target, needle)) {
         return true;
       }
     }
     i = j;
+  }
+  return false;
+}
+function hasSafetyFlag(segment, verb) {
+  if (verb === "patch") {
+    const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
+    if (!hasDryRun)
+      return false;
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(segment);
+    return !hasOutput;
   }
   return false;
 }
@@ -317,19 +492,27 @@ function extractCommandVerb(segment) {
   let s = stripLeadingEnvAssignments(segment);
   for (let safety = 0;safety < 32; safety++) {
     s = stripLeadingEnvAssignments(s);
-    const m = /^(\S+)/.exec(s);
+    const m = s.match(/^(\S+)/);
     if (m === null || m[0] === undefined)
       return null;
     const word = m[0];
     const baseStart = word.lastIndexOf("/");
     const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
     if (WRAPPER_VERBS.has(base)) {
+      const valueOpts = WRAPPER_VALUE_OPTS[base];
       s = s.slice(word.length).replace(/^\s+/, "");
       while (true) {
-        const optMatch = /^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/.exec(s);
+        const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
         if (optMatch === null || optMatch[0] === undefined)
           break;
-        s = s.slice(optMatch[0].length).replace(/^\s+/, "");
+        const opt = optMatch[0];
+        s = s.slice(opt.length).replace(/^\s+/, "");
+        if (valueOpts !== undefined && !opt.includes("=") && valueOpts.has(opt)) {
+          const valMatch = s.match(/^\S+/);
+          if (valMatch !== null && valMatch[0] !== undefined) {
+            s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+          }
+        }
       }
       continue;
     }
@@ -384,7 +567,7 @@ function stripLeadingEnvAssignments(s) {
 }
 function touchesProtectedPath(command) {
   for (const needle of PROTECTED_PATH_NEEDLES) {
-    if (command.includes(needle)) {
+    if (containsAsPathComponent(command, needle)) {
       return true;
     }
   }
@@ -392,18 +575,228 @@ function touchesProtectedPath(command) {
 }
 var PYTHON_WRITE_RE = /write_text|\.write\(|open\(\s*[^)]*['"]w/;
 var NODE_WRITE_RE = /writeFile|writeFileSync/;
-function matchesPythonNodeWrite(command) {
-  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(command)) {
-    if (PYTHON_WRITE_RE.test(command)) {
+var NODE_INVOCATION_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)/;
+var NODE_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)\s*/;
+function matchesPythonNodeWrite(normalized, raw) {
+  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(normalized)) {
+    const rawHit = raw.match(/(?:^|[\s;&|(])python3?\s+-c\s+/);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null) {
+        if (/(?:^|[^A-Za-z0-9_])(?:exec|[e]val|compile)\s*\(/.test(arg)) {
+          if (PYTHON_WRITE_RE.test(arg))
+            return true;
+        }
+        const masked = maskLanguageStringLiterals(arg);
+        if (PYTHON_WRITE_RE.test(masked))
+          return true;
+      } else if (PYTHON_WRITE_RE.test(normalized)) {
+        return true;
+      }
+    } else if (PYTHON_WRITE_RE.test(normalized)) {
       return true;
     }
   }
-  if (/(?:^|[\s;&|(])node\s+(?:-e\b|--eval(?:\b|=))/.test(command)) {
-    if (NODE_WRITE_RE.test(command)) {
+  if (NODE_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(NODE_INVOCATION_HEAD_RE);
+    if (rawHit !== null && typeof rawHit.index === "number") {
+      const argStart = rawHit.index + rawHit[0].length;
+      const arg = readShellArg(raw, argStart);
+      if (arg !== null) {
+        if (/(?:^|[^A-Za-z0-9_])(?:[e]val|Function|runInThisContext|runInNewContext)\s*\(/.test(arg)) {
+          if (NODE_WRITE_RE.test(arg))
+            return true;
+        }
+        const masked = maskLanguageStringLiterals(arg);
+        if (NODE_WRITE_RE.test(masked))
+          return true;
+      } else if (NODE_WRITE_RE.test(normalized)) {
+        return true;
+      }
+    } else if (NODE_WRITE_RE.test(normalized)) {
       return true;
     }
   }
   return false;
+}
+function readShellArg(s, start) {
+  if (start >= s.length)
+    return null;
+  let i = start;
+  let buf = "";
+  while (i < s.length) {
+    const c = s[i];
+    if (c === " " || c === "\t" || c === `
+` || c === "\r" || c === ";" || c === "|" || c === "&" || c === ">" || c === "<") {
+      break;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === '"')
+          break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length)
+        return null;
+      i = j + 1;
+      continue;
+    }
+    if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0)
+        return null;
+      buf += s.slice(i + 1, j);
+      i = j + 1;
+      continue;
+    }
+    if (c === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length) {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          buf += s[j + 1];
+          j += 2;
+          continue;
+        }
+        if (s[j] === "'")
+          break;
+        buf += s[j];
+        j++;
+      }
+      if (j >= s.length)
+        return null;
+      i = j + 1;
+      continue;
+    }
+    buf += c;
+    i++;
+  }
+  if (i === start)
+    return null;
+  return buf;
+}
+function maskLanguageStringLiterals(s) {
+  let result = "";
+  let i = 0;
+  while (i < s.length) {
+    const start = detectStringStart(s, i);
+    if (start === null) {
+      result += s[i];
+      i++;
+      continue;
+    }
+    const { prefixLen, quote, isF } = start;
+    const quoteStart = i + prefixLen;
+    const prefix = s.slice(i, quoteStart);
+    if (s[quoteStart + 1] === quote && s[quoteStart + 2] === quote) {
+      const triple = quote + quote + quote;
+      const end = s.indexOf(triple, quoteStart + 3);
+      if (end < 0) {
+        result += s.slice(i);
+        return result;
+      }
+      if (isF) {
+        const inner = s.slice(quoteStart + 3, end);
+        result += prefix + triple + preserveFInterpolations(inner) + triple;
+      } else {
+        result += prefix + triple + triple;
+      }
+      i = end + 3;
+      continue;
+    }
+    let j = quoteStart + 1;
+    while (j < s.length) {
+      if (s[j] === "\\" && j + 1 < s.length) {
+        j += 2;
+        continue;
+      }
+      if (s[j] === quote)
+        break;
+      j++;
+    }
+    if (j >= s.length) {
+      result += s.slice(i);
+      return result;
+    }
+    if (isF) {
+      const inner = s.slice(quoteStart + 1, j);
+      result += prefix + quote + preserveFInterpolations(inner) + quote;
+    } else {
+      result += prefix + quote + quote;
+    }
+    i = j + 1;
+  }
+  return result;
+}
+function detectStringStart(s, i) {
+  const c0 = s[i];
+  if (c0 === undefined)
+    return null;
+  if (c0 === "'" || c0 === '"') {
+    return { prefixLen: 0, quote: c0, isF: false };
+  }
+  const isPrefixChar = (c) => c !== undefined && /^[fFrRbBuU]$/.test(c);
+  if (isPrefixChar(c0) && (s[i + 1] === "'" || s[i + 1] === '"')) {
+    return {
+      prefixLen: 1,
+      quote: s[i + 1],
+      isF: c0 === "f" || c0 === "F"
+    };
+  }
+  if (isPrefixChar(c0) && isPrefixChar(s[i + 1]) && (s[i + 2] === "'" || s[i + 2] === '"')) {
+    const c1 = s[i + 1];
+    return {
+      prefixLen: 2,
+      quote: s[i + 2],
+      isF: c0 === "f" || c0 === "F" || c1 === "f" || c1 === "F"
+    };
+  }
+  return null;
+}
+function preserveFInterpolations(content) {
+  let result = "";
+  let i = 0;
+  while (i < content.length) {
+    const c = content[i];
+    if (c === "{" && content[i + 1] === "{") {
+      i += 2;
+      continue;
+    }
+    if (c === "}" && content[i + 1] === "}") {
+      i += 2;
+      continue;
+    }
+    if (c === "{") {
+      let j = i + 1;
+      let depth = 1;
+      while (j < content.length && depth > 0) {
+        const cj = content[j];
+        if (cj === "{") {
+          depth++;
+        } else if (cj === "}") {
+          depth--;
+          if (depth === 0)
+            break;
+        }
+        j++;
+      }
+      if (depth === 0) {
+        result += content.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      return result;
+    }
+    i++;
+  }
+  return result;
 }
 
 // src/hooks/deny-bash-write-bypass.ts
@@ -426,4 +819,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=4DCAAAF8DBF0235B64756E2164756E21
+//# debugId=F006CE6E1618F11264756E2164756E21

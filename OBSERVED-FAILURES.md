@@ -11,98 +11,10 @@ through user-reported false negatives**, not theoretical possibility.
 
 ---
 
-## Phase 4 (deny-bash-write-bypass) residual gaps
+<!-- Phase 4 (deny-bash-write-bypass) hook gaps and Phase 5 (CLI)
+gaps were both resolved in v0.1.2 PR B and PR C respectively;
+their entries now live under "Resolved (promoted to MVP)" below. -->
 
-### MEDIUM: Backtick command substitution `\`...\``
-
-The hook splits on `;`, `&&`, `||`, `|`, bare `&`, and newlines while
-respecting `'...'` and `"..."` quoting. It does NOT parse classic
-backtick command substitution. Substring deny patterns (e.g., `sed -i`)
-still fire because the inner command appears literally in the outer
-command text, but **prefix-only deny patterns** (`mv`, `cp`, `patch`)
-are matched against the trimmed segment start. A construct such as
-
-    cargo fmt && echo `mv old new`
-
-would slip through because the trimmed segment starts with `echo`, not
-`mv`. Realistic agent workflows rarely use backtick substitution; modern
-guidance prefers `$(...)`. Promote to detection only if observed.
-
-### MEDIUM: `$(...)` command substitution prefix-verb bypass
-
-Same shape as the backtick gap, with the modern `$(...)` syntax. The
-splitter does not treat `$(` as a segment boundary. Substring denies
-still fire on `sed -i`, `git apply`, etc. Prefix-only verbs (`mv`, `cp`,
-`patch`) inside `$(...)` are not detected. Promote to detection only if
-observed.
-
-### MEDIUM: Wrapper options with value args (`sudo -u USER mv`, `env -u VAR mv`)
-
-The wrapper-option skip in `extractCommandVerb` consumes flag-only
-options (`-X`, `--foo`, `--foo=bar`) but does not know which options
-take a separate value argument. Concretely, `sudo -u root mv a b`
-and `env -u VAR mv a b` peel the wrapper and the leading flag, then
-see `root` / `VAR` as the next word and treat that as the verb,
-missing `mv`. Substring deny patterns (`sed -i`, `git apply`, etc.)
-still fire because they don't depend on segment-start position;
-only prefix-only verbs (`mv`, `cp`, `patch`) slip through.
-
-Promote to detection by adding per-wrapper option grammars (e.g.
-`sudo` short opts that take a value: `-u`, `-g`, `-h`, ...). For
-v0.2.
-
-## Phase 4 (deny-bash-write-bypass) residual gaps
-
-### LOW: `cp --no-clobber` / `patch --dry-run` false positive
-
-`DENY_PREFIX_PATTERNS` denies any segment whose trimmed form starts with
-`cp `, `mv `, `patch `, etc. This includes read-only or no-write variants
-such as `cp --no-clobber a b` (which refuses to overwrite an existing
-file) and `patch --dry-run < changes.diff` (which only previews). False
-positives are conservative — the user can route the operation through an
-edit_* tool — but the deny reason is misleading. If observed, tighten
-the prefix matcher to look for the verb followed by an argument list
-that does not contain `--dry-run` / `--no-clobber`.
-
-### LOW: Protected-path matching uses substring, not path component
-
-`touchesProtectedPath` and `redirectsToProtected` both use
-`String.prototype.includes()` to match `.meta-edit/state` /
-`.meta-edit/tmp` against the segment text and the redirect target
-respectively. This is conservative — it catches absolute paths like
-`/tmp/work/.meta-edit/state/edits.jsonl` (correct) — but it also flags
-non-path-component substrings like `/tmp/x-with-.meta-edit/state-in-name`
-where `x-with-.meta-edit` is just a directory name happening to contain
-the protected prefix as a substring.
-
-False positives only — never false negatives. The realistic frequency
-is near zero; a path component named `x-with-.meta-edit` is vanishingly
-rare in agent-driven workflows. Documented for promotion if observed.
-
-Promote to detection by treating the target as a path: split on `/`,
-look for `.meta-edit` followed immediately by `state` or `tmp` as
-adjacent components (allowing for a leading `/`). Or by anchoring
-the substring search on path-component boundaries:
-`target === needle || target.startsWith(needle + "/") ||
- target.includes("/" + needle + "/") || target.endsWith("/" + needle)`.
-
-### LOW: Backslash-strip inside quoted regions
-
-`evaluateSegment` strips ALL backslashes from the command text before
-substring matching. This defeats `s\ed -i ...` style escapes (the
-intended behavior) but also strips backslashes inside legitimate quoted
-strings, e.g., `python -c "print(\"write_text\")"` is denied because the
-post-strip text contains `write_text` and matches the inline-write
-detector. False positives only — never false negatives. If observed,
-strip backslashes only outside quoted regions.
-
-### LOW: Unicode line separators / CRLF / `\r` alone
-
-`splitSegments` treats `\n` as a separator but not U+2028 / U+2029 or
-bare `\r`. Realistic agent commands use `\n`. Substring denies still fire
-on the deny patterns that appear literally; only prefix-only verbs would
-slip through, and only when the user deliberately separates commands
-with exotic Unicode line terminators. Document only.
 
 ## Phase 3 (validation) tool-surface DX gaps
 
@@ -179,3 +91,52 @@ hypothetical; it is structurally on the dogfooding path.
   alongside the type via `z.infer`, keeping the writer and the reader
   in lockstep. Resolves the prior MEDIUM Phase 5 entry. See
   `src/state/edit-log.ts` (`EditLogEntrySchema`, `readAll`).
+- **Phase 4 hook robustness gaps cleared** (v0.1.2). The
+  `deny-bash-write-bypass` hook now handles command substitutions,
+  wrapper value-options, safety-flag exceptions, path-component-aware
+  protected-path matching, language-level string-literal masking for
+  `python -c` / `node -e`, and Unicode line separators. Promoted ahead
+  of observed misuse, per user direction for the v0.1.2 milestone.
+  Resolves seven prior queue entries:
+  - MEDIUM "Backtick command substitution `` `...` ``" — `splitSegments`
+    now post-processes each segment via `extractSubstitutionInners`,
+    emitting backtick inner spans as additional segments. A `mv` inside
+    `` `...` `` is now caught by the leading-verb deny.
+  - MEDIUM "`$(...)` command substitution prefix-verb bypass" — the
+    same expansion handles `$(...)` (with nesting). Inside double quotes
+    `$(...)` is expanded; inside single quotes it is treated as literal
+    text per POSIX.
+  - MEDIUM "Wrapper options with value args (`sudo -u USER mv`,
+    `env -u VAR mv`)" — `extractCommandVerb` consults a per-wrapper
+    `WRAPPER_VALUE_OPTS` map (sudo: `-u`/`-g`/`-h`/`-C`/`-D`/`-p`/`-r`/
+    `-t`/`-T`/`-R`/`-c`/`-U`; doas: `-u`/`-C`; env: `-u`/`-C`/`-S`)
+    and consumes the value token alongside the short option, so
+    `sudo -u root mv a b` resolves to verb `mv`.
+  - LOW "`cp --no-clobber` / `patch --dry-run` false positive" —
+    `hasSafetyFlag` carves out `patch --dry-run` / `patch --check`
+    from the `DENY_VERBS` deny. **The original PR B carve-out also
+    covered `cp -n` / `cp --no-clobber`, but that was reverted in a
+    follow-up commit on the same PR after Codex GitHub bot caught
+    that `cp -n` only refuses to OVERWRITE existing destinations —
+    it still CREATES new files, so allowing
+    `cp -n payload src/new_file.ts` was a write bypass. Only
+    `patch`'s read-only modes survive.**
+  - LOW "Protected-path matching uses substring, not path component" —
+    `containsAsPathComponent` requires the trailing side of the needle
+    to be a path-component boundary AND the leading side to either be a
+    boundary or a short/long option flag prefix in the same token, so
+    `/tmp/x-with-.meta-edit/state-in-name` no longer false-positives
+    while `less -O.meta-edit/state/exfil.log` and
+    `--output=.meta-edit/state/...` still deny.
+  - LOW "Backslash-strip inside quoted regions" — resolved indirectly:
+    the aggressive backslash strip is retained (so `s\ed -i` bypasses
+    inside quoted shell wrappers still match), but the cited symptom
+    (`python -c "print(\"write_text\")"` denying because `write_text`
+    appears in the post-strip text) is gone. `matchesPythonNodeWrite`
+    now extracts the `python -c` / `node -e` arg from the RAW (pre-
+    strip) text, masks language-level string literals, then runs the
+    writer-pattern check. Tokens that appear ONLY inside string
+    literals no longer fire.
+  - LOW "Unicode line separators / CRLF / `\r` alone" —
+    `primarySplitSegments` now treats `\r`, U+2028, and U+2029 as
+    additional separators alongside `\n`.
