@@ -14,6 +14,7 @@ import {
   type HookMatcherEntry,
   type SettingsShape,
 } from "./hooks-cmd.js";
+import { RAW_EDIT_TOOLS } from "../hooks/raw-edit-policy.js";
 
 let tmpRoot: string;
 let collectedOut: string[];
@@ -61,6 +62,18 @@ describe("META_EDIT_RAW_EDIT_MATCHER constant (a3-02 install-hooks coverage)", (
     );
     expect(rawEditEntry?.matcher).toBe("Edit|Write|MultiEdit|NotebookEdit");
     expect(rawEditEntry?.matcher).toContain("NotebookEdit");
+  });
+
+  it("META_EDIT_RAW_EDIT_MATCHER stays in sync with RAW_EDIT_TOOLS", () => {
+    // (a) Every tool name in RAW_EDIT_TOOLS must appear in the matcher string.
+    // (b) No extra entries in the matcher (length parity).
+    // RAW_EDIT_TOOLS uses canonical PascalCase; the matcher is pipe-delimited
+    // PascalCase — no normalization needed.
+    const matcherParts = META_EDIT_RAW_EDIT_MATCHER.split("|");
+    for (const tool of RAW_EDIT_TOOLS) {
+      expect(matcherParts).toContain(tool);
+    }
+    expect(matcherParts.length).toBe(RAW_EDIT_TOOLS.size);
   });
 });
 
