@@ -51,10 +51,10 @@ export type EditToolResult = {
   applied: boolean;
   edit_id: string;
   warnings: string[];
-  // Issue 029 (a7-04): set IFF the edit log append threw. Absent on success.
+  // Issue 029 (a7-04): set IFF the edit-log append threw. Absent on success.
   // Distinct from `warnings` so callers/monitoring can react to audit-trail
   // gaps without string-matching the routine validation-warning channel.
-  log_error?: string;
+  audit_error?: string;
 };
 
 export type ValidationContext = {
@@ -294,7 +294,7 @@ export function makeApplyingHandler(
       // `patch_size_bytes: 0` on validation failure — there is no
       // applied diff to measure.
       //
-      // log_error is intentionally NOT propagated here. Its contract is
+      // audit_error is intentionally NOT propagated here. Its contract is
       // "audit-log append failed after a successful apply" (SPEC §3.4).
       // The apply never ran on a validation-rejected request, so a
       // log-append failure at this point is a pure infrastructure hiccup:
@@ -335,9 +335,9 @@ export function makeApplyingHandler(
     // throw out of the handler here even if log.append fails: the
     // client would see the call as failed and likely retry, causing
     // duplicate edits. appendLogSafely surfaces the log failure on a
-    // structured `log_error` field — distinct from the `warnings`
+    // structured `audit_error` field — distinct from the `warnings`
     // channel that carries routine validation notices.
-    const { warnings: finalWarnings, log_error } = appendLogSafely(log, {
+    const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
       ...baseEntry,
       patch_size_bytes: patchSize,
       applied: result.applied,
@@ -347,7 +347,7 @@ export function makeApplyingHandler(
       applied: result.applied,
       edit_id: editId,
       warnings: finalWarnings,
-      ...(log_error !== undefined ? { log_error } : {}),
+      ...(audit_error !== undefined ? { audit_error } : {}),
     };
   };
 }
@@ -355,7 +355,7 @@ export function makeApplyingHandler(
 function appendLogSafely(
   log: EditLogLike,
   entry: import("../state/edit-log.js").EditLogEntry,
-): { warnings: string[]; log_error?: string } {
+): { warnings: string[]; audit_error?: string } {
   try {
     log.append(entry);
     return { warnings: entry.warnings };
@@ -363,12 +363,12 @@ function appendLogSafely(
     const code = (e as NodeJS.ErrnoException | undefined)?.code;
     const msg = (e as Error | undefined)?.message ?? String(e);
     // Issue 029 (a7-04): keep `warnings` reserved for validation/apply
-    // notices and report log-append failure on a structured `log_error`
+    // notices and report log-append failure on a structured `audit_error`
     // field. Mixing the two destroys audit integrity — a caller cannot
     // distinguish "applied + clean log" from "applied + missing log".
     return {
       warnings: entry.warnings,
-      log_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
+      audit_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
     };
   }
 }

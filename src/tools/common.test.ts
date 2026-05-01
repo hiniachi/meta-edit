@@ -761,7 +761,7 @@ describe("validateRequest with real filesystem (symlink)", () => {
 });
 
 // Issue 029 (a7-04): when log.append throws, the failure must surface as a
-// structured `log_error` field on the response — not be silently merged into
+// structured `audit_error` field on the response — not be silently merged into
 // `warnings` (which carries routine validation notices). Mixing the two
 // signals destroys audit integrity: a caller cannot distinguish between
 // "applied edit + clean log" and "applied edit + missing audit record".
@@ -806,7 +806,7 @@ describe("appendLogSafely audit-integrity", () => {
     };
   }
 
-  it("response.log_error is set with the disk-full message when log.append throws", async () => {
+  it("response.audit_error is set with the disk-full message when log.append throws", async () => {
     const diskFullError = Object.assign(new Error("disk full"), {
       code: "ENOSPC",
     });
@@ -820,13 +820,13 @@ describe("appendLogSafely audit-integrity", () => {
     const result = await handler("edit_boundary_condition", logFailRequest());
     expect(result.applied).toBe(true);
 
-    // The structured contract: a typed `log_error` field, distinct from
+    // The structured contract: a typed `audit_error` field, distinct from
     // routine validation warnings. Callers and monitoring tools can react
     // to log failures without string-matching the warnings array.
-    expect(result.log_error).toBeDefined();
-    expect(result.log_error).toMatch(/disk full/);
-    expect(result.log_error).toMatch(/ENOSPC/);
-    expect(result.log_error).toMatch(/edit_20260501_0001/);
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toMatch(/disk full/);
+    expect(result.audit_error).toMatch(/ENOSPC/);
+    expect(result.audit_error).toMatch(/edit_20260501_0001/);
   });
 
   it("response.warnings does NOT mix log-failure with validation warnings", async () => {
@@ -840,14 +840,14 @@ describe("appendLogSafely audit-integrity", () => {
 
     const result = await handler("edit_boundary_condition", logFailRequest());
 
-    // After the fix, log errors live in `log_error`, not `warnings`. A caller
+    // After the fix, log errors live in `audit_error`, not `warnings`. A caller
     // using `response.warnings.length === 0` to check "clean" edits is no
     // longer misled when there is a log failure.
     expect(result.warnings.length).toBe(0);
-    expect(result.log_error).toMatch(/disk full/);
+    expect(result.audit_error).toMatch(/disk full/);
   });
 
-  it("response.log_error is absent (undefined) when log.append succeeds", async () => {
+  it("response.audit_error is absent (undefined) when log.append succeeds", async () => {
     const ctx: ValidationContext = { repoRoot };
     const okLog: EditLogLike = {
       nextEditId(): string {
@@ -865,16 +865,16 @@ describe("appendLogSafely audit-integrity", () => {
 
     const result = await handler("edit_boundary_condition", logFailRequest());
     expect(result.applied).toBe(true);
-    expect(result.log_error).toBeUndefined();
+    expect(result.audit_error).toBeUndefined();
   });
 
-  // a7-04 tighten: log_error must NOT appear on validation-failure paths.
+  // a7-04 tighten: audit_error must NOT appear on validation-failure paths.
   // The field's contract is "audit-log append failed after a successful apply".
   // If the request is rejected by validation, the apply never ran; a log-append
   // failure at that point is an internal infrastructure hiccup, but it MUST NOT
-  // surface as log_error — callers use log_error exclusively to signal
+  // surface as audit_error — callers use audit_error exclusively to signal
   // "edit applied but audit record may be missing".
-  it("response.log_error is absent when log.append throws but validation fails", async () => {
+  it("response.audit_error is absent when log.append throws but validation fails", async () => {
     const diskFullError = Object.assign(new Error("disk full"), {
       code: "ENOSPC",
     });
@@ -895,7 +895,7 @@ describe("appendLogSafely audit-integrity", () => {
     });
 
     expect(result.applied).toBe(false);
-    // log_error is scoped to audit failures on applied edits only
-    expect(result.log_error).toBeUndefined();
+    // audit_error is scoped to audit failures on applied edits only
+    expect(result.audit_error).toBeUndefined();
   });
 });

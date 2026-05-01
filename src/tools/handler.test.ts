@@ -164,14 +164,14 @@ describe("makeApplyingHandler", () => {
     expect(appendCalls).toBe(1);
     expect(result.applied).toBe(true);
     // Issue 029 (a7-04): log-append failures now surface on the structured
-    // `log_error` field, not buried inside `warnings`. The `warnings` array
+    // `audit_error` field, not buried inside `warnings`. The `warnings` array
     // is reserved for routine validation/apply notices so callers can
     // distinguish audit-trail gaps from validation issues without string
     // matching.
-    expect(result.log_error).toBeDefined();
-    expect(result.log_error).toContain("failed to append edit log");
-    expect(result.log_error).toContain("ENOSPC");
-    expect(result.log_error).toContain("audit record may be missing");
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("failed to append edit log");
+    expect(result.audit_error).toContain("ENOSPC");
+    expect(result.audit_error).toContain("audit record may be missing");
     expect(
       result.warnings.some((w) => w.includes("failed to append edit log")),
     ).toBe(false);
@@ -209,10 +209,10 @@ describe("makeApplyingHandler", () => {
 
     expect(result.applied).toBe(false);
     expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
-    // a7-04 tighten: log_error is scoped to audit failures on applied edits.
-    // On a validation rejection the apply never ran, so log_error MUST NOT
+    // a7-04 tighten: audit_error is scoped to audit failures on applied edits.
+    // On a validation rejection the apply never ran, so audit_error MUST NOT
     // be set — callers rely on its presence to mean "applied but audit missing".
-    expect(result.log_error).toBeUndefined();
+    expect(result.audit_error).toBeUndefined();
     expect(
       result.warnings.some((w) => w.includes("failed to append edit log")),
     ).toBe(false);
