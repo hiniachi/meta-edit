@@ -1033,3 +1033,326 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
     });
   });
 });
+
+describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
+  it("denies heredoc redirect: cat <<EOF > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+
+  it("allows grep with quoted heredoc-shaped literal", () => {
+    expect(
+      evaluateBashCommand("grep '<<EOF > src/foo.ts'").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo with quoted heredoc-shaped literal", () => {
+    expect(
+      evaluateBashCommand('echo "cat <<EOF > src/foo.ts"').decision,
+    ).toBe("allow");
+  });
+
+  // Codex round-3 (a1-01 reopen): the round-2 stripQuotedContent pass
+  // (commit 435fb1b) blanked the EOF inside quoted heredoc delimiters
+  // (`<<"EOF"`, `<<'EOF'`, `<<-'EOF'`), masking the redirect regex.
+  // Heredoc detection must run on the raw command — quoting only
+  // affects whether parameter expansion happens in the body; the
+  // heredoc redirect shape is preserved.
+  it("denies heredoc redirect with single-quoted delimiter: cat <<'EOF' > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<'EOF' > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+
+  it('denies heredoc redirect with double-quoted delimiter: cat <<"EOF" > src/foo.ts', () => {
+    expect(
+      evaluateBashCommand('cat <<"EOF" > src/foo.ts\nhello\nEOF').decision,
+    ).toBe("deny");
+  });
+
+  it("denies tab-stripping heredoc redirect with quoted delimiter: cat <<-'EOF' > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<-'EOF' > src/foo.ts\n\thello\n\tEOF").decision,
+    ).toBe("deny");
+  });
+
+  // a1-01 (round 4): backslash-quoted delimiter `<<\EOF` is valid bash — single
+  // leading backslash suppresses variable/command expansion just like `<<'EOF'`.
+  // The prior regex only handled ['"] forms, leaving `<<\EOF` undetected.
+  it("a1-01: backslash-quoted heredoc delimiter still detected as redirect", () => {
+    expect(
+      evaluateBashCommand("cat <<\\EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+
+  it("a1-01: backslash-quoted tab-stripping heredoc redirect: cat <<-\\EOF > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<-\\EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
+  it("denies base64 -d | bash (arbitrary command execution bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "echo 'c2VkIC1pIHMveC95LyBzcmMvZm9vLnRzCg==' | base64 -d | bash",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("allows printf with quoted base64-shaped literal", () => {
+    expect(
+      evaluateBashCommand("printf 'base64 -d | bash\\n'").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — a1-03 dd of= bypass", () => {
+  it("denies dd of=src/foo.ts (source file write via dd)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/urandom of=src/foo.ts bs=4k count=1").decision,
+    ).toBe("deny");
+  });
+
+  it("denies dd of=<file> even without explicit if= argument", () => {
+    expect(
+      evaluateBashCommand("echo 'hello' | dd of=src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("allows dd of=/tmp/swap (legitimate scratch-area write)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/zero of=/tmp/swap bs=1M count=128").decision,
+    ).toBe("allow");
+  });
+
+  it("allows dd without of= (no write target)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/zero bs=1 count=0").decision,
+    ).toBe("allow");
+  });
+
+  it("allows dd of=/dev/null (devnull is not in-repo)", () => {
+    expect(
+      evaluateBashCommand("dd if=foo of=/dev/null").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — a1-04 find -exec bypass", () => {
+  it("denies find -exec sed -i (exec bypass via outer find verb)", () => {
+    expect(
+      evaluateBashCommand(
+        "find . -name '*.ts' -exec sed -i 's/x/y/' {} \;",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies find -exec cp (exec bypass via outer find verb)", () => {
+    expect(
+      evaluateBashCommand(
+        "find src/ -name '*.ts' -exec cp {} /tmp/backup \;",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("allows echo -exec mv ... (echo verb, not find)", () => {
+    expect(
+      evaluateBashCommand("echo -exec mv a b \\;").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo with literal exec arg (no find verb)", () => {
+    expect(
+      evaluateBashCommand('echo "exec mv a b"').decision,
+    ).toBe("allow");
+  });
+
+  it("allows find . -name '*.log' -delete (find without -exec write)", () => {
+    expect(
+      evaluateBashCommand("find . -name '*.log' -delete").decision,
+    ).toBe("allow");
+  });
+
+  it("allows find -exec with read-only inner (ls)", () => {
+    expect(
+      evaluateBashCommand("find . -maxdepth 2 -type f -exec ls -la {} \\;").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — a1-05 perl/ruby/php inline writes", () => {
+  it("denies perl -e with open write (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "perl -e 'open(my $fh, \">\", \"src/foo.ts\"); print $fh \"x\"; close $fh'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies ruby -e with File.write (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "ruby -e 'File.write(\"src/foo.ts\", \"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies php -r with file_put_contents (inline bypass)", () => {
+    expect(
+      evaluateBashCommand(
+        "php -r 'file_put_contents(\"src/foo.ts\", \"x\");'",
+      ).decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a1-06 busybox prefix bypass", () => {
+  it("denies busybox mv (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox mv src/a.ts src/b.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies busybox sed -i (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox sed -i 's/x/y/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies busybox cp (busybox wrapper not recognized)", () => {
+    expect(
+      evaluateBashCommand("busybox cp src/foo.ts src/bar.ts").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a1-07 locale env-var prefix regression", () => {
+  it("denies LC_ALL='en_US.UTF-8' sed -i (locale env-var prefix, single-quoted value)", () => {
+    expect(
+      evaluateBashCommand(
+        "LC_ALL='en_US.UTF-8' sed -i 's/x/y/' src/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies LC_ALL=C sed -i (locale env-var prefix, bare value)", () => {
+    expect(
+      evaluateBashCommand("LC_ALL=C sed -i 's/x/y/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies LANG=en_US.UTF-8 mv src/a.ts src/b.ts (multi-locale prefix before mv)", () => {
+    expect(
+      evaluateBashCommand("LANG=en_US.UTF-8 mv src/a.ts src/b.ts").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a2-01 unicode whitespace tee bypass", () => {
+  it("denies tee with non-breaking space (U+00A0)", () => {
+    const r = evaluateBashCommand("echo x | tee src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies tee with thin space (U+2009)", () => {
+    const r = evaluateBashCommand("echo x | tee src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("allows tee /dev/null (devnull is not in-repo)", () => {
+    const r = evaluateBashCommand("echo hi | tee /dev/null");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows tee /tmp/log.txt (tmp scratch area is not in-repo)", () => {
+    const r = evaluateBashCommand("echo hi | tee /tmp/log.txt");
+    expect(r.decision).toBe("allow");
+  });
+});
+
+
+describe("evaluateBashCommand — a2-02 eval deferred-string bypass", () => {
+  it("denies eval with literal cat-redirect string", () => {
+    const r = evaluateBashCommand('eval "cat > src/foo.ts"');
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies eval with base64-encoded cat-redirect (deferred bypass)", () => {
+    const r = evaluateBashCommand(
+      'eval "$(echo Y2F0ID4gc3JjL2Zvby50cwo= | base64 -d)"',
+    );
+    expect(r.decision).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a2-03 env -i wrapper regression", () => {
+  it("denies env -i mv (env -i must not consume mv as value of -i)", () => {
+    const r = evaluateBashCommand("env -i mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env -i cp", () => {
+    const r = evaluateBashCommand("env -i cp src/foo.ts src/bar.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env -i patch", () => {
+    const r = evaluateBashCommand("env -i patch -p1 < changes.diff");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env --ignore-environment mv (long form)", () => {
+    const r = evaluateBashCommand("env --ignore-environment mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — a2-04 noclobber-override >| redirect", () => {
+  it("denies cat redirected with >| to protected state path", () => {
+    const r = evaluateBashCommand(
+      "cat foo >| .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies echo redirected with >| to protected tmp path", () => {
+    const r = evaluateBashCommand(
+      "echo payload >| .meta-edit/tmp/scratch.json",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows cat reading from protected path without redirect", () => {
+    const r = evaluateBashCommand("cat .meta-edit/state/edits.jsonl");
+    expect(r.decision).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — round-2 nice-to-have allow regressions", () => {
+  it("allows busybox cat /etc/hosts (read-only multicall applet)", () => {
+    expect(
+      evaluateBashCommand("busybox cat /etc/hosts").decision,
+    ).toBe("allow");
+  });
+
+  it("allows eval echo hello (literal-only argument)", () => {
+    expect(
+      evaluateBashCommand("eval echo hello").decision,
+    ).toBe("allow");
+  });
+
+  it("allows eval \"echo hello\" (quoted literal argument)", () => {
+    expect(
+      evaluateBashCommand('eval "echo hello"').decision,
+    ).toBe("allow");
+  });
+
+  it("allows perl -ne 'print' file.txt (read-only inline perl)", () => {
+    expect(
+      evaluateBashCommand("perl -ne 'print' file.txt").decision,
+    ).toBe("allow");
+  });
+});

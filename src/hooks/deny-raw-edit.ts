@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // Claude Code PreToolUse hook entry point: deny raw Edit / Write /
-// MultiEdit. Wires the pure policy from raw-edit-policy.ts to the
-// stdin/stdout JSON protocol Claude Code uses for hooks.
+// MultiEdit / NotebookEdit. Wires the pure policy from
+// raw-edit-policy.ts to the stdin/stdout JSON protocol Claude Code uses
+// for hooks.
 //
 // Configure via .claude/settings.json:
 //   {
 //     "hooks": {
 //       "PreToolUse": [
 //         {
-//           "matcher": "Edit|Write|MultiEdit",
+//           "matcher": "Edit|Write|MultiEdit|NotebookEdit",
 //           "hooks": [
 //             { "type": "command", "command": "node dist/hooks/deny-raw-edit.js" }
 //           ]
@@ -16,6 +17,10 @@
 //       ]
 //     }
 //   }
+//
+// The matcher above MUST list every tool name in RAW_EDIT_TOOLS
+// (raw-edit-policy.ts). `meta-edit install-hooks` emits this exact
+// matcher via META_EDIT_RAW_EDIT_MATCHER in cli/hooks-cmd.ts.
 
 import { readStdin, replyDeny, replyAllow } from "./hook-runtime.js";
 import { evaluateRawEdit } from "./raw-edit-policy.js";
