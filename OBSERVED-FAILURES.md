@@ -16,6 +16,45 @@ gaps were both resolved in v0.1.2 PR B and PR C respectively;
 their entries now live under "Resolved (promoted to MVP)" below. -->
 
 
+## Phase 8 (apply) residual gaps
+
+### MEDIUM: Phase-1 read vs Phase-3 rename TOCTOU on the content-pair flow
+
+The two-phase apply in `src/tools/apply.ts` reads each target's
+disk content during Phase 1 (preflight) and compares to
+`change.old_content`. Phase 2 stages every sibling temp file, then
+Phase 3 commits all renames. If a concurrent process modifies a
+target file between the Phase 1 read and the Phase 3 rename, the
+rename silently overwrites the newer content with `change.new_content`
+and the call returns `applied: true` — a lost-update regression
+relative to the "stale-content protection" the content-pair API
+advertises.
+
+The threat model documented in `apply.ts`'s header comment is
+**single-user local TOCTOU**: meta-edit assumes one agent operating
+on the repo at a time and uses `realpath` re-canonicalization +
+parent-drift checks to cover the symlink-swap case. Concurrent
+editors or filesystem watchers writing to the same target during
+the apply window are out of scope for the MVP.
+
+Codex GitHub bot review on PR #29 (P2) flagged this as a regression
+"in repositories with concurrent editors/watchers". Promote to
+detection only if observed: most realistic agent workflows are
+single-writer and the cost (re-read on every change immediately
+before each rename, without any guarantee that the gap before the
+rename system call is closed without `openat`) is high relative to
+the observed frequency.
+
+Promotion options if observed:
+- **Re-read each target immediately before its rename** in Phase 3
+  and abort the batch with a partial-write warning if the disk
+  content changed since Phase 1. Tightens the window from the full
+  Phase 2 duration to a single rename's scheduling boundary.
+- **Hold an advisory lock** (`.meta-edit/state/apply.lock`) for the
+  duration of `applyChanges`. Trades concurrency for atomicity;
+  acceptable given that meta-edit's threat model is single-writer
+  anyway.
+
 ---
 
 ## Resolved (promoted to MVP)

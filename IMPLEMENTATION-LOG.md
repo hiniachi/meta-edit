@@ -724,3 +724,32 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
 - Spec deviations: none. SPEC.md and `EditToolRequestSchema` /
   `inputSchema` are kept in lockstep per CLAUDE.md §4.
 - Tests: 282 pass, 0 fail. typecheck clean. build clean.
+
+### Codex GitHub bot review on PR #29 (post-merge prep)
+
+- **P2: no-op stage+rename for unchanged content.** Pre-PR-D the
+  jsdiff parser rejected zero-hunk patches, so a no-op edit never
+  reached apply. The content-pair flow accepted them and still
+  ran stage+rename, bumping mtime / inode for semantically empty
+  edits. **Fix**: `validateRequest` now rejects a change whose
+  `old_content` equals `new_content` with a clear "no-op"
+  warning, restoring the prior posture. Test added.
+- **P2: runtime version drift** (same fix as PR #27/#28) — added
+  `src/version.ts` and refactored `cli.ts` / `server.ts` to read
+  `VERSION` from `package.json`.
+
+### Codex GitHub bot round-2 review on PR #29 (TOCTOU concern, deferred to v0.2)
+
+- **P2: Phase-1 read vs Phase-3 rename TOCTOU.** `applyChanges`
+  reads disk content in Phase 1 (preflight) and renames in Phase
+  3, with all temp writes between them. A concurrent writer
+  modifying a target during that window silently has its update
+  overwritten when the rename commits. **NOT a security boundary
+  issue under the documented single-user-local-TOCTOU threat
+  model** in `apply.ts`'s header comment, and `realpath` +
+  parent-drift checks already cover the symlink-swap case the
+  threat model does promise. Recorded as a v0.2 candidate in
+  `OBSERVED-FAILURES.md` "Phase 8 (apply) residual gaps" with
+  two promotion options (re-read before each rename, or
+  advisory lockfile). Not blocking the v0.1.2 merge per project
+  owner direction.
