@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   MAX_CHANGE_BYTES,
+  makeApplyingHandler,
   validateRequest,
+  type ApplyChangesFn,
   type Change,
+  type EditLogLike,
   type EditToolRequest,
   type ValidationContext,
 } from "./common.js";
@@ -612,5 +615,114 @@ describe("validateRequest with real filesystem (symlink)", () => {
     } finally {
       fs.unlinkSync(loopPath);
     }
+  });
+});
+
+// Issue 029 (a7-04): when log.append throws, the failure must surface as a
+// structured `log_error` field on the response — not be silently merged into
+// `warnings` (which carries routine validation notices). Mixing the two
+// signals destroys audit integrity: a caller cannot distinguish between
+// "applied edit + clean log" and "applied edit + missing audit record".
+describe("appendLogSafely audit-integrity", () => {
+  let repoRoot: string;
+
+  beforeAll(() => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-logfail-"));
+    fs.writeFileSync(path.join(repoRoot, "src.ts"), "const x = 1;\n", "utf8");
+  });
+  afterAll(() => {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  /** Fake log whose append always throws the supplied error. */
+  function makeFailingLog(error: Error): EditLogLike {
+    let callCount = 0;
+    return {
+      nextEditId(_now?: Date): string {
+        return `edit_20260501_${String(++callCount).padStart(4, "0")}`;
+      },
+      append(_entry): void {
+        throw error;
+      },
+    };
+  }
+
+  /** Fake applyChanges that reports success without touching disk. */
+  const noopApply: ApplyChangesFn = (_repoRoot, _changes) => ({
+    applied: true,
+    warnings: [],
+    touchedAbsolutePaths: [],
+  });
+
+  function logFailRequest(): EditToolRequest {
+    return {
+      target_file: "src.ts",
+      rationale: "tighten guard",
+      risk_level: "low",
+      test_files: ["tests/src.test.ts"],
+      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
+    };
+  }
+
+  it("response.log_error is set with the disk-full message when log.append throws", async () => {
+    const diskFullError = Object.assign(new Error("disk full"), {
+      code: "ENOSPC",
+    });
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+    expect(result.applied).toBe(true);
+
+    // The structured contract: a typed `log_error` field, distinct from
+    // routine validation warnings. Callers and monitoring tools can react
+    // to log failures without string-matching the warnings array.
+    expect(result.log_error).toBeDefined();
+    expect(result.log_error).toMatch(/disk full/);
+    expect(result.log_error).toMatch(/ENOSPC/);
+    expect(result.log_error).toMatch(/edit_20260501_0001/);
+  });
+
+  it("response.warnings does NOT mix log-failure with validation warnings", async () => {
+    const diskFullError = new Error("disk full");
+    const ctx: ValidationContext = { repoRoot };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: makeFailingLog(diskFullError),
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+
+    // After the fix, log errors live in `log_error`, not `warnings`. A caller
+    // using `response.warnings.length === 0` to check "clean" edits is no
+    // longer misled when there is a log failure.
+    expect(result.warnings.length).toBe(0);
+    expect(result.log_error).toMatch(/disk full/);
+  });
+
+  it("response.log_error is absent (undefined) when log.append succeeds", async () => {
+    const ctx: ValidationContext = { repoRoot };
+    const okLog: EditLogLike = {
+      nextEditId(): string {
+        return "edit_20260501_0099";
+      },
+      append(_entry): void {
+        /* succeed */
+      },
+    };
+    const handler = makeApplyingHandler({
+      ctx,
+      log: okLog,
+      applyChanges: noopApply,
+    });
+
+    const result = await handler("edit_boundary_condition", logFailRequest());
+    expect(result.applied).toBe(true);
+    expect(result.log_error).toBeUndefined();
   });
 });

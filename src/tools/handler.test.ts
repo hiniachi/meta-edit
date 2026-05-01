@@ -163,14 +163,18 @@ describe("makeApplyingHandler", () => {
 
     expect(appendCalls).toBe(1);
     expect(result.applied).toBe(true);
+    // Issue 029 (a7-04): log-append failures now surface on the structured
+    // `log_error` field, not buried inside `warnings`. The `warnings` array
+    // is reserved for routine validation/apply notices so callers can
+    // distinguish audit-trail gaps from validation issues without string
+    // matching.
+    expect(result.log_error).toBeDefined();
+    expect(result.log_error).toContain("failed to append edit log");
+    expect(result.log_error).toContain("ENOSPC");
+    expect(result.log_error).toContain("audit record may be missing");
     expect(
-      result.warnings.some(
-        (w) =>
-          w.includes("failed to append edit log") &&
-          w.includes("ENOSPC") &&
-          w.includes("audit record may be missing"),
-      ),
-    ).toBe(true);
+      result.warnings.some((w) => w.includes("failed to append edit log")),
+    ).toBe(false);
     expect(fs.readFileSync(path.join(tmpRoot, "src/foo.ts"), "utf8")).toBe(
       "beta\n",
     );
@@ -205,11 +209,15 @@ describe("makeApplyingHandler", () => {
 
     expect(result.applied).toBe(false);
     expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
+    // Issue 029 (a7-04): log-append failure on a validation rejection still
+    // populates `log_error`, kept distinct from the validation warnings the
+    // caller needs to act on.
+    expect(result.log_error).toBeDefined();
+    expect(result.log_error).toContain("failed to append edit log");
+    expect(result.log_error).toContain("EACCES");
     expect(
-      result.warnings.some(
-        (w) => w.includes("failed to append edit log") && w.includes("EACCES"),
-      ),
-    ).toBe(true);
+      result.warnings.some((w) => w.includes("failed to append edit log")),
+    ).toBe(false);
   });
 
   it("logs patch_size_bytes=0 on validation failure (no diff synthesis on rejected requests)", async () => {
