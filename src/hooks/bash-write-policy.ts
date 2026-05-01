@@ -46,9 +46,9 @@ export const DENY_SUBSTRINGS: readonly string[] = [
   "perl -i",
   "cat >",
   "cat >>",
-  "tee ",
-  "tee\t",
-  "tee -a",
+  // `tee` moved to DENY_VERBS so unicode whitespace separators
+  // (U+00A0, U+2009, etc.) between `tee` and its target path don't
+  // bypass the deny via the substring `"tee "`. See issue a2-01.
   "git apply",
   "rsync ",
   "rsync\t",
@@ -638,8 +638,17 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
 
 // Verbs whose mere invocation is denied. `dd` is included because its
 // `of=...` operand writes to an arbitrary path; there is no read-only
-// invocation of `dd` we want to allow in agent workflows.
-const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch", "dd"]);
+// invocation of `dd` we want to allow in agent workflows. `tee` is
+// here (rather than DENY_SUBSTRINGS) so unicode whitespace between
+// `tee` and its target file (U+00A0, U+2009, ...) cannot bypass via
+// a literal `"tee "` substring miss.
+const DENY_VERBS: ReadonlySet<string> = new Set([
+  "mv",
+  "cp",
+  "patch",
+  "dd",
+  "tee",
+]);
 
 // Per-wrapper short options that take a separate value argument. After
 // peeling a wrapper, `extractCommandVerb` consumes a flag plus its

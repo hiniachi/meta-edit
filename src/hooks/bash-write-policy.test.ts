@@ -1151,3 +1151,16 @@ describe("evaluateBashCommand — a1-07 locale env-var prefix regression", () =>
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a2-01 unicode whitespace tee bypass", () => {
+  it("denies tee with non-breaking space (U+00A0)", () => {
+    const r = evaluateBashCommand("echo x | tee src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies tee with thin space (U+2009)", () => {
+    const r = evaluateBashCommand("echo x | tee src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+});
+
