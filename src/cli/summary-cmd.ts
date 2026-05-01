@@ -3,6 +3,21 @@ import type { RiskLevel } from "../tools/common.js";
 import { TOOL_NAMES } from "../tools/descriptions.js";
 import { parseStrictSince } from "./parse-since.js";
 
+/**
+ * Strip ANSI escape sequences (CSI, OSC) from a string so that audit values
+ * embedded in the human-readable summary table cannot manipulate the
+ * operator's terminal (clear-screen, OSC title injection, cursor moves, etc.).
+ *
+ * Only the CLI display layer is sanitised — the underlying edit log
+ * (`.meta-edit/state/edits.jsonl`) preserves the original value as the audit
+ * record of ground truth.
+ */
+function stripAnsi(s: string): string {
+  // CSI: ESC [ ... letter ; OSC: ESC ] ... BEL ; plus any bare ESC byte.
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|.)/g, "");
+}
+
 export type SummaryOptions = {
   repoRoot: string;
   since?: Date | undefined;
@@ -36,9 +51,9 @@ export function formatSummary(
   const sinceLabel =
     since === undefined ? "all time" : `since ${formatIso(since)}`;
 
-  const byTool = countBy(entries, (e) => e.tool_name);
+  const byTool = countBy(entries, (e) => stripAnsi(e.tool_name));
   const byRisk = countBy(entries, (e) => e.risk_level);
-  const byFile = countBy(entries, (e) => e.target_file);
+  const byFile = countBy(entries, (e) => stripAnsi(e.target_file));
 
   const lines: string[] = [];
   lines.push(`meta-edit summary (${sinceLabel})`);

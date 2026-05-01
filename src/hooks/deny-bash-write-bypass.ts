@@ -27,7 +27,12 @@ async function main(): Promise<number> {
   }
   const input = (event["tool_input"] as { command?: unknown } | undefined) ?? {};
   const command = typeof input.command === "string" ? input.command : "";
-  const decision = evaluateBashCommand(command);
+  // Codex round-1 a4-01: thread the agent's cwd into the policy so it can
+  // resolve symlinks in redirect targets ("cat foo > link/state/x" where
+  // link -> .meta-edit). Claude Code provides the working directory in the
+  // hook event payload as `cwd`. Fall back to omitting if not present.
+  const cwd = typeof event["cwd"] === "string" ? event["cwd"] : undefined;
+  const decision = evaluateBashCommand(command, cwd ? { cwd } : {});
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-bash-write-bypass");
   }
