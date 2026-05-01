@@ -17050,7 +17050,7 @@ edit_* tools.
 Use this tool when:
 - Modifying .claude/ configuration
 - Modifying .github/workflows/ files that affect meta-edit
-- Modifying CLAUDE.md or other AI-instruction files
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
 - Modifying tool descriptions of edit_* tools themselves
 - Modifying argument schemas or hook behavior
 
@@ -17087,7 +17087,7 @@ Use this tool when:
 - Editing inline code comments
 - Editing JSDoc / docstrings / Rustdoc that document existing API
 - Editing changelogs, release notes, contribution guides
-- Editing OBSERVED-FAILURES.md and similar project meta-documentation
+- Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
 
 Required tests: NONE. test_files may be empty.
 
@@ -18255,6 +18255,9 @@ function validateRequest(toolName, request, ctx) {
     }
     const safe = checkPathSafety(c.file, ctx.repoRoot);
     if (!safe.ok) {
+      if (!targetCheck.ok && c.file === request.target_file && safe.error === targetCheck.error) {
+        continue;
+      }
       warnings.push(`change.file "${c.file}": ${safe.error}`);
       continue;
     }
@@ -18392,6 +18395,12 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" is absolute; must be repository-relative`
     };
   }
+  if (containsParentTraversal(p)) {
+    return {
+      ok: false,
+      error: `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`
+    };
+  }
   let norm;
   try {
     norm = normalizeRepoRelative(p);
@@ -18441,6 +18450,13 @@ function realpathOrSelf(p) {
   } catch {
     return p;
   }
+}
+function containsParentTraversal(p) {
+  for (const seg of p.split(/[\\/]/)) {
+    if (seg === "..")
+      return true;
+  }
+  return false;
 }
 
 // src/tools/registry.ts
@@ -18621,7 +18637,13 @@ function applyChanges(repoRoot, changes, options = {}) {
       return { applied: false, warnings };
     }
     if (original !== ch.oldContent) {
-      warnings.push(`stale old_content for "${ch.canonical}"; disk content has changed since the request was prepared`);
+      const diskLen = original.length;
+      const oldLen = ch.oldContent.length;
+      if (diskLen !== oldLen) {
+        warnings.push(`old_content for "${ch.canonical}" is ${oldLen} characters but the file on disk is ${diskLen} characters; ` + `old_content must be the EXACT current full file content, not a snippet. ` + `Re-read the file and pass its complete contents.`);
+      } else {
+        warnings.push(`stale old_content for "${ch.canonical}": same length as disk (${diskLen} characters) but bytes differ; ` + `the file changed between when old_content was captured and now. Re-read the file and retry.`);
+      }
       return { applied: false, warnings };
     }
     staged.push({
@@ -19213,4 +19235,4 @@ export {
   createServer
 };
 
-//# debugId=86A08367149C920D64756E2164756E21
+//# debugId=91A986784F076F1664756E2164756E21

@@ -1456,3 +1456,187 @@ describe("evaluateBashCommand — issue #31 /dev/fd alias bypass", () => {
     ).toBe("allow");
   });
 });
+
+describe("evaluateBashCommand — dogfood-001 in-repo redirect deny", () => {
+  // Pre-fix: only specific verbs were enumerated as deny patterns
+  // (cat >, sed -i, mv, ...). printf, echo, jq, and any future write
+  // verb fell through to allow when the redirect target was an in-repo
+  // path. The structural fix denies any `>` / `>>` / `>|` whose target
+  // is not on the safe-sink allowlist.
+
+  it("denies printf > test-playground/ (the dogfood-001 reproduction)", () => {
+    const r = evaluateBashCommand('printf "%s" leak > test-playground/sample.ts');
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("safe-sink allowlist");
+  });
+
+  it("denies echo > out.log (relative in-repo target)", () => {
+    expect(
+      evaluateBashCommand("echo hello > out.log").decision,
+    ).toBe("deny");
+  });
+
+  it("denies printf >> append to in-repo path", () => {
+    expect(
+      evaluateBashCommand("printf x >> notes.md").decision,
+    ).toBe("deny");
+  });
+
+  it("denies noclobber-override >| to in-repo path", () => {
+    expect(
+      evaluateBashCommand("printf x >| notes.md").decision,
+    ).toBe("deny");
+  });
+
+  it("denies redirect to absolute path outside the safe-sink list", () => {
+    // /home/user/repo/x is not on the safe prefixes (/tmp, /var/tmp,
+    // /run, /sys), so it is denied even though it is absolute. This
+    // matches the existing isInRepoWriteTarget contract.
+    expect(
+      evaluateBashCommand("printf x > /home/user/something.txt").decision,
+    ).toBe("deny");
+  });
+
+  it("allows printf > /dev/null (safe exact target)", () => {
+    expect(
+      evaluateBashCommand("printf x > /dev/null").decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf > /tmp/foo (safe prefix)", () => {
+    expect(
+      evaluateBashCommand("printf x > /tmp/foo.log").decision,
+    ).toBe("allow");
+  });
+
+  it("allows echo foo &> /dev/null (combined-redirect form)", () => {
+    expect(
+      evaluateBashCommand("echo foo &> /dev/null").decision,
+    ).toBe("allow");
+  });
+
+  it("allows command with no redirect", () => {
+    expect(evaluateBashCommand("printf hello").decision).toBe("allow");
+    expect(evaluateBashCommand("bun test").decision).toBe("allow");
+  });
+
+  it("allows 2>&1 fd-duplication without misreading as redirect", () => {
+    // `2>&1` is fd duplication, not a write redirect. Must not trip the
+    // in-repo deny.
+    expect(
+      evaluateBashCommand("bun test 2>&1 | head").decision,
+    ).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — dogfood-005 quote-aware scans", () => {
+  // Pre-fix: DENY_SUBSTRINGS substring scan and protected-path scan
+  // walked raw command text, so a documentation string containing the
+  // literal trigger phrase inside a printf single-quoted argument would
+  // false-positive deny. The same stripQuotedContent that protected the
+  // heredoc / decode-and-execute scans now protects these too.
+
+  it("allows printf '... cat > x ...' > /tmp/notes.md (DENY_SUBSTRINGS in quoted body)", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'avoid the cat > target pattern in scripts' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf '... sed -i ...' > /tmp/notes.md", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'do not use sed -i for in-place edits' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf '... .meta-edit/state ...' > /tmp/notes.md (protected path in quoted body)", () => {
+    expect(
+      evaluateBashCommand(
+        "printf 'edits land in .meta-edit/state/edits.jsonl' > /tmp/notes.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("still denies the actual exploit when the redirect is unquoted", () => {
+    // The dogfood-005 fix must not soften the real exploit: a literal
+    // `cat > <in-repo>` (no surrounding quotes around the redirect) is
+    // still denied by the existing DENY_SUBSTRINGS entry.
+    expect(
+      evaluateBashCommand("cat > src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("still denies bash -c 'sed -i ...' (shell-hosting wrapper rescan)", () => {
+    // dogfood-005 quote-stripping would otherwise blank the bash -c
+    // payload. matchesShellHostingDeny rescans the literal arg and
+    // restores the deny.
+    expect(
+      evaluateBashCommand('bash -c "sed -i s/x/y/ src/foo.ts"').decision,
+    ).toBe("deny");
+  });
+
+  it("still denies eval 'cat > src/foo.ts' (eval literal arg)", () => {
+    expect(
+      evaluateBashCommand("eval \"cat > src/foo.ts\"").decision,
+    ).toBe("deny");
+  });
+});
+
+describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
+  // Bugs surfaced by the post-implementation subagent review and
+  // pinned here so a future regression fails loudly.
+
+  it("denies safe-prefix-then-traversal target (/tmp/../in-repo)", () => {
+    // Lexical startsWith was bypassable: `/tmp/../home/user/meta-edit/...`
+    // literally starts with `/tmp/` but resolves OUTSIDE the safe sink.
+    // isInRepoWriteTarget now path.normalize()s the target before
+    // checking the prefix.
+    expect(
+      evaluateBashCommand(
+        "printf x > /tmp/../home/user/something/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies double-up-traversal from /var/tmp", () => {
+    expect(
+      evaluateBashCommand(
+        "printf x > /var/tmp/../../home/user/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("still allows /tmp/foo (the post-normalize prefix check is unchanged for clean targets)", () => {
+    expect(
+      evaluateBashCommand("printf x > /tmp/foo.txt").decision,
+    ).toBe("allow");
+  });
+
+  it("denies CR-detached redirect target (printf x >\\rin-repo.ts)", () => {
+    // Pre-fix: primarySplitSegments treats `\r` as a segment boundary,
+    // detaching the target from `>`. Post-fix: the redirect operator
+    // pulls following \r/\n/U+2028/U+2029 into a normal space before
+    // segment splitting runs.
+    expect(
+      evaluateBashCommand("printf x >\rsrc/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies LF-detached redirect target (printf x >\\nin-repo.ts)", () => {
+    expect(
+      evaluateBashCommand("printf x >\nsrc/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("still treats CR as a segment boundary outside the redirect-operator carve-out", () => {
+    // `cargo fmt\rmv a b`: \r is NOT after a redirect operator, so the
+    // primary-split CR carve-out still applies and `mv` is denied.
+    // Pinning the carve-out's narrow scope.
+    expect(
+      evaluateBashCommand("cargo fmt\rmv a b").decision,
+    ).toBe("deny");
+  });
+});

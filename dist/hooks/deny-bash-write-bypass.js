@@ -182,6 +182,70 @@ function isProtectedPath(p, options = {}) {
   }
   return false;
 }
+// package.json
+var package_default = {
+  name: "@hiniachi/meta-edit",
+  version: "0.1.3",
+  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  license: "MIT",
+  author: "nia <nia@yukinofurumachi.com>",
+  type: "module",
+  bin: {
+    "meta-edit": "dist/cli.js",
+    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+  },
+  main: "./dist/server.js",
+  files: [
+    "dist/",
+    "docs/SPEC.md",
+    ".claude-plugin/",
+    "hooks/",
+    "README.md",
+    "LICENSE"
+  ],
+  scripts: {
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    test: "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    typecheck: "tsc --noEmit",
+    start: "bun run src/cli.ts"
+  },
+  engines: {
+    node: ">=20"
+  },
+  dependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    diff: "^9",
+    zod: "^3.23.0"
+  },
+  devDependencies: {
+    "@types/bun": "^1.3.13",
+    "@types/diff": "^8",
+    "@types/node": "^22.0.0",
+    typescript: "^5.6.0"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hiniachi/meta-edit.git"
+  },
+  keywords: [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+};
+
+// src/version.ts
+var VERSION = package_default.version;
+
+// src/docs-urls.ts
+var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
+var SPEC_URL = `${BASE}/docs/SPEC.md`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
+var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/hooks/bash-write-policy.ts
 var DENY_SUBSTRINGS = [
@@ -254,6 +318,7 @@ function evaluateBashCommand(command, opts = {}) {
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
   }
+  command = command.replace(new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"), (_m, op) => `${op} `);
   if (matchesDecodeAndExecute(stripQuotedContent(command))) {
     return {
       decision: "deny",
@@ -274,7 +339,8 @@ function evaluateBashCommand(command, opts = {}) {
 }
 function evaluateSegment(rawSegment, opts = {}) {
   const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
-  if (touchesProtectedPath(normalized)) {
+  const scanText = stripQuotedContent(normalized);
+  if (touchesProtectedPath(scanText)) {
     const verb2 = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -292,12 +358,25 @@ function evaluateSegment(rawSegment, opts = {}) {
     };
   }
   for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle)) {
+    if (scanText.includes(needle)) {
       return {
         decision: "deny",
         reason: denyReason(needle)
       };
     }
+  }
+  const hostingHit = matchesShellHostingDeny(rawSegment);
+  if (hostingHit !== null) {
+    return {
+      decision: "deny",
+      reason: denyReason(hostingHit)
+    };
+  }
+  if (redirectsToInRepoPath(rawSegment)) {
+    return {
+      decision: "deny",
+      reason: "command redirects (`>` / `>>` / `>|`) to a path that is not on " + "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). Use an edit_* tool for in-repo writes; capture command " + "output to /tmp/ or /dev/null if you need a sink."
+    };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
   if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(heredocScan)) {
@@ -469,6 +548,10 @@ function primarySplitSegments(cmd) {
         i++;
         continue;
       }
+      if (c === "|" && cmd[i - 1] === ">") {
+        buf += c;
+        continue;
+      }
       if (c === ";" || c === "|" || c === `
 ` || c === "\r" || c === "\u2028" || c === "\u2029") {
         segments.push(buf);
@@ -621,7 +704,7 @@ function stripQuotedContent(s) {
   return out;
 }
 function denyReason(pattern) {
-  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the nineteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist (see ` + `docs/SPEC.md §5.2).`;
+  return `command matches deny pattern "${pattern}". meta-edit reserves ` + `direct file writes for the nineteen edit_* tools; if a formatter ` + `or codegen needs to run, route it through the allowlist ` + `(${SPEC_BASH_HOOK_URL}).`;
 }
 var FIND_VERBS = new Set([
   "find",
@@ -669,8 +752,11 @@ function isInRepoWriteTarget(target) {
     return false;
   if (SAFE_EXACT_TARGETS.has(target))
     return false;
-  if (target.startsWith("/")) {
-    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  const resolved = target.startsWith("/") ? path3.normalize(target) : target;
+  if (SAFE_EXACT_TARGETS.has(resolved))
+    return false;
+  if (resolved.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
   return true;
 }
@@ -848,6 +934,94 @@ function redirectsToProtected(s, opts = {}) {
       }
     }
     i = j;
+  }
+  return false;
+}
+function* iterRedirectTargets(s) {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    let j = i + 1;
+    if (s[j] === ">" || s[j] === "|")
+      j++;
+    while (j < s.length && (s[j] === " " || s[j] === "\t"))
+      j++;
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (tc === " " || tc === "\t" || tc === ";" || tc === "|" || tc === "&" || tc === `
+` || tc === ">" || tc === "<") {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    yield target;
+    i = j;
+  }
+}
+var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+function matchesShellHostingDeny(rawSegment) {
+  const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
+  if (cMatch !== null && typeof cMatch.index === "number") {
+    const argStart = cMatch.index + cMatch[0].length;
+    const arg = readShellArg(rawSegment, argStart);
+    const hit = scanArgForDenySubstring(arg);
+    if (hit !== null)
+      return hit;
+  }
+  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
+  const evalMatch = trimmed.match(/^eval\b\s*/);
+  if (evalMatch !== null) {
+    const argStart = evalMatch[0].length;
+    const arg = readShellArg(trimmed, argStart);
+    const hit = scanArgForDenySubstring(arg);
+    if (hit !== null)
+      return hit;
+  }
+  return null;
+}
+function scanArgForDenySubstring(arg) {
+  if (arg === null || arg.length === 0)
+    return null;
+  const normalized = collapsePathDoublings(arg.replace(/\\/g, ""));
+  for (const needle of DENY_SUBSTRINGS) {
+    if (normalized.includes(needle))
+      return needle;
+  }
+  return null;
+}
+function redirectsToInRepoPath(rawSegment) {
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0)
+      continue;
+    if (isInRepoWriteTarget(target))
+      return true;
   }
   return false;
 }
@@ -1295,4 +1469,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=B94CEC0826C12EDE64756E2164756E21
+//# debugId=4D94A7BB56FB2D2864756E2164756E21

@@ -972,25 +972,39 @@ Triggered on `PreToolUse` for `Bash`. Inspects the command line and denies if it
 
 This hook operates on a **best-effort basis**. It uses substring matching on the command line, which is straightforward to bypass (heredocs in alternative languages, base64-encoded commands, indirect invocations through shell aliases or wrappers, etc.). The MVP does not attempt to defeat a determined bypass; it raises the cost of the obvious bypasses to the point where using an `edit_*` tool is the path of least resistance. Stronger guarantees would require shell command parsing or a filesystem sandbox, both of which are out of scope.
 
-Deny patterns (substring match on the command, after basic normalization):
+Deny families:
 
-```
-sed -i
-sed --in-place
-perl -pi
-perl -i
-python -c    (when the snippet contains write_text, write, open( ... 'w', etc.)
-node -e      (when the snippet contains writeFile, writeFileSync)
-cat >
-cat >>
-tee
-tee -a
-mv ... <files in repo>
-cp ... <files in repo>
-git apply
-patch
-rsync
-```
+1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization):
+
+   ```
+   sed -i
+   sed --in-place
+   perl -pi
+   perl -i
+   python -c    (when the snippet contains write_text, write, open( ... 'w', etc.)
+   node -e      (when the snippet contains writeFile, writeFileSync)
+   cat >
+   cat >>
+   tee <in-repo target>
+   tee -a <in-repo target>
+   mv ... <files in repo>
+   cp ... <files in repo>
+   dd of=<in-repo target>
+   git apply
+   patch
+   rsync
+   ```
+
+2. **Structural in-repo redirect deny** (dogfood-001 + dogfood-005). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is denied, regardless of the upstream verb. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
+
+   ```
+   exact: /dev/null  /dev/stdout  /dev/stderr  /dev/zero
+   prefix: /tmp/  /var/tmp/  /run/  /sys/
+   ```
+
+   Relative paths and absolute paths outside the safe-sink list are treated as in-repo and denied. Use one of the nineteen `edit_*` tools for in-repo writes; capture command output to `/tmp/` or `/dev/null` if you need a sink.
+
+   The DENY_SUBSTRINGS verb scan and the protected-path scan apply `stripQuotedContent` first, so a documentation string containing the literal trigger phrase inside a quoted argument (`printf 'do not use sed -i' > /tmp/notes.md`) is not denied. Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`) re-extract their literal argument and scan it raw so embedded bypasses inside the wrapper's quoted code remain caught.
 
 Allowlist patterns (override deny):
 

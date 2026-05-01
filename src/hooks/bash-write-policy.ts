@@ -179,6 +179,18 @@ export function evaluateBashCommand(
   if (typeof command !== "string" || command.length === 0) {
     return { decision: "allow" };
   }
+  // Heal redirect-target detachment caused by line-separator whitespace
+  // sitting between the redirect operator and its target. Without this,
+  // `printf x >\rsrc/foo.ts` splits into `printf x >` (empty target) and
+  // `src/foo.ts` (a separate segment), bypassing the in-repo redirect
+  // deny. Real bash treats bare `\r` as an ordinary filename byte, so
+  // the rewrite is a no-op for genuine CRLF copy-paste artifacts; the
+  // primary-split CR carve-out (line 619) remains for defense in depth.
+  // Caught by dogfood-001 self-review.
+  command = command.replace(
+    new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"),
+    (_m, op) => `${op} `,
+  );
 
   // Cross-segment "decode-and-execute" bypass: `base64 -d | bash`,
   // `xxd -r ... | sh`, `openssl base64 -d | bash`. Each individual
@@ -232,6 +244,14 @@ function evaluateSegment(
   // spellings (`.meta-edit//state`, `.meta-edit/./state`) reach the
   // same protected-path needles as the canonical form.
   const normalized = collapsePathDoublings(rawSegment.replace(/\\/g, ""));
+  // Quote-stripped form for substring scans (DENY_SUBSTRINGS,
+  // touchesProtectedPath). dogfood-005: legitimate documentation strings
+  // that contain literal trigger phrases inside quoted arguments
+  // (`printf '... cat > foo.ts ...' > /tmp/notes.md`,
+  //  `printf '... .meta-edit/state ...' > /tmp/notes.md`) used to deny
+  // because the substring scans walked raw text. The heredoc and
+  // decode-and-execute scans were already quote-aware; align the rest.
+  const scanText = stripQuotedContent(normalized);
 
   // Protected-path edits are denied — even when the surrounding command
   // otherwise matches a documented allowlist entry. Carve-out: a small
@@ -243,7 +263,7 @@ function evaluateSegment(
   // even though its leading verb is a read tool. See
   // OBSERVED-FAILURES.md "LOW: Read-only commands referencing protected
   // paths are blocked".
-  if (touchesProtectedPath(normalized)) {
+  if (touchesProtectedPath(scanText)) {
     const verb = extractCommandVerb(normalized.trimStart());
     const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
@@ -290,12 +310,44 @@ function evaluateSegment(
   // surface; the architecture now reserves room for that without giving
   // deny-bypass on chained commands.
   for (const needle of DENY_SUBSTRINGS) {
-    if (normalized.includes(needle)) {
+    if (scanText.includes(needle)) {
       return {
         decision: "deny",
         reason: denyReason(needle),
       };
     }
+  }
+
+  // Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`)
+  // pass an arbitrary quoted string for the host shell to RE-PARSE and
+  // execute. The quote-stripped DENY_SUBSTRINGS scan above can no longer
+  // see the embedded code; recover the literal string and rescan it.
+  // Compensates for the dogfood-005 quote-stripping trade-off.
+  const hostingHit = matchesShellHostingDeny(rawSegment);
+  if (hostingHit !== null) {
+    return {
+      decision: "deny",
+      reason: denyReason(hostingHit),
+    };
+  }
+
+  // dogfood-001 + dogfood-005: structural deny for any `>` / `>>` / `>|`
+  // redirect whose target is not on the documented safe-sink allowlist
+  // (/dev/null, /dev/std{out,err}, /dev/zero, /tmp/, /var/tmp/, /run/,
+  // /sys/). Replaces the per-verb deny enumeration that left holes for
+  // every new write verb (printf, echo, jq with --rawfile, ...). Reading
+  // from any source, redirecting to a safe sink remains allowed; redirect
+  // targets that resolve in-repo (relative paths) or to arbitrary
+  // absolute paths outside the safe-sink list are denied.
+  if (redirectsToInRepoPath(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        "command redirects (`>` / `>>` / `>|`) to a path that is not on " +
+        "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
+        "/sys/). Use an edit_* tool for in-repo writes; capture command " +
+        "output to /tmp/ or /dev/null if you need a sink.",
+    };
   }
 
   // Heredoc redirect bypass: `cat <<EOF > target`, `cat <<'EOF' > target`,
@@ -561,6 +613,15 @@ function primarySplitSegments(cmd: string): string[] {
         segments.push(buf);
         buf = "";
         i++;
+        continue;
+      }
+      // Preserve `>|` (noclobber-override redirect) as a single
+      // segment-internal token. Without this carve-out, `printf x >|
+      // notes.md` splits into `printf x >` and `notes.md`, which hides
+      // the redirect target from iterRedirectTargets and bypasses the
+      // dogfood-001 in-repo redirect deny.
+      if (c === "|" && cmd[i - 1] === ">") {
+        buf += c;
         continue;
       }
       if (
@@ -880,8 +941,18 @@ const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
 function isInRepoWriteTarget(target: string): boolean {
   if (target.length === 0) return false;
   if (SAFE_EXACT_TARGETS.has(target)) return false;
-  if (target.startsWith("/")) {
-    return !SAFE_ABSOLUTE_PREFIXES.some((p) => target.startsWith(p));
+  // Lexical safe-prefix matching is bypassable via `..` traversal:
+  // `/tmp/../home/user/meta-edit/src/foo.ts` literally starts with
+  // `/tmp/` but resolves OUTSIDE the safe sink. Resolve `..` segments
+  // before the prefix check so traversal cannot escape the allowlist.
+  // path.normalize on POSIX collapses `a/b/../c` → `a/c` while leaving
+  // genuine path strings unchanged. dogfood-001 self-review caught this.
+  const resolved = target.startsWith("/")
+    ? path.normalize(target)
+    : target;
+  if (SAFE_EXACT_TARGETS.has(resolved)) return false;
+  if (resolved.startsWith("/")) {
+    return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
   // Relative path → assume in-repo. This also covers `~/...` (we don't
   // expand tildes) and bare names (`foo.ts`).
@@ -1164,6 +1235,123 @@ function redirectsToProtected(
       }
     }
     i = j;
+  }
+  return false;
+}
+
+// Walk `s` and yield each `>`/`>>`/`>|` redirect's target token, ignoring
+// `>&` fd duplications and quoted regions. Shared by redirectsToProtected
+// (substring-tests against PROTECTED_PATH_NEEDLES) and the in-repo redirect
+// deny (dogfood-001 / dogfood-005). Returns dequoted, unparsed-token
+// strings — callers apply their own predicate.
+function* iterRedirectTargets(s: string): IterableIterator<string> {
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (!inSingle && c === "\\" && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble || c !== ">") {
+      i++;
+      continue;
+    }
+    // `>&` is fd duplication (`2>&1`, `>&2`), not a write redirect.
+    if (s[i + 1] === "&") {
+      i += 2;
+      continue;
+    }
+    let j = i + 1;
+    if (s[j] === ">" || s[j] === "|") j++;
+    while (j < s.length && (s[j] === " " || s[j] === "\t")) j++;
+    const tokenStart = j;
+    while (j < s.length) {
+      const tc = s[j];
+      if (
+        tc === " " ||
+        tc === "\t" ||
+        tc === ";" ||
+        tc === "|" ||
+        tc === "&" ||
+        tc === "\n" ||
+        tc === ">" ||
+        tc === "<"
+      ) {
+        break;
+      }
+      j++;
+    }
+    let target = s.slice(tokenStart, j);
+    target = target.replace(/^["']|["']$/g, "");
+    yield target;
+    i = j;
+  }
+}
+
+// `bash -c "<cmd>"` / `sh -c "<cmd>"` / `eval "<cmd>"`: when the agent
+// stuffs a write-bypass into a shell-hosting wrapper's quoted argument,
+// the outer quote-stripping pass blanks the payload before the
+// DENY_SUBSTRINGS scan sees it. Recover the literal argument here and
+// rescan it (also stripping backslashes so `s\ed -i` inside the arg
+// reads as `sed -i`). Returns the matched needle, or null.
+const SHELL_HOSTING_C_RE =
+  /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+
+function matchesShellHostingDeny(rawSegment: string): string | null {
+  const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
+  if (cMatch !== null && typeof cMatch.index === "number") {
+    const argStart = cMatch.index + cMatch[0].length;
+    const arg = readShellArg(rawSegment, argStart);
+    const hit = scanArgForDenySubstring(arg);
+    if (hit !== null) return hit;
+  }
+  // `eval` may sit at the head of the segment, optionally behind env
+  // assignments. Wrappers like `sudo`, `env`, etc. also place eval
+  // anywhere in the wrapper chain — peel them with extractCommandVerb's
+  // sibling helpers so `sudo eval "..."` is caught the same as `eval "..."`.
+  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
+  const evalMatch = trimmed.match(/^eval\b\s*/);
+  if (evalMatch !== null) {
+    const argStart = evalMatch[0].length;
+    const arg = readShellArg(trimmed, argStart);
+    const hit = scanArgForDenySubstring(arg);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+function scanArgForDenySubstring(arg: string | null): string | null {
+  if (arg === null || arg.length === 0) return null;
+  const normalized = collapsePathDoublings(arg.replace(/\\/g, ""));
+  for (const needle of DENY_SUBSTRINGS) {
+    if (normalized.includes(needle)) return needle;
+  }
+  return null;
+}
+
+// dogfood-001 + dogfood-005: deny any `>`/`>>`/`>|` redirect whose target
+// is not in the safe-sink allowlist. This is the structural replacement
+// for the per-verb enumeration (printf, echo, ...) the dogfood pass
+// found incomplete. The check operates on the raw segment so quoted
+// strings inside arguments are not misread as redirect targets — e.g.
+// `printf '... > foo.ts ...' > /tmp/notes.md` walks past the quoted `>`
+// and only sees the real one whose target is `/tmp/notes.md` (allowed).
+function redirectsToInRepoPath(rawSegment: string): boolean {
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0) continue;
+    if (isInRepoWriteTarget(target)) return true;
   }
   return false;
 }
