@@ -480,6 +480,37 @@ describe("validateRequest", () => {
       }
     });
 
+    // a5-03 strengthen: cover `../` dot-dot segment normalization.
+    // "src/nested/../foo.ts" and "src/foo.ts" both resolve to the same
+    // canonical via path.resolve, so the duplicate-canonical guard must fire.
+    it("rejects two changes that alias the same file via ../ dot-dot segments", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          target_file: "src/foo.ts",
+          test_files: ["tests/foo.test.ts"],
+          changes: [
+            makeChange("src/foo.ts", "alpha", "beta"),
+            makeChange("src/nested/../foo.ts", "alpha", "beta"),
+          ],
+        }),
+        ctx,
+      );
+      // path.resolve folds "src/nested/../foo.ts" → "src/foo.ts" so both
+      // canonicals match. Either the duplicate-canonical guard or the scope
+      // guard must reject; ok:true is never acceptable.
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some(
+            (w) =>
+              w.includes("foo.ts") &&
+              (w.includes("multiple entries") || w.includes("scope")),
+          ),
+        ).toBe(true);
+      }
+    });
+
     it("duplicate-canonical guard fires before applyChanges internal assertion", () => {
       // If validateRequest lets through duplicate canonicals, applyChanges
       // catches them as an internal-error assertion (apply.ts:100-104).
