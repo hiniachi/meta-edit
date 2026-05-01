@@ -10,41 +10,58 @@ import {
   settingsPathForScope,
   parseHooksArgs,
   META_EDIT_HOOK_COMMANDS,
+  META_EDIT_RAW_EDIT_MATCHER,
   type HookMatcherEntry,
   type SettingsShape,
 } from "./hooks-cmd.js";
+import { RAW_EDIT_TOOLS } from "../hooks/raw-edit-policy.js";
 
-let tmpRoot: string;
-let collectedOut: string[];
-let collectedErr: string[];
-const out: NodeJS.WritableStream = {
-  write: ((s: string) => {
-    collectedOut.push(s);
-    return true;
-  }),
-} as unknown as NodeJS.WritableStream;
-const err: NodeJS.WritableStream = {
-  write: ((s: string) => {
-    collectedErr.push(s);
-    return true;
-  }),
-} as unknown as NodeJS.WritableStream;
+// ---------------------------------------------------------------------------
+// Drift-prevention tests — pure constant/import checks, NO filesystem setup.
+// Isolated in their own describe so a read-only /tmp never blocks them.
+// ---------------------------------------------------------------------------
+describe("matcher constant integrity", () => {
+  it("includes NotebookEdit so install-hooks emits a 4-tool matcher", () => {
+    // The runtime policy in deny-raw-edit denies NotebookEdit (a3-02), but
+    // that only fires if Claude Code's PreToolUse routing actually invokes
+    // the hook for NotebookEdit calls. Routing is matcher-driven, so the
+    // matcher string written by `meta-edit install-hooks` MUST list
+    // NotebookEdit. If this constant drifts back to the 3-tool form,
+    // a3-02 silently regresses end-to-end.
+    expect(META_EDIT_RAW_EDIT_MATCHER).toBe(
+      "Edit|Write|MultiEdit|NotebookEdit",
+    );
+  });
 
-beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-hooks-cmd-"));
-  collectedOut = [];
-  collectedErr = [];
-});
+  it("install writes a matcher entry that names NotebookEdit", () => {
+    const r = installMetaEditHooks({});
+    const rawEditEntry = r.hooks?.PreToolUse?.find((e) =>
+      e.hooks.some((h) => h.command === META_EDIT_HOOK_COMMANDS.rawEdit),
+    );
+    expect(rawEditEntry?.matcher).toBe("Edit|Write|MultiEdit|NotebookEdit");
+    expect(rawEditEntry?.matcher).toContain("NotebookEdit");
+  });
 
-afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  it("META_EDIT_RAW_EDIT_MATCHER stays in sync with RAW_EDIT_TOOLS", () => {
+    // (a) Every tool name in RAW_EDIT_TOOLS must appear in the matcher string.
+    // (b) No extra entries in the matcher (length parity).
+    // RAW_EDIT_TOOLS uses canonical PascalCase; the matcher is pipe-delimited
+    // PascalCase — no normalization needed.
+    const matcherParts = META_EDIT_RAW_EDIT_MATCHER.split("|");
+    for (const tool of RAW_EDIT_TOOLS) {
+      expect(matcherParts).toContain(tool);
+    }
+    expect(matcherParts.length).toBe(RAW_EDIT_TOOLS.size);
+  });
 });
 
 describe("installMetaEditHooks (pure)", () => {
   it("creates the hooks block on an empty settings object", () => {
     const r = installMetaEditHooks({});
     expect(r.hooks?.PreToolUse?.length).toBe(2);
-    expect(r.hooks?.PreToolUse?.[0]?.matcher).toBe("Edit|Write|MultiEdit");
+    expect(r.hooks?.PreToolUse?.[0]?.matcher).toBe(
+      "Edit|Write|MultiEdit|NotebookEdit",
+    );
     expect(r.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toBe(
       META_EDIT_HOOK_COMMANDS.rawEdit,
     );
@@ -76,7 +93,7 @@ describe("installMetaEditHooks (pure)", () => {
       hooks: {
         PreToolUse: [
           {
-            matcher: "Edit|Write|MultiEdit",
+            matcher: "Edit|Write|MultiEdit|NotebookEdit",
             hooks: [{ type: "command", command: "user-custom-edit-hook" }],
           },
         ],
@@ -84,7 +101,7 @@ describe("installMetaEditHooks (pure)", () => {
     };
     const after = installMetaEditHooks(before);
     const editEntry = after.hooks?.PreToolUse?.find(
-      (e) => e.matcher === "Edit|Write|MultiEdit",
+      (e) => e.matcher === "Edit|Write|MultiEdit|NotebookEdit",
     );
     expect(editEntry?.hooks.length).toBe(2);
     const cmds = editEntry?.hooks.map((h) => h.command);
@@ -128,11 +145,11 @@ describe("installMetaEditHooks (pure)", () => {
     expect(() => installMetaEditHooks(before)).not.toThrow();
   });
 
-  it("adds a full Edit|Write|MultiEdit entry even when a narrower user matcher already has our hook", () => {
+  it("adds a full Edit|Write|MultiEdit|NotebookEdit entry even when a narrower user matcher already has our hook", () => {
     // A user-edited narrower matcher (Edit|Write) is NOT treated as
-    // sufficient because MultiEdit would be unprotected. install adds
-    // a new exact-matcher entry alongside; the duplicate firing on
-    // Edit/Write is idempotent (deny is deny).
+    // sufficient because MultiEdit and NotebookEdit would be
+    // unprotected. install adds a new exact-matcher entry alongside;
+    // the duplicate firing on Edit/Write is idempotent (deny is deny).
     const before: SettingsShape = {
       hooks: {
         PreToolUse: [
@@ -151,7 +168,7 @@ describe("installMetaEditHooks (pure)", () => {
     );
     expect(editMatchers?.length).toBe(2);
     expect(editMatchers?.map((e) => e.matcher).sort()).toEqual(
-      ["Edit|Write", "Edit|Write|MultiEdit"].sort(),
+      ["Edit|Write", "Edit|Write|MultiEdit|NotebookEdit"].sort(),
     );
   });
 
@@ -352,6 +369,32 @@ describe("uninstallMetaEditHooks (pure)", () => {
 });
 
 describe("runInstallHooks (effectful)", () => {
+  let tmpRoot: string;
+  let collectedOut: string[];
+  let collectedErr: string[];
+  const out: NodeJS.WritableStream = {
+    write: ((s: string) => {
+      collectedOut.push(s);
+      return true;
+    }),
+  } as unknown as NodeJS.WritableStream;
+  const err: NodeJS.WritableStream = {
+    write: ((s: string) => {
+      collectedErr.push(s);
+      return true;
+    }),
+  } as unknown as NodeJS.WritableStream;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-hooks-cmd-"));
+    collectedOut = [];
+    collectedErr = [];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
   it("creates settings.json under --scope project", () => {
     runInstallHooks({ scope: "project", cwd: tmpRoot, out, err });
     const target = settingsPathForScope("project", { cwd: tmpRoot });
