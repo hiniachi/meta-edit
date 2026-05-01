@@ -1,6 +1,6 @@
 # Issues — meta-edit v0.1.2
 
-Filed 2026-05-01 by a 7-agent parallel sweep. **Every issue includes a reproducing failing test** that, when added to the indicated `*.test.ts` file, fails against current code (`bun test`).
+Filed 2026-05-01 by a 7-agent parallel sweep. Every issue includes a TypeScript test code block that, when added to the indicated `*.test.ts` file, exercises the behaviour under review. **Most are reproducing failing tests** (real defects → fail today; fix makes them pass). **A few are regression-guard tests** (current behaviour is correct → pass today; the test prevents future regression). Each issue body indicates which framing applies — examples of regression-guards include a1-07 and a6-01.
 
 - Total: **29**
 - Severity: **21 HIGH / 8 MEDIUM**
