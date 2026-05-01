@@ -73,7 +73,29 @@ export class EditLog {
     // explicitly with lstat (symlink-aware) before mkdir, and use
     // O_NOFOLLOW on the final open so the leaf swap is also caught.
     ensureNoSymlinkOnPath(this.statePath);
-    fs.mkdirSync(this.statePath, { recursive: true });
+    // Issue a6-04: the audit-log directory must not be world-readable.
+    // mkdirSync without an explicit mode uses 0o777 & ~umask (typically
+    // 0o755). Pass mode: 0o700 so newly created ancestors are restricted
+    // to the owner. Then chmodSync explicitly to defend against:
+    //   1. umask narrowing the requested mode further than intended, and
+    //   2. existing wide-mode .meta-edit/state directories created by
+    //      a pre-fix version of the tool (we narrow on every append).
+    fs.mkdirSync(this.statePath, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
+      try {
+        fs.chmodSync(this.statePath, 0o700);
+        // Also narrow the .meta-edit parent that recursive mkdir may
+        // have just created; harmless if the user already created it.
+        const parent = path.dirname(this.statePath);
+        try {
+          fs.chmodSync(parent, 0o700);
+        } catch {
+          /* ignore — parent may be owned by another user / pre-existing */
+        }
+      } catch {
+        /* ignore — fs may reject chmod on certain platforms */
+      }
+    }
     // Re-check: mkdirSync of an intermediate that was created during
     // this call may have followed a parent symlink we didn't see. Walk
     // again from the top and reject if any segment is now a symlink.

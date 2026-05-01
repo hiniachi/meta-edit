@@ -377,6 +377,29 @@ describe("EditLog.append / readAll", () => {
     expect(nonEmpty[0]).not.toMatch(/"injected":true/);
   });
 
+  // Regression test for issue a6-04: the .meta-edit/state/ directory
+  // must not be created world-readable (0o755). Use 0o700 so other
+  // local users on shared systems cannot enumerate/stat/inotify-watch
+  // the audit log directory.
+  it("state directory is created with mode 0700 (not world-readable)", () => {
+    // Permission bits are meaningful on POSIX systems only.
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // skip on Windows
+    }
+
+    const log = new EditLog(tmpRoot);
+    log.append(entry());
+
+    const statePath = path.join(tmpRoot, ".meta-edit", "state");
+    const stat = fs.statSync(statePath);
+    const mode = stat.mode & 0o777;
+
+    // Must not be readable / writable / traversable by "other".
+    expect(mode & 0o007).toBe(0);
+    // Must not be writable by group.
+    expect(mode & 0o020).toBe(0);
+  });
+
   it("JSON.stringify escapes NUL bytes and ANSI escapes in rationale", () => {
     const log = new EditLog(tmpRoot);
 
