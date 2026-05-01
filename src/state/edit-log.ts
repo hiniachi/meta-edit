@@ -279,14 +279,16 @@ export class EditLog {
   }
 
   private scanMaxCounterForKey(key: string): number {
-    if (!fs.existsSync(this.logPath)) {
-      return 0;
-    }
     let text: string;
     try {
       text = fs.readFileSync(this.logPath, "utf8");
-    } catch {
-      return 0;
+    } catch (e) {
+      // a6-03 fail-closed (codex round 1): only ENOENT (the log file
+      // simply doesn't exist yet) is a benign zero-counter case. Any
+      // other error (EACCES, EIO, EISDIR, …) is treated as fatal so a
+      // corrupt or unreadable log cannot silently cause id reuse.
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw e;
     }
     let max = 0;
     for (const line of text.split("\n")) {

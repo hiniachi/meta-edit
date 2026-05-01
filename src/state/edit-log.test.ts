@@ -180,6 +180,33 @@ describe("EditLog concurrent-instance safety", () => {
     expect(idsOnDisk.size).toBe(2);
   });
 
+  // Regression for issue a6-03 (codex round 1): the counter scan must
+  // fail-closed on a non-ENOENT read error. Previously it caught all
+  // errors and returned 0, which would cause silent id reuse if the
+  // log were temporarily unreadable (corruption, permission flip).
+  it("nextEditId throws on non-ENOENT log read error (fail-closed)", () => {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // permission-bit semantics differ on Windows
+    }
+    // Refuse this test under root (mode 0 doesn't block root reads).
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
+    fs.writeFileSync(logPath, JSON.stringify(entry()) + "\n", "utf8");
+    // Make the log file unreadable so readFileSync throws EACCES.
+    fs.chmodSync(logPath, 0o000);
+    try {
+      const log = new EditLog(tmpRoot);
+      expect(() => log.nextEditId(new Date(2026, 3, 30))).toThrow();
+    } finally {
+      // Restore mode so afterEach rmSync can clean up.
+      fs.chmodSync(logPath, 0o600);
+    }
+  });
+
   it("large-entry concurrent appends produce no interleaved bytes within a line", () => {
     // Each entry has a >4 KB rationale to stress kernel write atomicity.
     const largeRationale = "x".repeat(5000);
