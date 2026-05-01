@@ -51,6 +51,51 @@ describe("validateRequest", () => {
         expect(r.warnings.some((w) => w.includes("rationale"))).toBe(true);
       }
     });
+
+    // Issue 019 (a5-02): the test above only checks substring "rationale".
+    // The two below pin the exact warning string and the exact-count shape
+    // so a future rename or accidental control-flow change is caught.
+    it("emits exactly one warning for whitespace-only rationale when all other fields are valid", () => {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({ rationale: "   " }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        // Pin the exact warning message so renames are caught.
+        expect(r.warnings).toContain("rationale must be non-empty");
+        // Only one warning must be present: the rationale warning.
+        // If downstream checks also fire for an otherwise-valid request,
+        // the warnings array will be longer and this assertion catches it.
+        expect(r.warnings).toHaveLength(1);
+      }
+    });
+
+    it("emits rationale warning and continues to accumulate other warnings (does not early-return)", () => {
+      // validateRequest does NOT early-return after the rationale check.
+      // Confirm that a request with both a blank rationale AND an invalid
+      // target_file produces both warnings — verifying the documented
+      // behaviour that validation accumulates multiple errors in one pass.
+      const r = validateRequest(
+        "edit_boundary_condition",
+        baseRequest({
+          rationale: "   ",
+          target_file: "../outside.ts",
+          changes: [makeChange("../outside.ts")],
+        }),
+        ctx,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some((w) => w.includes("rationale must be non-empty")),
+        ).toBe(true);
+        expect(
+          r.warnings.some((w) => w.includes("escapes repository root")),
+        ).toBe(true);
+      }
+    });
   });
 
   describe("test_files cardinality", () => {
