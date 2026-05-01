@@ -1129,3 +1129,25 @@ describe("evaluateBashCommand — a1-06 busybox prefix bypass", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-07 locale env-var prefix regression", () => {
+  it("denies LC_ALL='en_US.UTF-8' sed -i (locale env-var prefix, single-quoted value)", () => {
+    expect(
+      evaluateBashCommand(
+        "LC_ALL='en_US.UTF-8' sed -i 's/x/y/' src/foo.ts",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  it("denies LC_ALL=C sed -i (locale env-var prefix, bare value)", () => {
+    expect(
+      evaluateBashCommand("LC_ALL=C sed -i 's/x/y/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  it("denies LANG=en_US.UTF-8 mv src/a.ts src/b.ts (multi-locale prefix before mv)", () => {
+    expect(
+      evaluateBashCommand("LANG=en_US.UTF-8 mv src/a.ts src/b.ts").decision,
+    ).toBe("deny");
+  });
+});
