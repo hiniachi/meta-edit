@@ -1178,3 +1178,25 @@ describe("evaluateBashCommand — a2-02 eval deferred-string bypass", () => {
     expect(r.decision).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a2-03 env -i wrapper regression", () => {
+  it("denies env -i mv (env -i must not consume mv as value of -i)", () => {
+    const r = evaluateBashCommand("env -i mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env -i cp", () => {
+    const r = evaluateBashCommand("env -i cp src/foo.ts src/bar.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env -i patch", () => {
+    const r = evaluateBashCommand("env -i patch -p1 < changes.diff");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies env --ignore-environment mv (long form)", () => {
+    const r = evaluateBashCommand("env --ignore-environment mv src/a.ts src/b.ts");
+    expect(r.decision).toBe("deny");
+  });
+});
