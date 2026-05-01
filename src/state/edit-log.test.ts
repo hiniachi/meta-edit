@@ -335,6 +335,74 @@ describe("EditLog.append / readAll", () => {
       expect(back[0]?.edit_id).toBe("edit_20260430_0001");
     });
   });
+
+  // Regression tests for issue a6-01: JSON.stringify must escape control
+  // characters and newlines in attacker-controlled fields (rationale) so
+  // a malicious caller cannot inject a second JSON line into edits.jsonl.
+  // No production code change is required — these guard against a future
+  // refactor that bypasses JSON.stringify (e.g. hand-rolled serialiser).
+  it("JSON.stringify escapes newlines in rationale — no line injection", () => {
+    const log = new EditLog(tmpRoot);
+
+    // Craft a rationale that would inject a second JSON object if not
+    // escaped. The injected payload is a complete, schema-valid edit log
+    // entry — if it survived as a separate raw line, readAll would return
+    // it as a phantom record.
+    const maliciousRationale =
+      'evil\n{"injected":true,"edit_id":"edit_99991231_9999",' +
+      '"timestamp":"2026-04-30T00:00:00+00:00","tool_name":"edit_refactor_only",' +
+      '"target_file":"src/pwned.ts","rationale":"x","risk_level":"low",' +
+      '"test_files":[],"patch_size_bytes":0,"applied":true,"warnings":[]}\n';
+
+    const e = entry({
+      edit_id: "edit_20260430_0001",
+      rationale: maliciousRationale,
+    });
+
+    log.append(e);
+
+    // readAll must return exactly one entry.
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.rationale).toBe(maliciousRationale);
+
+    // The raw file must contain exactly one non-empty line.
+    const raw = fs.readFileSync(log.filePath, "utf8");
+    const nonEmpty = raw.split("\n").filter((l) => l.trim().length > 0);
+    expect(nonEmpty.length).toBe(1);
+
+    // And that line must NOT contain a literal "injected":true (i.e.
+    // JSON.stringify escaped the embedded newline as \\n so the injected
+    // text remains inside the rationale string value).
+    expect(nonEmpty[0]).not.toMatch(/"injected":true/);
+  });
+
+  it("JSON.stringify escapes NUL bytes and ANSI escapes in rationale", () => {
+    const log = new EditLog(tmpRoot);
+
+    const nulRationale = "before\x00after";
+    const ansiRationale = "color\x1b[31mred\x1b[0m reset";
+
+    log.append(
+      entry({ edit_id: "edit_20260430_0001", rationale: nulRationale }),
+    );
+    log.append(
+      entry({ edit_id: "edit_20260430_0002", rationale: ansiRationale }),
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(2);
+    expect(entries[0]?.rationale).toBe(nulRationale);
+    expect(entries[1]?.rationale).toBe(ansiRationale);
+
+    // Raw file: every non-empty line must be free of unescaped C0 control
+    // characters except for the trailing newline that separates lines.
+    // \x00–\x08 and \x0a–\x1f are JSON-illegal inside a string when raw.
+    const raw = fs.readFileSync(log.filePath, "utf8");
+    for (const line of raw.split("\n").filter((l) => l.trim().length > 0)) {
+      expect(line).not.toMatch(/[\x00-\x08\x0a-\x1f]/);
+    }
+  });
 });
 
 describe("isoTimestamp", () => {
