@@ -58,7 +58,7 @@ describe("TOOLS_REQUIRING_TEST_FILES coverage", () => {
   it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
     // If a new tool is added to TOOL_NAMES without being placed in either
     // set, this length-invariant assertion catches the omission.
-    expect(TOOL_NAMES.length).toBe(
+    expect<number>(TOOL_NAMES.length).toBe(
       TOOLS_REQUIRING_TEST_FILES.length + EXPLICIT_EXEMPT.size,
     );
   });
