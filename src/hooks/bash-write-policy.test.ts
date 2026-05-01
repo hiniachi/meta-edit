@@ -1180,6 +1180,16 @@ describe("evaluateBashCommand — a2-01 unicode whitespace tee bypass", () => {
     const r = evaluateBashCommand("echo x | tee src/foo.ts");
     expect(r.decision).toBe("deny");
   });
+
+  it("allows tee /dev/null (devnull is not in-repo)", () => {
+    const r = evaluateBashCommand("echo hi | tee /dev/null");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows tee /tmp/log.txt (tmp scratch area is not in-repo)", () => {
+    const r = evaluateBashCommand("echo hi | tee /tmp/log.txt");
+    expect(r.decision).toBe("allow");
+  });
 });
 
 

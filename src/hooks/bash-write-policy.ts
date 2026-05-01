@@ -297,6 +297,17 @@ function evaluateSegment(rawSegment: string): HookDecision {
         'an in-repo path. Use an edit_* tool instead.',
     };
   }
+  // Scoped deny: `tee <in-repo-path>` writes to source. Allow
+  // `tee /dev/null`, `tee /tmp/log.txt`, etc. See codex round-2
+  // review (a2-01).
+  if (matchesDangerousTee(rawSegment)) {
+    return {
+      decision: "deny",
+      reason:
+        '`tee <path>` writes to a file when the target is an in-repo ' +
+        'path. Use an edit_* tool instead.',
+    };
+  }
   if (matchesEvalDeferredString(rawSegment)) {
     return {
       decision: "deny",
@@ -656,17 +667,15 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "toybox",
 ]);
 
-// Verbs whose mere invocation is denied. `dd` is NOT in this set: its
-// write side-effect is target-dependent (`dd of=/tmp/swap`,
-// `dd of=/dev/null`, `dd if=foo bs=1 count=0` are legitimate), so it
-// is scoped via matchesDangerousDd below. Codex round-2 review on
-// PR #27 caught the false-positive of unconditionally denying `dd`.
-// `tee` remains here pending a follow-up scope-down (a2-01 round 2).
+// Verbs whose mere invocation is denied. `dd` and `tee` are NOT in
+// this set: their write side-effect is target-dependent (e.g.
+// `dd of=/tmp/swap`, `tee /dev/null` are legitimate), so they are
+// scoped via matchesDangerousDd / matchesDangerousTee. Codex round-2
+// review on PR #27 caught both false-positives.
 const DENY_VERBS: ReadonlySet<string> = new Set([
   "mv",
   "cp",
   "patch",
-  "tee",
 ]);
 
 // Path-classification helper used by dd / tee scoped denies. Conservative:
@@ -757,6 +766,37 @@ function matchesDangerousDd(segment: string): boolean {
       const target = tok.slice(3);
       if (isInRepoWriteTarget(target)) return true;
     }
+  }
+  return false;
+}
+
+// `tee` is denied only when at least one positional target argument
+// resolves to an in-repo path. Flags (`-a`, `--append`, `-i`,
+// `--ignore-interrupts`, `-p`) are skipped. Targets like `/dev/null`
+// and `/tmp/log.txt` are allowed. The original a2-01 unicode-
+// whitespace bypass (`tee src/foo.ts`) remains caught because
+// extractCommandVerb's `\S+` treats NBSP / U+2009 as `\s` in JS regex.
+// See codex round-2 review (a2-01).
+function matchesDangerousTee(segment: string): boolean {
+  const trimmed = stripLeadingEnvAssignments(segment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb !== "tee") return false;
+  const tokens = tokenizeSegment(trimmed);
+  // Skip past wrapper chain + the tee token itself.
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    const base = tok.includes("/") ? tok.slice(tok.lastIndexOf("/") + 1) : tok;
+    if (base === "tee") {
+      i++;
+      break;
+    }
+    i++;
+  }
+  for (; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    if (tok.startsWith("-")) continue;
+    if (isInRepoWriteTarget(tok)) return true;
   }
   return false;
 }
