@@ -1033,3 +1033,11 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
     });
   });
 });
+
+describe("evaluateBashCommand — a1-01 heredoc redirect bypass", () => {
+  it("denies heredoc redirect: cat <<EOF > src/foo.ts", () => {
+    expect(
+      evaluateBashCommand("cat <<EOF > src/foo.ts\nhello\nEOF").decision,
+    ).toBe("deny");
+  });
+});

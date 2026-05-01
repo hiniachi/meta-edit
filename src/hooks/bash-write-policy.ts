@@ -239,6 +239,23 @@ function evaluateSegment(rawSegment: string): HookDecision {
     }
   }
 
+  // Heredoc redirect bypass: `cat <<EOF > target`, `cat <<'EOF' > target`,
+  // `cat <<"EOF" > target`, `cat <<-EOF > target`. The DENY_SUBSTRINGS
+  // entry "cat >" only catches the form where `>` directly follows `cat`;
+  // when a heredoc marker sits between them, the substring check misses
+  // entirely. The combination of `<<MARKER` followed by `>` (not `>>`
+  // separately, not `>&`) on the same segment always writes a file.
+  // Allowed read-only form `cat <<EOF | grep foo` does not match because
+  // the `>` is required.
+  if (/<<-?\s*['"]?[A-Za-z_][\w]*['"]?[^<\n]*?(?<!>)>(?!>|&)/.test(normalized)) {
+    return {
+      decision: "deny",
+      reason:
+        'heredoc-with-redirect (`<<MARKER ... > target`) writes to a file. ' +
+        'Use an edit_* tool instead of redirecting a heredoc body to a path.',
+    };
+  }
+
   // Verb-based deny: extract the actual command verb after stripping
   // leading env assignments (`FOO=bar mv a b` -> `mv`), peeling wrapper
   // verbs (`sudo mv a b`, `env mv a b`, `xargs mv -t /tmp`,
