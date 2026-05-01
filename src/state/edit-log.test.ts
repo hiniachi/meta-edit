@@ -572,6 +572,29 @@ describe("EditLog.append / readAll", () => {
     expect(nonEmpty[0]).not.toMatch(/"injected":true/);
   });
 
+  // Regression for issue a6-04 (codex round 1): the parent .meta-edit
+  // directory must NOT be chmod'd. Issue 025 only requires state/ to
+  // be 0700 — narrowing the parent overrides whatever permissions the
+  // user set up for the rest of meta-edit's working directory.
+  it("does not chmod the parent .meta-edit directory", () => {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // permission semantics differ on Windows
+    }
+
+    // Create .meta-edit BEFORE constructing EditLog, with a mode that
+    // is wider than 0o700 (here 0o755 — typical user-created dir).
+    const metaEditDir = path.join(tmpRoot, ".meta-edit");
+    fs.mkdirSync(metaEditDir, { recursive: true });
+    fs.chmodSync(metaEditDir, 0o755);
+
+    const log = new EditLog(tmpRoot);
+    log.append(entry());
+
+    const stat = fs.statSync(metaEditDir);
+    const mode = stat.mode & 0o777;
+    expect(mode).toBe(0o755);
+  });
+
   // Regression for issue a6-04 (codex round 1): chmodSync failure on
   // the state directory must propagate on POSIX, otherwise the 0o700
   // guarantee is silently lost and the audit log can end up world-

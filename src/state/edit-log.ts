@@ -149,15 +149,12 @@ export class EditLog {
       // must propagate. Swallowing it silently loses the 0o700 audit-
       // log guarantee on shared systems. The previous code masked all
       // chmod errors, including real EPERM/EROFS conditions.
+      //
+      // Issue 025 only requires state/ to be 0700; do NOT chmod the
+      // parent .meta-edit/ directory — that's outside this issue's
+      // scope and can override permissions the user set deliberately
+      // on the wider meta-edit working directory.
       fs.chmodSync(this.statePath, 0o700);
-      // Also narrow the .meta-edit parent that recursive mkdir may
-      // have just created; harmless if the user already created it.
-      const parent = path.dirname(this.statePath);
-      try {
-        fs.chmodSync(parent, 0o700);
-      } catch {
-        /* ignore — parent may be owned by another user / pre-existing */
-      }
     }
   }
 
