@@ -527,8 +527,10 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "taskset",
 ]);
 
-// Verbs whose mere invocation is denied.
-const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch"]);
+// Verbs whose mere invocation is denied. `dd` is included because its
+// `of=...` operand writes to an arbitrary path; there is no read-only
+// invocation of `dd` we want to allow in agent workflows.
+const DENY_VERBS: ReadonlySet<string> = new Set(["mv", "cp", "patch", "dd"]);
 
 // Per-wrapper short options that take a separate value argument. After
 // peeling a wrapper, `extractCommandVerb` consumes a flag plus its

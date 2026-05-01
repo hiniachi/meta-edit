@@ -1051,3 +1051,17 @@ describe("evaluateBashCommand — a1-02 base64 decode pipe to shell", () => {
     ).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a1-03 dd of= bypass", () => {
+  it("denies dd of=src/foo.ts (source file write via dd)", () => {
+    expect(
+      evaluateBashCommand("dd if=/dev/urandom of=src/foo.ts bs=4k count=1").decision,
+    ).toBe("deny");
+  });
+
+  it("denies dd of=<file> even without explicit if= argument", () => {
+    expect(
+      evaluateBashCommand("echo 'hello' | dd of=src/foo.ts").decision,
+    ).toBe("deny");
+  });
+});
