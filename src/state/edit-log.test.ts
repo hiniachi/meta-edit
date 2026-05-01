@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, it, expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -117,6 +117,136 @@ describe("EditLog.nextEditId", () => {
   });
 });
 
+describe("EditLog concurrent-instance safety", () => {
+  // Regression for issue a6-03: two EditLog instances constructed
+  // against the same on-disk log must not produce duplicate edit_ids.
+  it("two instances on the same path do not produce duplicate edit_ids", () => {
+    const d = new Date(2026, 3, 30);
+
+    // Both instances start from the same (empty) log.
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    const ids: string[] = [];
+
+    // Alternate appends: log1, log2, log1, log2 ...
+    for (let i = 0; i < 6; i++) {
+      const active = i % 2 === 0 ? log1 : log2;
+      const id = active.nextEditId(d);
+      ids.push(id);
+      active.append(
+        entry({
+          edit_id: id,
+          rationale: `entry ${i}`,
+          risk_level: "low",
+          test_files: [],
+          patch_size_bytes: 1,
+          tool_name: "edit_refactor_only",
+        }),
+      );
+    }
+
+    // All six IDs must be unique.
+    const unique = new Set(ids);
+    expect(unique.size).toBe(ids.length);
+  });
+
+  // Stronger regression for issue a6-03 (codex round 1): the previous
+  // test alternated nextEditId+append so the on-disk scan in the second
+  // instance always saw the first instance's append. This test exercises
+  // the actual read/read/write/write interleaving that the disk-scan
+  // approach cannot win without a cross-process lock — both instances
+  // assign an id BEFORE either has written, so the only way to keep ids
+  // unique is to bind id allocation to the lock that protects the write.
+  it("read/read/write/write interleaving still produces unique edit_ids", () => {
+    const d = new Date(2026, 3, 30);
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    // Both grab ids before either writes.
+    const idA = log1.nextEditId(d);
+    const idB = log2.nextEditId(d);
+
+    // The two ids must differ even though no append has happened yet.
+    expect(idA).not.toBe(idB);
+
+    // The writes must also each succeed and produce a distinct id when
+    // the actual append step runs (the lock binds id+write together).
+    log1.append(entry({ edit_id: idA, rationale: "A", test_files: [], tool_name: "edit_refactor_only" }));
+    log2.append(entry({ edit_id: idB, rationale: "B", test_files: [], tool_name: "edit_refactor_only" }));
+
+    const back = log1.readAll();
+    const idsOnDisk = new Set(back.map((e) => e.edit_id));
+    expect(idsOnDisk.size).toBe(2);
+  });
+
+  // Regression for issue a6-03 (codex round 1): the counter scan must
+  // fail-closed on a non-ENOENT read error. Previously it caught all
+  // errors and returned 0, which would cause silent id reuse if the
+  // log were temporarily unreadable (corruption, permission flip).
+  it("nextEditId throws on non-ENOENT log read error (fail-closed)", () => {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // permission-bit semantics differ on Windows
+    }
+    // Refuse this test under root (mode 0 doesn't block root reads).
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    const logPath = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");
+    fs.writeFileSync(logPath, JSON.stringify(entry()) + "\n", "utf8");
+    // Make the log file unreadable so readFileSync throws EACCES.
+    fs.chmodSync(logPath, 0o000);
+    try {
+      const log = new EditLog(tmpRoot);
+      expect(() => log.nextEditId(new Date(2026, 3, 30))).toThrow();
+    } finally {
+      // Restore mode so afterEach rmSync can clean up.
+      fs.chmodSync(logPath, 0o600);
+    }
+  });
+
+  it("large-entry concurrent appends produce no interleaved bytes within a line", () => {
+    // Each entry has a >4 KB rationale to stress kernel write atomicity.
+    const largeRationale = "x".repeat(5000);
+    const d = new Date(2026, 3, 30);
+
+    const log1 = new EditLog(tmpRoot);
+    const log2 = new EditLog(tmpRoot);
+
+    for (let i = 0; i < 4; i++) {
+      const active = i % 2 === 0 ? log1 : log2;
+      const id = active.nextEditId(d);
+      active.append(
+        entry({
+          edit_id: id,
+          rationale: largeRationale,
+          risk_level: "low",
+          test_files: [],
+          patch_size_bytes: largeRationale.length,
+          tool_name: "edit_refactor_only",
+        }),
+      );
+    }
+
+    // Every line in the raw file must be individually valid JSON.
+    const raw = fs.readFileSync(
+      path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"),
+      "utf8",
+    );
+    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+
+    for (const line of lines) {
+      // Must parse without throwing (no interleaved bytes from another write).
+      expect(() => JSON.parse(line)).not.toThrow();
+      const parsed = JSON.parse(line) as { rationale?: string };
+      expect(parsed.rationale).toBe(largeRationale);
+    }
+  });
+});
+
 describe("EditLog.append symlink defense", () => {
   it("refuses to append when .meta-edit/state is a symlink", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit"), { recursive: true });
@@ -158,6 +288,71 @@ describe("EditLog.append symlink defense", () => {
       process.chdir(originalCwd);
     }
     expect(process.cwd()).toBe(originalCwd);
+  });
+
+  // Regression tests for issue a6-02: the fail-closed branch in
+  // EditLog.append that refuses to write the audit log when the
+  // platform does not expose a usable O_NOFOLLOW. The branch is
+  // structurally unreachable on Linux/macOS without injection because
+  // fs.constants.O_NOFOLLOW is a non-zero number there.
+  it("throws a descriptive error when O_NOFOLLOW is 0 (platform lacks support)", () => {
+    const original = fs.constants.O_NOFOLLOW;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      fs.constants,
+      "O_NOFOLLOW",
+    );
+    try {
+      Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+        value: 0,
+        configurable: true,
+        writable: true,
+      });
+
+      const log = new EditLog(tmpRoot);
+      expect(() => log.append(entry())).toThrow(
+        /this platform does not expose O_NOFOLLOW/,
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", originalDescriptor);
+      } else {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+          value: original,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+  });
+
+  it("throws a descriptive error when O_NOFOLLOW is non-numeric (platform lacks support)", () => {
+    const original = fs.constants.O_NOFOLLOW;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      fs.constants,
+      "O_NOFOLLOW",
+    );
+    try {
+      Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+
+      const log = new EditLog(tmpRoot);
+      expect(() => log.append(entry())).toThrow(
+        /this platform does not expose O_NOFOLLOW/,
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", originalDescriptor);
+      } else {
+        Object.defineProperty(fs.constants, "O_NOFOLLOW", {
+          value: original,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
   });
 
   it("refuses to append when edits.jsonl is itself a symlink", () => {
@@ -334,6 +529,150 @@ describe("EditLog.append / readAll", () => {
       expect(back.length).toBe(1);
       expect(back[0]?.edit_id).toBe("edit_20260430_0001");
     });
+  });
+
+  // Regression tests for issue a6-01: JSON.stringify must escape control
+  // characters and newlines in attacker-controlled fields (rationale) so
+  // a malicious caller cannot inject a second JSON line into edits.jsonl.
+  // No production code change is required — these guard against a future
+  // refactor that bypasses JSON.stringify (e.g. hand-rolled serialiser).
+  it("JSON.stringify escapes newlines in rationale — no line injection", () => {
+    const log = new EditLog(tmpRoot);
+
+    // Craft a rationale that would inject a second JSON object if not
+    // escaped. The injected payload is a complete, schema-valid edit log
+    // entry — if it survived as a separate raw line, readAll would return
+    // it as a phantom record.
+    const maliciousRationale =
+      'evil\n{"injected":true,"edit_id":"edit_99991231_9999",' +
+      '"timestamp":"2026-04-30T00:00:00+00:00","tool_name":"edit_refactor_only",' +
+      '"target_file":"src/pwned.ts","rationale":"x","risk_level":"low",' +
+      '"test_files":[],"patch_size_bytes":0,"applied":true,"warnings":[]}\n';
+
+    const e = entry({
+      edit_id: "edit_20260430_0001",
+      rationale: maliciousRationale,
+    });
+
+    log.append(e);
+
+    // readAll must return exactly one entry.
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.rationale).toBe(maliciousRationale);
+
+    // The raw file must contain exactly one non-empty line.
+    const raw = fs.readFileSync(log.filePath, "utf8");
+    const nonEmpty = raw.split("\n").filter((l) => l.trim().length > 0);
+    expect(nonEmpty.length).toBe(1);
+
+    // And that line must NOT contain a literal "injected":true (i.e.
+    // JSON.stringify escaped the embedded newline as \\n so the injected
+    // text remains inside the rationale string value).
+    expect(nonEmpty[0]).not.toMatch(/"injected":true/);
+  });
+
+  // Regression for issue a6-04 (codex round 1): the parent .meta-edit
+  // directory must NOT be chmod'd. Issue 025 only requires state/ to
+  // be 0700 — narrowing the parent overrides whatever permissions the
+  // user set up for the rest of meta-edit's working directory.
+  it("does not chmod the parent .meta-edit directory", () => {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // permission semantics differ on Windows
+    }
+
+    // Create .meta-edit BEFORE constructing EditLog, with a mode that
+    // is wider than 0o700 (here 0o755 — typical user-created dir).
+    const metaEditDir = path.join(tmpRoot, ".meta-edit");
+    fs.mkdirSync(metaEditDir, { recursive: true });
+    fs.chmodSync(metaEditDir, 0o755);
+
+    const log = new EditLog(tmpRoot);
+    log.append(entry());
+
+    const stat = fs.statSync(metaEditDir);
+    const mode = stat.mode & 0o777;
+    expect(mode).toBe(0o755);
+  });
+
+  // Regression for issue a6-04 (codex round 1): chmodSync failure on
+  // the state directory must propagate on POSIX, otherwise the 0o700
+  // guarantee is silently lost and the audit log can end up world-
+  // readable without the caller knowing.
+  it("propagates chmodSync error on POSIX (does not swallow)", () => {
+    if (process.platform === "win32") {
+      return; // chmod is a no-op on win32 — no guarantee to defend
+    }
+
+    const log = new EditLog(tmpRoot);
+    const statePath = path.join(tmpRoot, ".meta-edit", "state");
+    const original = fs.chmodSync;
+    const spy = spyOn(fs, "chmodSync");
+    spy.mockImplementation(((p: fs.PathLike, m: fs.Mode) => {
+      // Simulate EPERM specifically when narrowing the state dir.
+      if (typeof p === "string" && p === statePath) {
+        const err = new Error("EPERM: simulated") as NodeJS.ErrnoException;
+        err.code = "EPERM";
+        throw err;
+      }
+      return original(p, m);
+    }) as typeof fs.chmodSync);
+    try {
+      expect(() => log.append(entry())).toThrow(/EPERM/);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // Regression test for issue a6-04: the .meta-edit/state/ directory
+  // must not be created world-readable (0o755). Use 0o700 so other
+  // local users on shared systems cannot enumerate/stat/inotify-watch
+  // the audit log directory.
+  it("state directory is created with mode 0700 (not world-readable)", () => {
+    // Permission bits are meaningful on POSIX systems only.
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      return; // skip on Windows
+    }
+
+    const log = new EditLog(tmpRoot);
+    log.append(entry());
+
+    const statePath = path.join(tmpRoot, ".meta-edit", "state");
+    const stat = fs.statSync(statePath);
+    const mode = stat.mode & 0o777;
+
+    // Must not be readable / writable / traversable by "other".
+    expect(mode & 0o007).toBe(0);
+    // Must not be writable by group.
+    expect(mode & 0o020).toBe(0);
+  });
+
+  it("JSON.stringify escapes NUL bytes and ANSI escapes in rationale", () => {
+    const log = new EditLog(tmpRoot);
+
+    const nulRationale = "before\x00after";
+    const ansiRationale = "color\x1b[31mred\x1b[0m reset";
+
+    log.append(
+      entry({ edit_id: "edit_20260430_0001", rationale: nulRationale }),
+    );
+    log.append(
+      entry({ edit_id: "edit_20260430_0002", rationale: ansiRationale }),
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(2);
+    expect(entries[0]?.rationale).toBe(nulRationale);
+    expect(entries[1]?.rationale).toBe(ansiRationale);
+
+    // Raw file: every non-empty line must be free of unescaped C0 control
+    // characters except for the trailing newline that separates lines.
+    // \x00–\x08 and \x0a–\x1f are JSON-illegal inside a string when raw.
+    const raw = fs.readFileSync(log.filePath, "utf8");
+    for (const line of raw.split("\n").filter((l) => l.trim().length > 0)) {
+      expect(line).not.toMatch(/[\x00-\x08\x0a-\x1f]/);
+    }
   });
 });
 
