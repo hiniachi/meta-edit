@@ -1291,3 +1291,29 @@ describe("evaluateBashCommand — a2-04 noclobber-override >| redirect", () => {
     expect(r.decision).toBe("allow");
   });
 });
+
+describe("evaluateBashCommand — round-2 nice-to-have allow regressions", () => {
+  it("allows busybox cat /etc/hosts (read-only multicall applet)", () => {
+    expect(
+      evaluateBashCommand("busybox cat /etc/hosts").decision,
+    ).toBe("allow");
+  });
+
+  it("allows eval echo hello (literal-only argument)", () => {
+    expect(
+      evaluateBashCommand("eval echo hello").decision,
+    ).toBe("allow");
+  });
+
+  it("allows eval \"echo hello\" (quoted literal argument)", () => {
+    expect(
+      evaluateBashCommand('eval "echo hello"').decision,
+    ).toBe("allow");
+  });
+
+  it("allows perl -ne 'print' file.txt (read-only inline perl)", () => {
+    expect(
+      evaluateBashCommand("perl -ne 'print' file.txt").decision,
+    ).toBe("allow");
+  });
+});
