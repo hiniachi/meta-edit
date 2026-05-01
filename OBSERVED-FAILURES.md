@@ -54,46 +54,89 @@ Restore the deny when *any* of the following hold:
    repeatedly find `bash-write-bypass` warnings in the transcript
    that the AI ignored (i.e., the warn surface is being treated as
    a green light rather than a yellow one).
-3. **Protocol signal**: a future Claude Code release stops surfacing
-   `permissionDecisionReason` for `allow` decisions, leaving stderr
-   as the only carrier. If the stderr surface alone proves
-   insufficient (AI does not consume stderr in tool results), the
-   warn route is no longer effective and should revert to deny.
+3. **Protocol signal (objective)**: Claude Code release notes (or
+   updated hook docs) explicitly state that
+   `hookSpecificOutput.additionalContext` is no longer fed to the
+   model for `allow` decisions. v0.1.5's warn carrier has three
+   layers — `permissionDecisionReason` (user-facing transcript),
+   `additionalContext` (model-facing on the next turn), and stderr
+   (host-rendered in the transcript). The model-facing layer is
+   `additionalContext`; if the host stops surfacing it, the AI no
+   longer receives the nudge and the warn route is structurally
+   weaker than the v0.1.4 deny. Treat the release-note change as
+   the trigger; do NOT wait for downstream behavioral evidence.
 
 ### Restore procedure
 
-1. `src/hooks/bash-write-policy.ts`:
-   - In `evaluateSegment`, change the `redirectsToInRepoPath` block
-     from `decision: "warn"` back to `decision: "deny"` and revert
-     the `firstWarn = ...` capture to an early `return`.
-   - Remove the `firstWarn` plumbing in `evaluateBashCommand` and
-     `evaluateSegment` if no other warn-emitting check exists.
-   - Keep `recursivelyEvaluateArg` propagating `warn` only if a
-     warn-emitting check still exists upstream; otherwise simplify
-     it back to deny-only.
-   - Optionally remove the `"warn"` member from `HookDecision`.
-2. `src/hooks/deny-bash-write-bypass.ts`: drop the `decision === "warn"`
-   branch and the `replyAllowWithWarning` import.
-3. `src/hooks/hook-runtime.ts`: keep `replyAllowWithWarning` only if
-   another future warn surface uses it; delete otherwise.
-4. `src/hooks/bash-write-policy.test.ts`:
-   - Re-flip the `dogfood-001 in-repo redirect (warn since v0.1.5)`
-     describe back to `deny`.
-   - Re-flip the affected cases in `dogfood-001 self-review fixes`
-     and the `P1-1: protected-path writes inside shell-hosted
-     payloads` block (the `bash -c "printf x > src/foo.ts"` test).
-   - Drop the v0.1.5-specific regression guards that no longer
-     apply.
-5. `docs/SPEC.md`: revert §5.2's "Structural redirect-target warn"
-   subsection back to the v0.1.4 deny wording, plus the threat-model
-   line in §8 and the upkeep note in §11.
-6. `OBSERVED-FAILURES.md`: move this entry to "Resolved (promoted to
-   MVP)" with the trigger that fired.
+This procedure assumes the *only* `warn`-emitting check is the
+structural redirect surface in `bash-write-policy.ts`. If a future
+policy adds a new warn-producing check (e.g. a soft-policy channel
+on a different tool), the type-system + runtime simplifications
+below should be skipped — keep the `warn` member and the
+`replyAllowWithWarning` helper for the other consumer.
 
-If only the *structural* redirect rule is restored to deny while
-some other warn surface (e.g. a future "soft policy" channel)
-remains, keep the `warn` decision member and the runtime helper
-even if the bash hook no longer uses it; the cost is one branch.
+1. `src/hooks/bash-write-policy.ts`:
+   - In `evaluateSegment`, change the
+     `redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null`
+     block from `decision: "warn"` back to `decision: "deny"` and
+     revert the `firstWarn = ...` capture to an early `return`.
+   - Remove the `firstWarn` plumbing in `evaluateBashCommand` (the
+     cross-segment loop) and in `evaluateSegment` (the per-segment
+     slot, including the `firstWarn` returned at the end of
+     `evaluateSegment`) once no other warn-emitting check exists.
+   - In `recursivelyEvaluateArg`, drop the `warn` propagation branch
+     so it returns `null` for non-deny decisions again.
+   - Optionally rename `redirectsOutsideSafeSinkAllowlist` back to
+     `redirectsToInRepoPath` to match the deny semantics again.
+2. `src/hooks/hook-runtime.ts`: remove the `"warn"` member from
+   `HookDecision` and remove `replyAllowWithWarning`. Update the
+   inline comment on `replyAllow` if needed.
+3. `src/hooks/deny-bash-write-bypass.ts` and
+   `src/hooks/deny-raw-edit.ts`: drop the `decision === "warn"`
+   branch and the `replyAllowWithWarning` import in both
+   dispatchers.
+4. `src/hooks/bash-write-policy.test.ts` — re-flip every test that
+   v0.1.5 set to expect `warn`. The exact list, by describe block:
+   - `evaluateBashCommand — dogfood-001 in-repo redirect (warn since v0.1.5)`:
+     - "warns on printf > test-playground/ (the dogfood-001 reproduction)"
+     - "warns on echo > out.log (relative in-repo target)"
+     - "warns on printf >> append to in-repo path"
+     - "warns on noclobber-override >| to in-repo path"
+     - "warns on redirect to absolute path outside the safe-sink list"
+     - "warns on bash -c \"printf x > src/foo.ts\" (warn propagates from shell-hosted recursion)"
+     Rename the describe to drop "(warn since v0.1.5)". Update the
+     reason assertion: the deny reason text (v0.1.4) reads
+     "command redirects (`>`/`>>`/`>|`) to a path that is not on
+     the safe-sink allowlist ... Use an edit_* tool for in-repo
+     writes; capture command output to /tmp/ or /dev/null if you
+     need a sink." So `expect(r.reason).toContain("safe-sink
+     allowlist")` still passes, but the v0.1.5 `expect(r.reason)
+     .toContain("edit_*")` assertion stays valid as well — the
+     deny reason also contains `edit_*`. No change needed there.
+   - `evaluateBashCommand — dogfood-001 self-review fixes`:
+     - "warns on safe-prefix-then-traversal target (/tmp/../in-repo)"
+     - "warns on double-up-traversal from /var/tmp"
+     - "warns on CR-detached redirect target (printf x >\\rin-repo.ts)"
+     - "warns on LF-detached redirect target (printf x >\\nin-repo.ts)"
+   - `evaluateBashCommand — Codex PR #42 review fixes` →
+     `P1-1: protected-path writes inside shell-hosted payloads`:
+     - "warns on bash -c with redirect to in-repo path (not protected)"
+     (re-flip from `warn` back to `deny`)
+   The new v0.1.5 regression guards inside the dogfood-001 describe
+   block — protected-path-still-deny, verb-deny-still-wins, and
+   deny-wins-across-segments — MUST be retained. They pin
+   invariants (verb-denylist + protected-path precedence over the
+   structural redirect check) that the deny-restored code must
+   continue to satisfy. Do not delete them in the flip-back.
+5. `docs/SPEC.md`: revert §5.2's "Structural redirect-target warn"
+   subsection back to the v0.1.4 deny wording, including the
+   "deny wins over warn" sentence and the rationale paragraph.
+   Revert the §8 threat-model line. Revert the §11 upkeep
+   paragraph that records this surface.
+6. `package.json` + `.claude-plugin/plugin.json`: bump version
+   (e.g. to `0.1.6`) so the restore is visibly a release event.
+7. `OBSERVED-FAILURES.md`: move this entry to "Resolved
+   (promoted to MVP)" with the trigger that fired.
 
 ## Phase 8 (apply) residual gaps
 

@@ -84,7 +84,8 @@ function replyAllowWithWarning(reason) {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      permissionDecisionReason: reason
+      permissionDecisionReason: reason,
+      additionalContext: reason
     }
   };
   process.stdout.write(JSON.stringify(payload));
@@ -198,7 +199,7 @@ function isProtectedPath(p, options = {}) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.4",
+  version: "0.1.5",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -393,7 +394,7 @@ function evaluateSegment(rawSegment, opts = {}) {
     if (hosted.decision === "warn")
       firstWarn = hosted;
   }
-  if (redirectsToInRepoPath(rawSegment) && firstWarn === null) {
+  if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
     firstWarn = {
       decision: "warn",
       reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_create_file, edit_refactor_only); this redirect is " + "permitted but is recorded as a bypass-risk and may be " + "tightened to deny in a future version."
@@ -1148,7 +1149,7 @@ function extractEvalArg(rawSegment) {
   }
   return null;
 }
-function redirectsToInRepoPath(rawSegment) {
+function redirectsOutsideSafeSinkAllowlist(rawSegment) {
   for (const target of iterRedirectTargets(rawSegment)) {
     if (target.length === 0)
       continue;
@@ -1610,4 +1611,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=E51B82D830111F8764756E2164756E21
+//# debugId=CA4ED39E8754901864756E2164756E21

@@ -974,15 +974,16 @@ This hook operates on a **best-effort basis**. It uses substring matching on the
 
 Deny families:
 
-1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization):
+1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization). All entries below are `deny`, not `warn`:
 
    ```
    sed -i
    sed --in-place
    perl -pi
    perl -i
-   python -c    (when the snippet contains write_text, write, open( ... 'w', etc.)
-   node -e      (when the snippet contains writeFile, writeFileSync)
+   perl -e / ruby -e / php -r        (when the snippet writes a file)
+   python -c                         (when the snippet contains write_text, write, open(... 'w', etc.)
+   node -e                           (when the snippet contains writeFile, writeFileSync)
    cat >
    cat >>
    tee <in-repo target>
@@ -993,7 +994,19 @@ Deny families:
    git apply
    patch
    rsync
+
+   heredoc-with-redirect             (`cat <<MARKER ... > target`,
+                                      `cat <<-MARKER ... > target`,
+                                      `cat <<"MARKER" ... > target`,
+                                      `cat <<'MARKER' ... > target`)
+   eval <non-literal argument>       (`eval "$X"`, eval of `$(...)` /
+                                      backticks / variable expansions)
+   decode-and-execute pipelines      (`base64 -d | bash`,
+                                      `xxd -r -p | sh`,
+                                      `openssl base64 -d | bash`, …)
    ```
+
+   The deny set is intentionally larger than the verb list above — it covers shape-based detections too. Source of truth for the exact set is `src/hooks/bash-write-policy.ts` (`DENY_SUBSTRINGS`, `DENY_PREFIX_PATTERNS`, `DENY_VERBS`, `matchesDangerousDd`, `matchesDangerousTee`, `matchesEvalDeferredString`, `matchesPythonNodeWrite`, `matchesDecodeAndExecute`, plus the heredoc-with-redirect regex in `evaluateSegment`).
 
 2. **Structural redirect-target warn** (dogfood-001 + dogfood-005, loosened to warn in v0.1.5). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is **warned-and-allowed** — the call proceeds, but the hook returns `permissionDecision: "allow"` together with a `permissionDecisionReason` and mirrors the same text on stderr, so the AI is nudged toward an `edit_*` tool while a human reviewer sees the warning in the transcript. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) structurally, without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
 

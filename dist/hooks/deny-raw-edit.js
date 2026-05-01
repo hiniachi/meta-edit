@@ -84,7 +84,8 @@ function replyAllowWithWarning(reason) {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      permissionDecisionReason: reason
+      permissionDecisionReason: reason,
+      additionalContext: reason
     }
   };
   process.stdout.write(JSON.stringify(payload));
@@ -95,7 +96,7 @@ function replyAllowWithWarning(reason) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.4",
+  version: "0.1.5",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -183,6 +184,9 @@ async function main() {
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-raw-edit");
   }
+  if (decision.decision === "warn") {
+    return replyAllowWithWarning(decision.reason ?? "warned by deny-raw-edit");
+  }
   return replyAllow();
 }
 main().then((code) => process.exit(code), (err) => {
@@ -190,4 +194,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=EFBD34B8E1E546FF64756E2164756E21
+//# debugId=D36BD3DAD710B03864756E2164756E21

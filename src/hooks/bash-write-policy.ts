@@ -32,16 +32,14 @@
 import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
 import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
+// `HookDecision` (with `"warn"` member) is the canonical shape shared
+// across every hook policy in this package. The structural redirect-
+// to-outside-safe-sink check below is the only producer of `"warn"`
+// today (SPEC §5.2). `deny` always wins over `warn` within a segment
+// AND across segments.
+import type { HookDecision } from "./hook-runtime.js";
 
-// `warn` is allow-with-message: the hook does not block the command but
-// emits a `permissionDecisionReason` so the AI sees a structured nudge
-// toward an `edit_*` tool. Currently only the structural redirect-to-
-// outside-safe-sink check produces warn (SPEC §5.2). `deny` always wins
-// over `warn` when both fire on the same command.
-export type HookDecision = {
-  decision: "allow" | "deny" | "warn";
-  reason?: string;
-};
+export type { HookDecision };
 
 // Codex round-1 a4-01: hooks now thread the agent's cwd through so the
 // protected-path check can resolve symlinks ("link/state/edits.jsonl"
@@ -397,7 +395,7 @@ function evaluateSegment(
   // the smallest change that removes that surface while keeping verb-
   // and protected-path denies intact. See OBSERVED-FAILURES.md for
   // the deny-restore trigger.
-  if (redirectsToInRepoPath(rawSegment) && firstWarn === null) {
+  if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
     firstWarn = {
       decision: "warn",
       reason:
@@ -682,7 +680,9 @@ function primarySplitSegments(cmd: string): string[] {
       // segment-internal token. Without this carve-out, `printf x >|
       // notes.md` splits into `printf x >` and `notes.md`, which hides
       // the redirect target from iterRedirectTargets and bypasses the
-      // dogfood-001 in-repo redirect deny.
+      // dogfood-001 structural redirect surface (warn since v0.1.5;
+      // deny still applies to verb-deny / protected-path forms of the
+      // same shape).
       if (c === "|" && cmd[i - 1] === ">") {
         buf += c;
         continue;
@@ -1476,8 +1476,8 @@ function* iterRedirectTargets(s: string): IterableIterator<string> {
 // the outer quote-stripping pass blanks the payload before any of the
 // per-segment scans see it. Recover the literal argument and re-evaluate
 // it through the full policy pipeline so every check that runs on a
-// top-level command (DENY_SUBSTRINGS, protected-path needles, in-repo
-// redirect deny, heredoc, decode-and-execute, ...) also runs on the
+// top-level command (DENY_SUBSTRINGS, protected-path needles, structural
+// redirect warn, heredoc, decode-and-execute, ...) also runs on the
 // wrapper's payload.
 //
 // Codex P1-1 review: a needle-only rescan missed protected-path writes
@@ -1571,14 +1571,24 @@ function extractEvalArg(rawSegment: string): string | null {
   return null;
 }
 
-// dogfood-001 + dogfood-005: deny any `>`/`>>`/`>|` redirect whose target
-// is not in the safe-sink allowlist. This is the structural replacement
-// for the per-verb enumeration (printf, echo, ...) the dogfood pass
-// found incomplete. The check operates on the raw segment so quoted
-// strings inside arguments are not misread as redirect targets — e.g.
-// `printf '... > foo.ts ...' > /tmp/notes.md` walks past the quoted `>`
-// and only sees the real one whose target is `/tmp/notes.md` (allowed).
-function redirectsToInRepoPath(rawSegment: string): boolean {
+// dogfood-001 + dogfood-005: detect any `>`/`>>`/`>|` redirect whose
+// target is not in the safe-sink allowlist (/dev/null, /dev/std{out,err},
+// /dev/zero, /tmp/, /var/tmp/, /run/, /sys/). This is the structural
+// replacement for the per-verb enumeration (printf, echo, ...) the
+// dogfood pass found incomplete. The check operates on the raw segment
+// so quoted strings inside arguments are not misread as redirect
+// targets — e.g. `printf '... > foo.ts ...' > /tmp/notes.md` walks past
+// the quoted `>` and only sees the real one whose target is
+// `/tmp/notes.md` (allowed).
+//
+// Returns true for both relative (in-repo) targets AND absolute paths
+// outside the safe-sink list (e.g. `/home/user/something.txt`); the
+// historical name "in-repo" is retained for git-blame continuity but
+// the predicate's semantic is "redirect target outside safe-sink
+// allowlist". The caller treats the result as a v0.1.5 `warn` (SPEC
+// §5.2) — verb-deny and protected-path checks fire earlier with their
+// own `deny`.
+function redirectsOutsideSafeSinkAllowlist(rawSegment: string): boolean {
   for (const target of iterRedirectTargets(rawSegment)) {
     if (target.length === 0) continue;
     if (isInRepoWriteTarget(target)) return true;

@@ -1609,6 +1609,56 @@ describe("evaluateBashCommand — dogfood-001 in-repo redirect (warn since v0.1.
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("sed -i");
   });
+
+  // ---- v0.1.5 propagation guards: warn must reach the outer decision
+  //      from every recursion path the policy supports ----
+
+  it("warns on eval \"printf x > src/foo.ts\" (warn propagates from extractEvalArg recursion)", () => {
+    // extractEvalArg + recursivelyEvaluateArg path — distinct from the
+    // bash -c shell-hosting path. The inner segment redirects to an
+    // in-repo target; the outer eval has no other deny trigger so the
+    // outer must surface the inner warn.
+    const r = evaluateBashCommand('eval "printf x > src/foo.ts"');
+    expect(r.decision).toBe("warn");
+    expect(r.reason).toContain("safe-sink");
+  });
+
+  it("warns on sudo eval \"printf x > src/foo.ts\" (wrapper-prefixed eval propagates warn)", () => {
+    // Wrapper peel + extractEvalArg: matches the symmetric deny case
+    // for `sudo eval "cat > src/foo.ts"` (Codex P1-2 block) but with
+    // a write verb that is structurally redirected rather than
+    // verb-denied.
+    const r = evaluateBashCommand('sudo eval "printf x > src/foo.ts"');
+    expect(r.decision).toBe("warn");
+  });
+
+  it("warns when a $(...) command substitution contains a redirect-warn segment", () => {
+    // splitSegments emits substitution inners as additional segments
+    // through extractSubstitutionInners; those segments must propagate
+    // their warn back to the outer evaluator.
+    const r = evaluateBashCommand("echo $(printf x > src/foo.ts)");
+    expect(r.decision).toBe("warn");
+  });
+
+  it("warns and surfaces the FIRST warn when two segments both warn", () => {
+    // First-warn-wins is the documented top-level merge rule
+    // (evaluateBashCommand). Pin it: `printf > a.log` warns, then
+    // `printf > b.log` would also warn, but the first one's reason is
+    // surfaced.
+    const r = evaluateBashCommand(
+      "printf x > a.log ; printf x > b.log",
+    );
+    expect(r.decision).toBe("warn");
+    expect(r.reason).toContain("safe-sink");
+  });
+
+  it("warns when segment 1 warns and segment 2 plainly allows", () => {
+    // The cross-segment allow path must not clobber the warn captured
+    // earlier. Segment 2 (`bun test`) is allow; the outer surfaces the
+    // segment-1 warn.
+    const r = evaluateBashCommand("printf x > out.log && bun test");
+    expect(r.decision).toBe("warn");
+  });
 });
 
 describe("evaluateBashCommand — dogfood-005 quote-aware scans", () => {

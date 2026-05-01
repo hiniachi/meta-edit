@@ -12,6 +12,24 @@
 
 export type HookEvent = Record<string, unknown>;
 
+// Canonical decision shape shared by every hook policy in this package.
+//
+// `warn` is "allow with a structured nudge to the agent": the call
+// proceeds, the AI receives the reason via `additionalContext`, and the
+// human reviewer sees the same text in stderr / the transcript. Used
+// today only by the bash-write-policy structural redirect-target
+// surface (SPEC §5.2). When Claude Code merges multiple hook decisions
+// the precedence is `deny > defer > ask > allow`, so a `warn` (allow)
+// from one hook never overrides a `deny` from another.
+//
+// Promoted out of per-policy declarations so that any future shared
+// helper sees one canonical union and TypeScript catches drift if a new
+// decision member is introduced.
+export type HookDecision = {
+  decision: "allow" | "deny" | "warn";
+  reason?: string;
+};
+
 export async function readStdin(): Promise<HookEvent> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -33,10 +51,14 @@ export async function readStdin(): Promise<HookEvent> {
 }
 
 export function replyAllow(): number {
-  // Empty JSON output is interpreted as "no opinion / allow". We could
-  // also explicitly emit `{ permissionDecision: "allow" }`, but that
-  // would override any other hook in the chain. Staying silent lets
-  // downstream hooks contribute their own decisions.
+  // Empty JSON output is interpreted as "no opinion / allow". Claude
+  // Code's hook chain merges decisions by precedence
+  // (`deny > defer > ask > allow`), so an explicit
+  // `{ permissionDecision: "allow" }` would not actually override a
+  // `deny` from another hook — but staying silent is still preferable
+  // because it lets the host treat us as "no opinion" rather than as a
+  // positive vote, which avoids a class of debugging confusion when
+  // multiple hooks are configured.
   process.stdout.write("");
   return 0;
 }
@@ -53,22 +75,28 @@ export function replyDeny(reason: string): number {
   return 0;
 }
 
-// "Allow with a structured warning". Emits permissionDecision = "allow"
-// (so Claude Code does not block the call) plus a permissionDecisionReason
-// carrying the warning text, AND mirrors the same text to stderr. The
-// dual surface is intentional:
+// "Allow with a structured warning". Emits three things in one reply:
 //
-//   - permissionDecisionReason: the documented field for surfacing a
-//     hook's rationale to the agent. Whether Claude Code feeds the reason
-//     back to the model on `allow` (vs only on `deny`/`ask`) is host-
-//     dependent — empirically this works in current Claude Code, but if
-//     a future host elides it, the stderr fallback below still reaches
-//     the user via the hook transcript.
+//   1. `permissionDecision: "allow"` — Claude Code does not block the
+//      call. Hook-chain precedence (`deny > defer > ask > allow`)
+//      ensures this never overrides a `deny` from another hook.
 //
-//   - stderr: Claude Code captures hook stderr into the visible
-//     transcript, so a human reviewer sees the warning even if the agent
-//     does not. This is the load-bearing surface for human-in-the-loop
-//     correctness.
+//   2. `permissionDecisionReason` — per Claude Code's documented hook
+//      contract, this field is shown to the USER on `allow` / `ask`
+//      decisions but is NOT fed back to Claude. Carried for transcript
+//      / UI display so a human reviewer sees a structured rationale
+//      next to the call.
+//
+//   3. `additionalContext` — this is the field the docs describe as
+//      "added to Claude's context alongside the tool result". It IS
+//      delivered to the model. The warn reason goes here so the agent
+//      receives the nudge toward an `edit_*` tool on the very next
+//      turn. This is the load-bearing surface for the v0.1.5 deny→warn
+//      loosening; without it the AI would proceed with no signal that
+//      the redirect-target check fired.
+//
+// Stderr also mirrors the reason for redundancy (some hosts may surface
+// stderr in the transcript independently of `additionalContext`).
 //
 // Used by deny-bash-write-bypass for the structural redirect-to-outside-
 // safe-sink case (SPEC §5.2, v0.1.5+). See bash-write-policy.ts for the
@@ -79,6 +107,7 @@ export function replyAllowWithWarning(reason: string): number {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
       permissionDecisionReason: reason,
+      additionalContext: reason,
     },
   };
   process.stdout.write(JSON.stringify(payload));
