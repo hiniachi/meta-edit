@@ -180,7 +180,13 @@ describe("makeApplyingHandler", () => {
     );
   });
 
-  it("does not throw if log.append fails on a validation rejection", async () => {
+  it("surfaces audit_error when log.append fails on a validation rejection", async () => {
+    // Round-4 (defect 2): previously the rejection-record audit-append error
+    // was silently discarded. If `.meta-edit/state` is write-restricted, the
+    // rejection event vanished from the audit log with NO caller signal —
+    // a security hole. The unified `audit_error` semantics surface the
+    // failure regardless of apply outcome; callers inspect `applied`
+    // separately to determine whether bytes hit disk.
     const failingLog = {
       nextEditId: () => "edit_20260430_0001",
       append: () => {
@@ -209,10 +215,12 @@ describe("makeApplyingHandler", () => {
 
     expect(result.applied).toBe(false);
     expect(result.warnings.some((w) => w.includes("rationale"))).toBe(true);
-    // a7-04 tighten: audit_error is scoped to audit failures on applied edits.
-    // On a validation rejection the apply never ran, so audit_error MUST NOT
-    // be set — callers rely on its presence to mean "applied but audit missing".
-    expect(result.audit_error).toBeUndefined();
+    // The audit failure for the rejection record is now surfaced.
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toContain("failed to append edit log");
+    expect(result.audit_error).toContain("EACCES");
+    expect(result.audit_error).toContain("edit_20260430_0001");
+    // warnings remain reserved for validation/apply notices, never log failures.
     expect(
       result.warnings.some((w) => w.includes("failed to append edit log")),
     ).toBe(false);

@@ -51,9 +51,15 @@ export type EditToolResult = {
   applied: boolean;
   edit_id: string;
   warnings: string[];
-  // Issue 029 (a7-04): set IFF the edit-log append threw. Absent on success.
-  // Distinct from `warnings` so callers/monitoring can react to audit-trail
-  // gaps without string-matching the routine validation-warning channel.
+  // Issue 029 (a7-04) + Round-4: set IFF an edit-log append threw, on EITHER
+  // the validation-rejection path OR the post-apply path. Distinct from
+  // `warnings` so callers/monitoring can react to audit-trail gaps without
+  // string-matching the routine validation-warning channel.
+  //
+  // The field's only contract is "an audit-log write failed for this
+  // request". Callers MUST inspect `applied` separately to determine apply
+  // outcome — `audit_error` says nothing about whether bytes hit disk, only
+  // that the audit trail is incomplete for this edit_id.
   audit_error?: string;
 };
 
@@ -294,14 +300,16 @@ export function makeApplyingHandler(
       // `patch_size_bytes: 0` on validation failure — there is no
       // applied diff to measure.
       //
-      // audit_error is intentionally NOT propagated here. Its contract is
-      // "audit-log append failed after a successful apply" (SPEC §3.4).
-      // The apply never ran on a validation-rejected request, so a
-      // log-append failure at this point is a pure infrastructure hiccup:
-      // callers MUST NOT infer "edit applied but audit record missing"
-      // from a validation-rejected response. We still attempt the append
-      // for completeness, but silently discard any log-write error.
-      const { warnings: finalWarnings } = appendLogSafely(log, {
+      // Round-4 (defect 2): the rejection-record audit-append CAN fail
+      // (e.g. `.meta-edit/state` write-restricted) and previously the
+      // error was silently discarded — callers had NO signal that the
+      // audit trail was incomplete for the rejected request, which is
+      // a security hole. Surface the failure as `audit_error` so the
+      // audit-failure channel is honest about every request the server
+      // processes, regardless of apply outcome. Callers inspect
+      // `applied` separately to determine whether bytes hit disk;
+      // `audit_error` only signals "the audit trail is incomplete".
+      const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
         ...baseEntry,
         patch_size_bytes: 0,
         applied: false,
@@ -311,6 +319,7 @@ export function makeApplyingHandler(
         applied: false,
         edit_id: editId,
         warnings: finalWarnings,
+        ...(audit_error !== undefined ? { audit_error } : {}),
       };
     }
 

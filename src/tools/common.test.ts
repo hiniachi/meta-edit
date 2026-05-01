@@ -868,13 +868,12 @@ describe("appendLogSafely audit-integrity", () => {
     expect(result.audit_error).toBeUndefined();
   });
 
-  // a7-04 tighten: audit_error must NOT appear on validation-failure paths.
-  // The field's contract is "audit-log append failed after a successful apply".
-  // If the request is rejected by validation, the apply never ran; a log-append
-  // failure at that point is an internal infrastructure hiccup, but it MUST NOT
-  // surface as audit_error — callers use audit_error exclusively to signal
-  // "edit applied but audit record may be missing".
-  it("response.audit_error is absent when log.append throws but validation fails", async () => {
+  // Round-4 (defect 2): audit_error is also surfaced on validation-rejection
+  // paths. Previously the rejection-record audit append silently discarded
+  // its error, leaving callers blind to audit-log unavailability. The
+  // unified contract is "an audit-log write failed for this request",
+  // independent of apply outcome.
+  it("response.audit_error is set when log.append throws on validation rejection", async () => {
     const diskFullError = Object.assign(new Error("disk full"), {
       code: "ENOSPC",
     });
@@ -895,7 +894,9 @@ describe("appendLogSafely audit-integrity", () => {
     });
 
     expect(result.applied).toBe(false);
-    // audit_error is scoped to audit failures on applied edits only
-    expect(result.audit_error).toBeUndefined();
+    expect(result.audit_error).toBeDefined();
+    expect(result.audit_error).toMatch(/disk full/);
+    expect(result.audit_error).toMatch(/ENOSPC/);
+    expect(result.audit_error).toMatch(/edit_20260501_0001/);
   });
 });
