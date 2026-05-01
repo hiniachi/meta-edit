@@ -1200,3 +1200,24 @@ describe("evaluateBashCommand — a2-03 env -i wrapper regression", () => {
     expect(r.decision).toBe("deny");
   });
 });
+
+describe("evaluateBashCommand — a2-04 noclobber-override >| redirect", () => {
+  it("denies cat redirected with >| to protected state path", () => {
+    const r = evaluateBashCommand(
+      "cat foo >| .meta-edit/state/edits.jsonl",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies echo redirected with >| to protected tmp path", () => {
+    const r = evaluateBashCommand(
+      "echo payload >| .meta-edit/tmp/scratch.json",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows cat reading from protected path without redirect", () => {
+    const r = evaluateBashCommand("cat .meta-edit/state/edits.jsonl");
+    expect(r.decision).toBe("allow");
+  });
+});

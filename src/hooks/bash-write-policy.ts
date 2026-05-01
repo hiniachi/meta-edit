@@ -782,9 +782,11 @@ function redirectsToProtected(s: string): boolean {
       i += 2;
       continue;
     }
-    // Skip past the redirect operator (one or two `>`s).
+    // Skip past the redirect operator (one or two `>`s, or noclobber-
+    // override `>|`). All three are write redirects whose target is
+    // the next token; we treat them uniformly here. See issue a2-04.
     let j = i + 1;
-    if (s[j] === ">") j++;
+    if (s[j] === ">" || s[j] === "|") j++;
     // Skip whitespace after the operator.
     while (j < s.length && (s[j] === " " || s[j] === "\t")) j++;
     // Read the target token until the next shell delimiter.
