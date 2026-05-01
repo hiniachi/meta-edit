@@ -18434,6 +18434,64 @@ function formatDayKey(d) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
+// package.json
+var package_default = {
+  name: "@hiniachi/meta-edit",
+  version: "0.1.2",
+  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  license: "MIT",
+  author: "nia <nia@yukinofurumachi.com>",
+  type: "module",
+  bin: {
+    "meta-edit": "dist/cli.js",
+    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+  },
+  main: "./dist/server.js",
+  files: [
+    "dist/",
+    "docs/SPEC.md",
+    ".claude-plugin/",
+    "hooks/",
+    "README.md",
+    "LICENSE"
+  ],
+  scripts: {
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    test: "bun test",
+    "test:node": "node --test --experimental-strip-types --no-warnings",
+    typecheck: "tsc --noEmit",
+    start: "bun run src/cli.ts"
+  },
+  engines: {
+    node: ">=20"
+  },
+  dependencies: {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    diff: "^9",
+    zod: "^3.23.0"
+  },
+  devDependencies: {
+    "@types/bun": "^1.3.13",
+    "@types/diff": "^8",
+    "@types/node": "^22.0.0",
+    typescript: "^5.6.0"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hiniachi/meta-edit.git"
+  },
+  keywords: [
+    "mcp",
+    "claude-code",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ]
+};
+
+// src/version.ts
+var VERSION = package_default.version;
 
 // src/server.ts
 function createServer(options = {}) {
@@ -18447,7 +18505,7 @@ function createServer(options = {}) {
   });
   const server = new Server({
     name: "meta-edit",
-    version: "0.1.1"
+    version: VERSION
   }, {
     capabilities: {
       tools: {}
@@ -18476,4 +18534,4 @@ export {
   createServer
 };
 
-//# debugId=3774E20A79ABC55264756E2164756E21
+//# debugId=4ACC67A52005189A64756E2164756E21

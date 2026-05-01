@@ -7,6 +7,7 @@ import {
 } from "./tools/common.js";
 import { applyChanges } from "./tools/apply.js";
 import { EditLog } from "./state/edit-log.js";
+import { VERSION } from "./version.js";
 
 export type CreateServerOptions = {
   repoRoot?: string;
@@ -25,7 +26,7 @@ export function createServer(options: CreateServerOptions = {}): Server {
   const server = new Server(
     {
       name: "meta-edit",
-      version: "0.1.1",
+      version: VERSION,
     },
     {
       capabilities: {
