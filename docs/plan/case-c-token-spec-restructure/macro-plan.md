@@ -71,16 +71,21 @@ deliberately mis-selects a tool, lists irrelevant files in
 these requires diff classification or test-content inspection, which
 Article 7 forbids in MVP.
 
-### Article 4 — Surface: nineteen tools (16 + 3)
+### Article 4 — Surface: nineteen tools (17 + 2)
 
-**Sixteen SQLite-derived tools.** Each captures one bug class for which
-SQLite's testing strategy (https://sqlite.org/testing.html) imposes a
-specific obligation pattern (boundary triple, MC/DC, anomaly testing,
-etc.). The categories themselves are application-level (permission
-logic, API contract, …) — what is borrowed from SQLite is the
-*per-change checklist* discipline.
+**Seventeen SQLite-derived tools.** Each is one element of a bug-class
+classification grounded in SQLite's testing strategy
+(https://sqlite.org/testing.html). The strategy's *per-change
+checklist* discipline maps each bug class to a specific obligation
+pattern (boundary triple, MC/DC, anomaly testing, etc.). The
+categories themselves are application-level (permission logic, API
+contract, …) — what is borrowed from SQLite is the discipline of
+classifying every edit before it lands. `edit_refactor_only` is the
+zero element of this classification: a change that introduces no new
+bug class, so existing tests must remain sufficient.
 
 ```
+edit_refactor_only            edit_test_only_change
 edit_boundary_condition       edit_boolean_condition
 edit_state_transition         edit_db_schema
 edit_data_migration           edit_api_contract
@@ -88,15 +93,19 @@ edit_serialization            edit_error_handling
 edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
-edit_policy_change            edit_test_only_change
+edit_policy_change
 ```
 
-**Three workflow-essential tools.** No automated test obligation
-applies, but the development workflow demonstrably needs them.
+**Two workflow-required tools.** The development workflow imposes
+actions that are not "code edits as cognitive units" but "environment
+setup that the agent feels motivated to perform in batches"
+(scaffolding new files, sweeping documentation updates). Forcing those
+into a one-call-per-file rhythm creates friction that biases the agent
+toward shell-redirect bypass. They are recognized constitutionally as
+batch-friendly:
 
 ```
-edit_refactor_only            edit_docs_only
-edit_create_file
+edit_docs_only                edit_create_file
 ```
 
 The full per-tool descriptions live in Part II §4 of SPEC.md and in
@@ -105,64 +114,86 @@ the sense that the spec does not constrain their wording — they are
 free to evolve as observation accumulates, provided every change keeps
 spec and code in sync in the same change.
 
-### Article 5 — Mechanism: declaration + token
+### Article 5 — Mechanism (binding principles)
 
-A typed_edit MCP call is a **declaration of intent**. The MCP server
-does not write. A validated declaration issues a single-use token bound
-to one or more `(file, before_sha256, after_sha256)` tuples, with a
-short TTL (30 seconds, hardcoded). Modify tools always bind exactly
-one tuple per Article 6; `edit_create_file` may bind N tuples for the
-same declaration. Each tuple is consumed by a matching native
-Edit / Write / MultiEdit / NotebookEdit call carrying the token, gated
-by the `deny-raw-edit` hook, which:
+Three principles, no implementation. The current best implementation
+of these principles lives in Part III; better implementations can
+replace it without amending the constitution.
 
-1. Looks up the token; if absent or expired, denies.
-2. Verifies the call's `file_path` matches the token's bound file.
-3. Reads the file's current sha256 from disk and compares to the
-   token's `before_sha256`; on mismatch, denies (TOCTOU defense).
-4. On match, allows the call and consumes the token (single-use).
+1. **The MCP server does not write.** A typed_edit call is a
+   declaration of intent. Validation is the server's only
+   responsibility. Real writes are performed by the agent's native
+   tools (Edit / Write / MultiEdit / NotebookEdit), which the agent is
+   tuned for. This routes around the friction of forcing a foreign
+   content-pair schema onto the agent's tool-calling pattern.
 
-Real writes go through the agent's native tools — the workflow it is
-tuned for. The typed surface preserves the cognitive intervention force
-of explicit kind selection without imposing a foreign content-pair
-schema on the agent.
+2. **Every write must be bound to a fresh declaration.** A binding
+   mechanism MUST (a) prevent native Edit / Write / MultiEdit /
+   NotebookEdit from landing bytes inside the repository unless a
+   matching declaration exists, (b) verify the write targets the
+   declaration's file(s), and (c) verify the disk state at write time
+   matches the declaration's pre-condition. The binding has a short
+   lifetime (single use, time-bounded) so that stale declarations do
+   not accumulate authority.
 
-The bash-write-policy hook remains independently armed. It does not
-participate in token validation; it ensures that no path other than
-"declared via meta-edit + native Edit" can land bytes inside the
-repository.
+3. **The bash-write-policy hook is the load-bearing defense.** Whatever
+   binding mechanism is in use, shell-route bypasses (`cat >`, `sed
+   -i`, `tee`, heredocs, encoded-payload pipelines) are blocked
+   independently. The bash hook is the line that prevents binding
+   forgery from outside the typed surface.
+
+The current implementation choice is a single-use, TTL-bound,
+HMAC-signed token (Part III). It satisfies all three principles. If a
+future proposal — capability-based addressing, signed manifests,
+content-addressed declarations, etc. — satisfies the same three
+principles with better ergonomics or smaller surface, it can replace
+the token mechanism without re-opening the constitution.
 
 ### Article 6 — Granularity rules
 
-**Modify: 1 declaration ≡ 1 target_file.** A change that spans multiple
-production files is multiple typed_edit calls, each with its own token.
-This makes per-file kind selection the unit of cognitive intervention.
-Atomic multi-file rename (today's `apply.ts` invariant) is **not**
-preserved; partial application is recoverable in the friendly-AI
-threat model. This is a deliberate behavior change from current
-`main`, accepted as the cost of moving real writes into native Edit.
+The granularity follows directly from the surface split in Article 4.
 
-**`edit_test_only_change` is a strict modify tool**: target_file is the
-test file itself, and `test_files` MUST be empty (the agent's
-declaration that this edit is itself the test).
+**Seventeen SQLite-derived tools — 1 declaration ≡ 1 target_file.**
+Each call binds exactly one file. A change that spans multiple
+production files is multiple typed_edit calls, each producing its own
+binding. Per-file kind selection IS the unit of cognitive intervention
+for code changes; collapsing multiple files into one declaration would
+weaken the bet. Atomic multi-file rename (today's `apply.ts`
+invariant) is **not** preserved; partial application is recoverable in
+the friendly-AI threat model. This is a deliberate behavior change
+from current `main`, accepted as the cost of moving real writes into
+native Edit.
 
-**Create: 1 declaration ≡ N files.** `edit_create_file` may scaffold
-multiple new files in one declaration. Scaffolding has no per-file
-classification value (a new module's `index.ts`, `impl.ts`, and
-`impl.test.ts` are one cognitive act, not three). The token binds the
-set of `(file, sha256(""), after_sha256)` tuples; consumption requires
-each file to be created with a matching token-carrying Edit/Write call,
-in any order.
+**Two workflow-required tools — 1 declaration ≡ N target_files.**
+`edit_docs_only` and `edit_create_file` accept a batch of files in one
+declaration. The binding's TTL covers the whole batch; native Edit /
+Write calls consume the batch's entries in any order until the
+declaration is exhausted or expires. Per-file classification has no
+cognitive value here (sweeping a docs rename across 30 markdown files
+is one act, not 30; scaffolding `index.ts` + `impl.ts` + `impl.test.ts`
+is one act, not three), and observation suggests that forcing them
+1-by-1 is the friction surface most likely to push the agent toward
+shell-redirect bypass.
 
-**Test obligations.** The 16 SQLite-derived tools (modify production
-code) declare `test_files: [...]` as a **forward declaration** — paths
-the agent commits to fulfilling test obligations on. Forward
-declarations are recorded in the edit log but **not** bound by the
-production token. Test edits are made through `edit_test_only_change`,
-each producing its own token. Selecting `edit_test_only_change` is the
-agent's re-affirmation that this edit is test-only; the cognitive
-intervention fires twice, once for the production change and once for
-the test addition.
+**Test obligations.** SQLite-derived tools that modify production code
+declare `test_files: [...]` as a **forward declaration** — paths the
+agent commits to fulfilling test obligations on. Forward declarations
+are recorded in the edit log but are NOT bound by the production
+declaration; they do not authorize writes to the test files. Test
+edits are made through `edit_test_only_change`, each producing its own
+binding. Selecting `edit_test_only_change` is the agent's
+re-affirmation that this edit is test-only; the cognitive intervention
+fires twice, once for the production change and once for the test
+addition.
+
+**`edit_test_only_change` is a strict 1-file SQLite-derived tool**:
+target_file is the test file itself, `test_files` MUST be empty, and
+the call binds exactly one file.
+
+**`edit_refactor_only` is a strict 1-file SQLite-derived tool** despite
+having no test obligation: it carries the cognitive intervention "I
+believe no new bug class is introduced", which is per-file by
+definition.
 
 ### Article 7 — Out of scope (constitutional)
 
@@ -230,14 +261,19 @@ ad-hoc author judgement.
 
 ---
 
-## Part III — Single-file token mechanics (precise)
+## Part III — Token mechanics (current best implementation)
+
+This part specifies the binding mechanism Article 5 mandates in
+principle. It is **derived from the constitution, not part of it.**
+A future proposal that satisfies Article 5's three principles with
+better ergonomics or smaller surface can replace this part without
+amending the constitution.
 
 ### Request schema (replaces current §3 EditToolRequest)
 
 ```typescript
 type EditToolRequest = {
-  target_file: string;              // single file (modify) or first
-                                    // file (create); see scope rules
+  target_file: string;              // primary file. Always bound.
   rationale: string;                // 1–3 sentences, non-empty after trim
   risk_level: "low" | "medium" | "high" | "critical";
   test_files: string[];             // forward declaration only, not
@@ -246,30 +282,36 @@ type EditToolRequest = {
                                     // description.
 
   before_sha256: string;            // hex(64), sha256 of disk content
-                                    // at declaration time. Empty-file
-                                    // sha256 for edit_create_file
-                                    // entries.
+                                    // at declaration time. For
+                                    // edit_create_file's target_file,
+                                    // sha256("").
   after_sha256: string;             // hex(64), sha256 of intended
                                     // post-edit content.
 
-  // edit_create_file ONLY:
-  additional_creates?: Array<{      // for the "1 declaration ≡ N files"
-    file: string;                   // create granularity rule. Each
-    after_sha256: string;           // entry adds (file, sha256(""),
-  }>;                               // after_sha256) to the token's
-                                    // bound set. Other tools MUST omit
-                                    // or set to []. Validation rejects
-                                    // its presence on non-create tools.
+  // ONLY accepted by the 2 workflow tools (edit_docs_only,
+  // edit_create_file). The 17 SQLite-derived tools MUST omit this
+  // field (validation rejects its presence). See Article 6.
+  additional_files?: Array<{
+    file: string;
+    before_sha256: string;          // sha256("") for create entries
+    after_sha256: string;
+  }>;
 };
 
 type EditToolResult = {
   token: string;                    // e.g. "met_20260502_a3f9b2…"
-  expires_at: string;               // ISO-8601, default declaration_time + 30s
+  expires_at: string;               // ISO-8601, declaration_time + 30s
   edit_id: string;                  // e.g. "edit_20260502_0001"
   warnings: string[];
   audit_error?: string;
 };
 ```
+
+Token binding set: SQLite-derived tools bind exactly one tuple
+`(target_file, before_sha256, after_sha256)`. Workflow tools bind
+that plus every entry in `additional_files`. The TTL applies to the
+whole binding set; each tuple is consumed independently by a matching
+native Edit / Write call carrying the token.
 
 ### Token validation (PreToolUse on Edit/Write/MultiEdit/NotebookEdit)
 
