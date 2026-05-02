@@ -92,6 +92,55 @@ Claude Code の MCP 設定にサーバを登録します。
 }
 ```
 
+### C. opencode
+
+同じ npm パッケージが `./opencode` サブパスで opencode 用プラグインを
+公開しています。MCP サーバは無変更 — ハーネスアダプタだけが違います。
+
+```sh
+npm install -g @hiniachi/meta-edit
+meta-edit install-opencode --scope user
+```
+
+プロジェクト単位で入れる場合：
+
+```sh
+npm install --save-dev @hiniachi/meta-edit
+meta-edit install-opencode --scope project
+```
+
+インストーラが `opencode.json` を新規作成または既存にマージします：
+
+```json
+{
+  "mcp": {
+    "meta-edit": {
+      "type": "local",
+      "command": ["meta-edit", "serve"],
+      "enabled": true
+    }
+  },
+  "plugin": ["@hiniachi/meta-edit/opencode"]
+}
+```
+
+リファレンス雛形は
+[`examples/.opencode/opencode.json`](./examples/.opencode/opencode.json)
+にあります。プラグインは opencode の in-process 実行系で動作し、
+raw `edit` / `write` / `apply_patch` と危険な `bash` を deny し、
+`.meta-edit/state/grants/` と `.meta-edit/state/edits.jsonl` を
+MCP サーバ側の発行者と共有します。同じ 18 個の typed_edit ツール
+記述、同じ監査ログ、同じ grant フローが Claude Code 側と等価です。
+
+`@opencode-ai/plugin` は optional peer dependency として宣言されて
+います (opencode 実行系が同梱しているため別途 `npm install` 不要)。
+
+アンインストール：
+
+```sh
+meta-edit uninstall-opencode --scope project
+```
+
 ## ランタイム要件
 
 - **Node 20 LTS 以降**（利用者側）。プラグインも npm bin もパッケージ同梱の `dist/cli.js` を `node` で起動します。
@@ -106,6 +155,8 @@ meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]  edits.jsonl のエン
 meta-edit summary [--since DATE]                           編集ログの集計を出力
 meta-edit install-hooks --scope user|project               Claude Code フックを settings.json に追加
 meta-edit uninstall-hooks --scope user|project             Claude Code フックを settings.json から削除
+meta-edit install-opencode --scope user|project            opencode の mcp + plugin を opencode.json に追加
+meta-edit uninstall-opencode --scope user|project          opencode の mcp + plugin を opencode.json から削除
 ```
 
 ### 使用例

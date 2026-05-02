@@ -971,3 +971,80 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
   token-passing-in-tool_input deny / lookup tests dropped or
   rewritten as file-based). Typecheck clean.
 - Spec deviations: none.
+
+## opencode harness migration (OC-1..OC-11)
+
+- Completed: 2026-05-03
+- What works:
+  - The same npm package `@hiniachi/meta-edit` now exposes a
+    `./opencode` subpath via `package.json` `exports`. Importing
+    `@hiniachi/meta-edit/opencode` resolves to
+    `dist/opencode/plugin.js`.
+  - `src/opencode/plugin.ts` is the in-process opencode plugin
+    entry point. Its `tool.execute.before` hook routes `edit` /
+    `write` / `apply_patch` through `evaluateTokenedEdit` (full
+    Q-D grant flow integration — `EditLog` + `Grants` instantiated
+    against the project worktree, sharing `.meta-edit/state/grants/`
+    and `.meta-edit/state/edits.jsonl` with any concurrent
+    MCP-server-side issuer) and `bash` through `evaluateBashCommand`.
+    Throws on deny + sets `output.aborted = true` (R2 fallback
+    readiness). Unexpected internal errors are caught and converted
+    to fail-closed deny (parity with `deny-raw-edit.ts`). `warn`
+    decisions surface to stderr.
+  - `src/opencode/tool-name-map.ts` provides
+    `OPENCODE_TO_CANONICAL` (lowercase opencode name → canonical
+    `RAW_EDIT_TOOLS` entry), `isOpencodeRawEditTool`, and
+    `toCanonicalRawEditName`. apply_patch self-maps because
+    `toLowerCase()` cannot fold underscore-bearing names; the
+    canonical entry stays as the opencode-emitted form.
+  - `RAW_EDIT_TOOLS` extended with `apply_patch`. Matchers in both
+    `META_EDIT_RAW_EDIT_MATCHER` (programmatic) and
+    `hooks/hooks.json` (static plugin) updated in lockstep —
+    drift-prevention test enforces parity. `evaluateTokenedEdit`
+    grew an early-exit deny branch for apply_patch with an
+    actionable reason (no top-level file_path → no grant flow).
+  - `meta-edit install-opencode --scope user|project` and
+    `meta-edit uninstall-opencode` register / remove
+    `mcp.meta-edit` + `plugin: ["@hiniachi/meta-edit/opencode"]`
+    in `opencode.json`. Atomic write, idempotent against re-run,
+    preserves sibling mcp servers and plugin entries.
+  - `examples/.opencode/opencode.json` reference snippet.
+  - `README.md` / `README.ja.md` / `README.zh-CN.md` have new
+    "Option C / 方式 C" sections + commands listing.
+  - Macro plan `docs/plan/opencode-migration/macro-plan.md`
+    converted from draft to accepted with Q1–Q8 + Q-D decision log.
+- Known issues:
+  - **OC-12 (real-opencode E2E smoke) deferred.** Throw-to-deny
+    behavior of opencode `tool.execute.before` is unverified
+    against a live opencode harness. The plugin sets
+    `output.aborted = true` defensively so the swap-in is
+    grep-discoverable; if smoke shows throw is fatal, adjust
+    `throwAbort` to not throw and rely on the property.
+  - opencode's actual tool argument shapes (camelCase vs
+    snake_case) are accepted defensively but the assumption is
+    not yet validated against a real opencode session.
+  - Tool count drift in `README.ja.md` / `README.zh-CN.md` ("19
+    種類のツール" / "十九个工具") deferred to a separate language
+    sweep — outside this phase's scope.
+- Tests added: 686 → 709 (+23 new across tool-name-map (10),
+  plugin (15), install-opencode CLI (23), apply_patch deny in
+  raw-edit-policy (3), matcher parity (3 updated)). All pass;
+  `tsc --noEmit` clean; `bun run build` emits
+  `dist/opencode/plugin.js` (~230 KB).
+- Spec deviations: none. SPEC §5.2's deny-set table does not
+  yet mention `apply_patch` — flagged as low-priority follow-up
+  in OC-2 review.
+
+### Harness-bug discovery side-quest
+
+During this phase, hit and filed
+`issues/2026-05-03-2030-mcp-string-array-arg-marshaling-bug.md`:
+non-empty `test_files: string[]` arguments to typed_edit calls
+silently arrived at the MCP server as JSON-strings (Zod rejected
+with "Expected array, received string") UNLESS a fresh
+`ToolSearch select:<tool>` call had refreshed the schema cache
+in the same turn. Workaround in this session: prefix any
+typed_edit declaration that needs non-empty `test_files` with a
+ToolSearch refresh of that tool. Root cause hypothesis: harness
+caches MCP tool schemas at session start and the cached form
+mis-marshals non-empty string arrays.
