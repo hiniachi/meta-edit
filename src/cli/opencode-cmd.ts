@@ -134,8 +134,20 @@ export function installMetaEditOpencode(
     out.mcp = {};
   }
   const mcp = out.mcp as Record<string, unknown>;
-  // Always overwrite our own entry so a stale config (e.g. older
-  // command form) gets refreshed. We do not touch other servers.
+  // Always overwrite our own entry so a stale config (e.g. an older
+  // command shape from a previous meta-edit version) gets refreshed.
+  // We do not touch other mcp servers.
+  //
+  // Behavioral note (intentional, see review of commit 7141844):
+  // install-opencode is NOT key-level idempotent against user
+  // overrides of OUR entry. If a user has manually set
+  // `mcp.meta-edit.enabled = false` to temporarily disable the server
+  // without uninstalling, re-running install will re-enable it. To
+  // disable temporarily without losing the install, remove the entry
+  // from the `plugin` array (the MCP server still loads but the
+  // pre-tool hook does not), or run `uninstall-opencode`. Sibling
+  // mcp entries (other servers) are always preserved verbatim — this
+  // overwrite policy is scoped strictly to OUR key.
   mcp[META_EDIT_OPENCODE_RESOURCES.mcpServerName] = {
     type: "local",
     command: ["meta-edit", "serve"],
