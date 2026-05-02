@@ -59,27 +59,51 @@ signal channel.
 
 ### Article 3 — Threat model
 
-The expected operator is a **friendly-but-friction-driven** agent.
-Bypass attempts (raw Edit, shell redirects, encoded payloads) emerge
-when the typed surface is inconvenient relative to the agent's native
-workflow, not when the agent is adversarial.
+The user's AI agent is assumed to be **lazy, fallible, and
+non-adversarial.**
+
+- **Lazy** — It skips declaration steps that feel like ceremony.
+  It batches when batching feels natural. It routes around friction
+  (shell redirects, alternative tools, encoded payloads) when the
+  typed path is more expensive than a workaround.
+- **Fallible** — It misclassifies edits. It lists wrong test files.
+  It writes subtly incorrect content despite holding the right
+  intent. Honest mistakes are the modal failure.
+- **Non-adversarial** — It does not race the hook. It does not forge
+  tokens. It does not exfiltrate. It does not deliberately evade.
+  Prompt-injection-compromised agents are explicitly out of scope;
+  defending against them requires sandboxing, not declaration
+  discipline.
+
+This is the operative threat model. **Misalignment with this model is
+the historical source of implementation bloat in this project**:
+defenses designed against adversarial scenarios (deep TOCTOU loops,
+HMAC signing, sibling-temp atomicity, exhaustive symlink resolution)
+accreted in `apply.ts` and the hooks even though the actual operator
+was always lazy-and-fallible. This article exists so that the next
+round of "we should harden X" review pressure is adjudicated against
+the right adversary, not against an imagined attacker.
 
 Two consequences follow:
 
-1. The typed surface MUST be at least as ergonomic as native Edit plus
+1. **Ergonomics is a primary constraint, not a nice-to-have.** The
+   typed surface MUST be at least as ergonomic as native Edit plus
    one declaration step. If using the typed tool feels harder than
-   slipping a `cat > file` past the hook, the typed tool will be
-   skipped, and the trial returns no signal.
-2. The bash-write-policy hook is the load-bearing defense line, not
-   the MCP server's internal hardening. Even when the server delegates
-   actual writes to native Edit (Article 5), grant forgery still has
-   to clear the bash hook.
+   slipping a `cat > file` past the hook, the lazy agent will skip
+   it, and the trial returns no signal.
+2. **The bash-write-policy hook is the load-bearing defense line for
+   accidental bypass routes**, not for adversarial forgery. Even when
+   the server delegates writes to native Edit (Article 5), an honest
+   `printf > .meta-edit/state/grants/...` typo still has to be
+   blocked. Hardening against deliberate forgery is out of scope.
 
-What is NOT defended against (constitutionally accepted): an agent that
-deliberately mis-selects a tool, lists irrelevant files in
+What is NOT defended against (constitutionally accepted): an agent
+that deliberately mis-selects a tool, lists irrelevant files in
 `test_files`, or writes plausible-but-false `rationale` text. Catching
 these requires diff classification or test-content inspection, which
-Article 7 forbids in MVP.
+Article 7 forbids in MVP. Under the non-adversarial assumption, these
+are honest classification mistakes, not deception, and the cure is
+description-tuning (not detection).
 
 ### Article 4 — Surface: nineteen tools (17 + 2)
 
