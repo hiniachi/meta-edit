@@ -6,7 +6,7 @@
 // launched the MCP server in a directory without `.git` (a fresh-checkout
 // onboarding flow, a sibling repo, or a scratch dir), the server died
 // before the transport handshake. Claude Code marked the MCP server as
-// failed for the session and the nineteen tool descriptions never
+// failed for the session and the eighteen tool descriptions never
 // reached the running agent's context — even after the user ran
 // `git init` and reconnected, descriptions might never re-inject. The
 // agent kept calling typed_edit (validation/audit looked healthy) while
@@ -14,7 +14,7 @@
 //
 // Fix: move the check to a non-throwing predicate consumed by
 // `validateRequest` at per-tool-call time. The MCP server boots
-// successfully; ListTools returns nineteen descriptions; and the per-
+// successfully; ListTools returns eighteen descriptions; and the per-
 // tool path-validation gate surfaces a clear `not_a_repository` error
 // until the user runs `git init`.
 

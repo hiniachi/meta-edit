@@ -153,7 +153,9 @@ export function sha256Hex(content: string): string {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-/** sha256("") — used as the before_sha256 sentinel for edit_create_file. */
+/** sha256("") — used as the before_sha256 sentinel for empty-file
+ * creation (v0.3.1: free at the deny-raw-edit hook level for
+ * content === "" Write to a non-existent in-repo path). */
 export const SHA256_EMPTY = sha256Hex("");
 
 export function validateRequest(
@@ -166,7 +168,7 @@ export function validateRequest(
   // ---- 0. Repo-root sentinel (A1 / issue 1530) ------------------------
   // The MCP server intentionally boots even when the configured root
   // lacks a `.git` / `.jj` directory, so ListTools can inject the
-  // nineteen tool descriptions into the agent's context. The actual
+  // eighteen tool descriptions into the agent's context. The actual
   // typed_edit calls, however, must refuse to run against a non-repo
   // root — silently accepting them would write into an unrelated
   // directory under `process.cwd()`, defeating the protected-path /
@@ -193,16 +195,18 @@ export function validateRequest(
   }
 
   // ---- 3. additional_files acceptance gate -----------------------------
-  // The 17 SQLite-derived tools MUST omit `additional_files`. The 2 workflow
-  // tools (edit_docs_only, edit_create_file) MAY include it (cardinality
-  // already capped by zod via .max(MAX_ADDITIONAL_FILES) above).
+  // The 17 SQLite-derived tools MUST omit `additional_files`. The remaining
+  // workflow tool (edit_docs_only) MAY include it (cardinality already capped
+  // by zod via .max(MAX_ADDITIONAL_FILES) above). v0.3.1 dropped
+  // edit_create_file and edit_create_planning_artifact, so only edit_docs_only
+  // accepts the field today.
   if (
     request.additional_files !== undefined &&
     !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
   ) {
     warnings.push(
       `${toolName} does not accept additional_files; this field is reserved for ` +
-        `the 2 workflow tools (edit_docs_only, edit_create_file). Submit each ` +
+        `the workflow tool (edit_docs_only). Submit each ` +
         `file as its own typed_edit call.`,
     );
   }
@@ -389,10 +393,10 @@ function containsParentTraversal(p: string): boolean {
 
 /**
  * Read disk and compute before_sha256 for a binding entry.
- *   - For edit_create_file: the file MUST NOT exist; before_sha256 :=
- *     sha256("").
- *   - For modify-only tools: the file MUST exist; before_sha256 :=
- *     sha256(disk_content_utf8).
+ *   - For all current tools (modify-only, post-v0.3.1): the file MUST
+ *     exist; before_sha256 := sha256(disk_content_utf8). When the file
+ *     was just created empty by a free Write (v0.3.1 hook-level
+ *     allowance), the digest is sha256("").
  *
  * Per Article 3 (non-adversarial threat model): we hash UTF-8 content. A
  * binary or non-UTF-8 file is not in the threat model — the hook re-reads
