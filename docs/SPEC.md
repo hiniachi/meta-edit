@@ -1216,46 +1216,37 @@ Substring-matching is the bypass-resistance limit. Determined commands (alternat
 
 ## 6. Edit log
 
-`.meta-edit/state/edits.jsonl` — append-only JSON Lines, one record per edit.
+`.meta-edit/state/edits.jsonl` — JSON Lines, append-only, protected.
+
+Each declaration produces two records:
+
+1. **Issued** — written when the typed_edit handler returns success.
 
 ```json
-{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
+{"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00",
+ "phase":"issued",
+ "kind":"edit_boundary_condition",
+ "target_file":"src/foo.ts",
+ "rationale":"...",
+ "risk_level":"medium",
+ "test_files":["tests/foo.test.ts"],
+ "binding":[{"file":"src/foo.ts","before_sha256":"...","after_sha256":"..."}],
+ "token":"met_20260502_a3f9b2..."}
 ```
 
-Fields:
+2. **Consumed** — written when the token is consumed by the deny-raw-edit hook (see §5).
 
-- `edit_id`: monotonically increasing within a day, format `edit_YYYYMMDD_NNNN`
-- `timestamp`: ISO 8601 with timezone
-- `tool_name`: one of the nineteen tool names
-- `target_file`: repository-relative path
-- `rationale`: as supplied by the AI (any language)
-- `risk_level`: as supplied by the AI (recorded for audit, not enforcement)
-- `test_files`: as supplied by the AI
-- `patch_size_bytes`: byte length of the synthesized unified diff (`Diff.createTwoFilesPatch` joined across every `change` in the request, encoded as UTF-8). The field name is preserved for log shape compatibility; the value is computed from the request inputs (no incoming `patch` string exists in v0.1.2+).
-- `applied`: whether the patch applied successfully
-- `warnings`: any warnings or validation errors associated with this edit (empty array on success)
-
-Per-change content is not stored. The synthesized diff is computed for `patch_size_bytes` and discarded; only its byte length lands in the log. If the repository is under version control, external VCS history can often be used to reconstruct individual edits, but `meta-edit` itself does not guarantee per-edit reconstruction — sequential edits to the same lines, rebases, or amends can make per-edit reconstruction lossy or impossible.
-
-Failed validations also append a record with `applied: false` and the relevant error messages in `warnings` for forensic purposes.
-
-### Protected paths
-
-The MCP server refuses any `target_file`, or any path appearing inside a patch, that resolves into:
-
-```
-.meta-edit/state/**
-.meta-edit/tmp/**
+```json
+{"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00",
+ "phase":"consumed",
+ "consuming_tool":"Edit"}
 ```
 
-Path matching uses the `realpath`-resolved absolute path against the resolved repository root (see §3 Path safety). These directories are also denied via the bash hook. They are not version-controlled. The recommended `.gitignore` is:
+Records reaching only `issued` without a `consumed` sibling are evidence of a half-finished declaration (token expired, agent abandoned the edit). Audit consumers reconcile by `edit_id`.
 
-```
-.meta-edit/state/
-.meta-edit/tmp/
-```
+Failed declarations (validation rejection at the MCP server) record one entry with `phase: "rejected"` and a non-empty `audit_error` field.
 
-This protection raises the cost for the AI to rewrite its own edit log. It does not provide cryptographic tamper resistance or OS-level append-only guarantees; protection is best-effort, consistent with the bash hook.
+Rotation and retention are not specified; in MVP the file grows unbounded. Operators that anticipate long-running deployments should add their own rotation outside `meta-edit`.
 
 ---
 
