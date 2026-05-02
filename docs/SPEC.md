@@ -1143,8 +1143,10 @@ General principles (apply to every edit):
 
 ```
 Create a new file at a path that does not yet exist on disk.
-The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
-to overwrite an existing file or follow a symlink at the leaf.
+At declaration time, the server verifies the target does not yet exist;
+the binding fails if any path already exists on disk. The actual create
+is performed by native Edit / Write under the deny-raw-edit hook's
+binding-validation gate (see §5).
 
 Use this tool when:
 - Adding a new source module, helper, or class file
@@ -1174,8 +1176,8 @@ This tool MUST NOT be used when:
 - The change is a rename or move (delete-and-add); the modify/create
   shape cannot represent rename atomically and the audit log would not
   reflect the original file's deletion
-- The file is a binary payload; the string-based content shape will
-  corrupt non-UTF-8 data
+- The file is a binary payload; native Edit / Write's string-based
+  parameters cannot carry non-UTF-8 bytes
 
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash

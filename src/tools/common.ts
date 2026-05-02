@@ -41,11 +41,13 @@ const Sha256HexSchema = z
   .string()
   .regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
 
-const AdditionalFileSchema = z.object({
-  file: z.string().min(1),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema,
-});
+const AdditionalFileSchema = z
+  .object({
+    file: z.string().min(1),
+    before_sha256: Sha256HexSchema,
+    after_sha256: Sha256HexSchema,
+  })
+  .strict();
 export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 
 // Operational hygiene cap on additional_files cardinality. Per SPEC §3 this
@@ -61,18 +63,20 @@ export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
   "edit_create_file",
 ];
 
-export const EditToolRequestSchema = z.object({
-  target_file: z.string().min(1),
-  rationale: z.string(),
-  risk_level: RiskLevelSchema,
-  test_files: z.array(z.string()),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema,
-  additional_files: z
-    .array(AdditionalFileSchema)
-    .max(MAX_ADDITIONAL_FILES)
-    .optional(),
-});
+export const EditToolRequestSchema = z
+  .object({
+    target_file: z.string().min(1),
+    rationale: z.string(),
+    risk_level: RiskLevelSchema,
+    test_files: z.array(z.string()),
+    before_sha256: Sha256HexSchema,
+    after_sha256: Sha256HexSchema,
+    additional_files: z
+      .array(AdditionalFileSchema)
+      .max(MAX_ADDITIONAL_FILES)
+      .optional(),
+  })
+  .strict();
 
 export type EditToolRequest = z.infer<typeof EditToolRequestSchema>;
 

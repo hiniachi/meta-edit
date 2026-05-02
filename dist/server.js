@@ -17139,8 +17139,10 @@ General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_create_file: `Create a new file at a path that does not yet exist on disk.
-The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
-to overwrite an existing file or follow a symlink at the leaf.
+At declaration time, the server verifies the target does not yet exist;
+the binding fails if any path already exists on disk. The actual create
+is performed by native Edit / Write under the deny-raw-edit hook's
+binding-validation gate (see §5).
 
 Use this tool when:
 - Adding a new source module, helper, or class file
@@ -17155,10 +17157,12 @@ Required tests (you MUST cover):
 2. If the new file is itself a test file, it must contain at least one
    explicit assertion. The mere existence of a test file is not a test.
 
-test_files must be non-empty (you must declare which test covers the new
-code). For each entry in \`changes\`, \`old_content\` MUST be the empty
-string — the file does not yet exist. \`new_content\` is the full content
-to write.
+test_files must be non-empty (you must declare which test covers the
+new code). The \`target_file\` MUST NOT exist on disk at declaration
+time; \`before_sha256\` MUST be \`sha256("")\`. \`after_sha256\` is the
+sha256 of the intended file content. For multi-file scaffolding, list
+additional creates in \`additional_files\` (this tool is one of the two
+workflow-required tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -17168,8 +17172,8 @@ This tool MUST NOT be used when:
 - The change is a rename or move (delete-and-add); the modify/create
   shape cannot represent rename atomically and the audit log would not
   reflect the original file's deletion
-- The file is a binary payload; the string-based content shape will
-  corrupt non-UTF-8 data
+- The file is a binary payload; native Edit / Write's string-based
+  parameters cannot carry non-UTF-8 bytes
 
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
@@ -17296,7 +17300,7 @@ var AdditionalFileSchema = exports_external.object({
   file: exports_external.string().min(1),
   before_sha256: Sha256HexSchema,
   after_sha256: Sha256HexSchema
-});
+}).strict();
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
   "edit_docs_only",
@@ -17310,7 +17314,7 @@ var EditToolRequestSchema = exports_external.object({
   before_sha256: Sha256HexSchema,
   after_sha256: Sha256HexSchema,
   additional_files: exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES).optional()
-});
+}).strict();
 function sha256Hex(content) {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
@@ -18460,4 +18464,4 @@ export {
   createServer
 };
 
-//# debugId=209B889FEFD964D764756E2164756E21
+//# debugId=6D243CAA003BA06C64756E2164756E21
