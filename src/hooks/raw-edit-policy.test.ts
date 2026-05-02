@@ -105,12 +105,31 @@ describe("evaluateRawEdit", () => {
     expect(evaluateRawEdit("notebookedit").decision).toBe("deny");
   });
 
+  it("denies opencode's apply_patch raw-edit primitive", () => {
+    // OC-2: apply_patch is opencode's third raw-edit primitive
+    // (alongside `edit` and `write`). It carries no top-level file_path
+    // (its input is a unified-diff blob with embedded path headers),
+    // so the agent cannot route it through the typed-edit grant flow
+    // — the classifier denies it outright. Lowercase + underscore is
+    // the canonical form here because Claude Code has no PascalCase
+    // equivalent to fold to.
+    const r = evaluateRawEdit("apply_patch");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("apply_patch");
+    expect(r.reason).toContain("edit_*");
+    // Case-insensitivity sanity (opencode emits lowercase, but a
+    // future harness could capitalise — both must hit).
+    expect(evaluateRawEdit("Apply_Patch").decision).toBe("deny");
+    expect(evaluateRawEdit("APPLY_PATCH").decision).toBe("deny");
+  });
+
   it("exposes the exact denied set", () => {
     expect([...RAW_EDIT_TOOLS].sort()).toEqual([
       "Edit",
       "MultiEdit",
       "NotebookEdit",
       "Write",
+      "apply_patch",
     ]);
   });
 });

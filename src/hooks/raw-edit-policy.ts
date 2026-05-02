@@ -73,6 +73,16 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   // before_sha256 staleness flow as the other three raw edits; the
   // staleness check operates on byte content of the .ipynb JSON.
   "NotebookEdit",
+  // opencode harness raw-edit primitive (lowercase + underscore — no
+  // PascalCase canonical name exists since Claude Code does not have
+  // this tool). On Claude Code the matcher entry is a dead route that
+  // never fires; on opencode the plugin's pre-tool hook denies it via
+  // evaluateRawEdit. Note: apply_patch's input is a unified-diff blob
+  // (no top-level file_path), so it is intentionally NOT routed
+  // through evaluateTokenedEdit's grant flow — calls deny outright
+  // and the agent must use edit/write (which DO carry file_path) or
+  // declare the change via the typed_edit MCP surface directly.
+  "apply_patch",
 ]);
 
 // Lower-cased copy used for case-insensitive classification so the deny
