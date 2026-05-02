@@ -3,8 +3,15 @@ import type { RiskLevel } from "../tools/common.js";
 import { parseStrictSince } from "./parse-since.js";
 
 export type LogFilters = {
+  /**
+   * Filter on the `kind` field of issued/rejected records (e.g.
+   * "edit_boundary_condition"). Consumed records have no kind so they are
+   * dropped when this filter is set.
+   */
   tool?: string | undefined;
+  /** Filter on risk_level. Only issued records carry it. */
   risk?: RiskLevel | undefined;
+  /** Inclusive lower bound on the record `ts` field. */
   since?: Date | undefined;
 };
 
@@ -30,10 +37,20 @@ export function filterEntries(
   filters: LogFilters,
 ): EditLogEntry[] {
   return entries.filter((e) => {
-    if (filters.tool !== undefined && e.tool_name !== filters.tool) return false;
-    if (filters.risk !== undefined && e.risk_level !== filters.risk) return false;
+    if (filters.tool !== undefined) {
+      // `kind` only exists on issued + rejected; consumed records carry
+      // only the consuming_tool, which is never an edit_* tool name.
+      if (e.phase === "consumed") return false;
+      if (e.kind !== filters.tool) return false;
+    }
+    if (filters.risk !== undefined) {
+      // risk_level only on issued. consumed/rejected carry no risk so
+      // they are filtered out when --risk is in play.
+      if (e.phase !== "issued") return false;
+      if (e.risk_level !== filters.risk) return false;
+    }
     if (filters.since !== undefined) {
-      const t = parseTimestamp(e.timestamp);
+      const t = parseTimestamp(e.ts);
       if (t === null) return false;
       if (t.getTime() < filters.since.getTime()) return false;
     }

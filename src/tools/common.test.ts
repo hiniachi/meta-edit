@@ -1,1190 +1,281 @@
-import { afterAll, beforeAll, describe, it, expect } from "bun:test";
+// Schema-level tests for the v0.2 / Case C EditToolRequest. The handler-
+// level integration tests (handler.test.ts) exercise the full pipeline; this
+// file covers validateRequest in isolation so a regression in the schema
+// surface (sha256 format, cardinality, path safety) lights up here first.
+
+import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  MAX_CHANGE_BYTES,
-  makeApplyingHandler,
+  EditToolRequestSchema,
+  MAX_ADDITIONAL_FILES,
+  SHA256_EMPTY,
+  sha256Hex,
   validateRequest,
-  type ApplyChangesFn,
-  type Change,
-  type EditLogLike,
   type EditToolRequest,
   type ValidationContext,
 } from "./common.js";
-import { TOOL_NAMES } from "./descriptions.js";
 
-const REPO_ROOT = "/tmp/meta-edit-test-repo";
-const ctx: ValidationContext = { repoRoot: REPO_ROOT };
+let tmpRoot: string;
 
-function makeChange(
-  file: string,
-  oldContent = "foo\n",
-  newContent = "bar\n",
-): Change {
-  return { file, old_content: oldContent, new_content: newContent };
-}
-
-function baseRequest(
-  overrides: Partial<EditToolRequest> = {},
-): EditToolRequest {
-  return {
-    target_file: "src/foo.ts",
-    rationale: "Tighten boundary check to avoid off-by-one.",
-    risk_level: "medium",
-    test_files: ["tests/foo.test.ts"],
-    changes: [makeChange("src/foo.ts")],
-    ...overrides,
-  };
-}
-
-describe("validateRequest", () => {
-  describe("rationale", () => {
-    it("rejects empty rationale", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ rationale: "   " }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("rationale"))).toBe(true);
-      }
-    });
-
-    // Issue 019 (a5-02): the test above only checks substring "rationale".
-    // The two below pin the exact warning string and the exact-count shape
-    // so a future rename or accidental control-flow change is caught.
-    it("emits exactly one warning for whitespace-only rationale when all other fields are valid", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ rationale: "   " }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        // Pin the exact warning message so renames are caught.
-        expect(r.warnings).toContain("rationale must be non-empty");
-        // Only one warning must be present: the rationale warning.
-        // If downstream checks also fire for an otherwise-valid request,
-        // the warnings array will be longer and this assertion catches it.
-        expect(r.warnings).toHaveLength(1);
-      }
-    });
-
-    it("emits rationale warning and continues to accumulate other warnings (does not early-return)", () => {
-      // validateRequest does NOT early-return after the rationale check.
-      // Confirm that a request with both a blank rationale AND an invalid
-      // target_file produces both warnings — verifying the documented
-      // behaviour that validation accumulates multiple errors in one pass.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          rationale: "   ",
-          target_file: "../outside.ts",
-          changes: [makeChange("../outside.ts")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("rationale must be non-empty")),
-        ).toBe(true);
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("escapes repository root") ||
-              w.includes('".." traversal segment'),
-          ),
-        ).toBe(true);
-      }
-    });
-  });
-
-  describe("test_files cardinality", () => {
-    it("rejects empty test_files for tools that require them", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ test_files: [] }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("test_files must be non-empty")),
-        ).toBe(true);
-      }
-    });
-
-    it("allows empty test_files for edit_refactor_only", () => {
-      const r = validateRequest(
-        "edit_refactor_only",
-        baseRequest({ test_files: [] }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-    });
-
-    it("requires test_files to be empty for edit_test_only_change", () => {
-      const r = validateRequest(
-        "edit_test_only_change",
-        baseRequest({
-          target_file: "tests/foo.test.ts",
-          changes: [makeChange("tests/foo.test.ts")],
-          test_files: ["tests/foo.test.ts"],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) =>
-            w.includes("test_files must be empty for edit_test_only_change"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("accepts edit_test_only_change with empty test_files and target_file-only changes", () => {
-      const r = validateRequest(
-        "edit_test_only_change",
-        baseRequest({
-          target_file: "tests/foo.test.ts",
-          changes: [makeChange("tests/foo.test.ts")],
-          test_files: [],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-    });
-
-    it("allows empty test_files for edit_docs_only", () => {
-      const r = validateRequest(
-        "edit_docs_only",
-        baseRequest({
-          target_file: "OBSERVED-FAILURES.md",
-          changes: [makeChange("OBSERVED-FAILURES.md")],
-          test_files: [],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles).toEqual(["OBSERVED-FAILURES.md"]);
-      }
-    });
-
-    it("does not enforce empty test_files for edit_docs_only (test_files may be empty, per SPEC §4)", () => {
-      const r = validateRequest(
-        "edit_docs_only",
-        baseRequest({
-          target_file: "README.md",
-          changes: [makeChange("README.md")],
-          test_files: ["tests/foo.test.ts"],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-    });
-  });
-
-  describe("path safety", () => {
-    it("rejects absolute target_file", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ target_file: "/etc/passwd" }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("absolute"))).toBe(true);
-      }
-    });
-
-    it("rejects any `..` segment with the dedicated traversal diagnostic (dogfood-003)", () => {
-      // Pre-fix: target_file: "test-playground/../package.json" was
-      // silently rebased to "package.json" (repo root). The subsequent
-      // stale-content warning then quoted "package.json" — confusing
-      // when the caller declared a playground path. Hard-reject any
-      // `..` segment so the resolved target is unambiguous.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "test-playground/../package.json",
-          changes: [makeChange("test-playground/../package.json")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes('".." traversal segment') &&
-              w.includes("test-playground/../package.json"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("accepts `./` and doubled-slash cosmetic normalization", () => {
-      // Cosmetic normalizations (leading `./`, doubled slashes) collapse
-      // to the same on-disk file regardless of resolution order. They
-      // do NOT trip the dogfood-003 traversal guard.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "./src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [makeChange("./src/foo.ts", "alpha", "beta")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-    });
-
-    it("rejects ../ traversal", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ target_file: "../outside.ts" }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("escapes repository root") ||
-              w.includes('".." traversal segment'),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects edits inside .meta-edit/state/", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: ".meta-edit/state/edits.jsonl",
-          changes: [makeChange(".meta-edit/state/edits.jsonl")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
-      }
-    });
-
-    it("emits a single protected-path warning when target_file === change.file (dogfood-004)", () => {
-      // Pre-fix: validateRequest pushed two near-identical warnings — one
-      // from the target_file scope, one from the change.file scope —
-      // both quoting the same path with the same protected-directory
-      // reason. Agents reading both tried to fix two things. Dedupe so
-      // the single canonical issue surfaces once.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: ".meta-edit/state/edits.jsonl",
-          changes: [makeChange(".meta-edit/state/edits.jsonl")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        const protectedWarnings = r.warnings.filter((w) =>
-          w.includes("protected"),
-        );
-        expect(protectedWarnings.length).toBe(1);
-      }
-    });
-
-    it("suppresses every change.file duplicate when multiple changes echo target_file", () => {
-      // Documented contract: when two or more changes share both the
-      // path string AND the failure reason of target_file, every
-      // duplicate is suppressed (the target_file warning carries the
-      // same information). Prevents an N-fold warning fan-out for a
-      // request shape the schema does not otherwise forbid.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: ".meta-edit/state/edits.jsonl",
-          changes: [
-            makeChange(".meta-edit/state/edits.jsonl"),
-            makeChange(".meta-edit/state/edits.jsonl"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        const protectedWarnings = r.warnings.filter((w) =>
-          w.includes("protected"),
-        );
-        expect(protectedWarnings.length).toBe(1);
-      }
-    });
-
-    it("dedupes two change.file entries with identical path AND error (PR #42 self-review Bug 1)", () => {
-      // Pre-fix: two changes with the same input path and same failure
-      // reason produced two byte-identical change.file warnings. The
-      // dedup now collapses them to one.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [
-            makeChange(".meta-edit/state/edits.jsonl"),
-            makeChange(".meta-edit/state/edits.jsonl"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        const protectedChangeFileWarnings = r.warnings.filter(
-          (w) => w.includes("change.file") && w.includes("protected"),
-        );
-        expect(protectedChangeFileWarnings.length).toBe(1);
-      }
-    });
-
-    it("does NOT dedupe change.file warnings with distinct error reasons", () => {
-      // Two changes failing for different reasons must both surface — the
-      // dedup is only on (file + error), not file alone.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [
-            // First fails: protected path.
-            makeChange(".meta-edit/state/edits.jsonl"),
-            // Second fails for a DIFFERENT reason: traversal segment.
-            makeChange("src/../escape.ts"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        const changeFileWarnings = r.warnings.filter((w) =>
-          w.includes("change.file"),
-        );
-        expect(changeFileWarnings.length).toBe(2);
-      }
-    });
-
-    it("still emits the change.file warning when only the change differs", () => {
-      // When target_file is acceptable but a change.file points into a
-      // protected path, the change.file warning must still surface; only
-      // the byte-identical duplicate is suppressed.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [makeChange(".meta-edit/state/edits.jsonl")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("change.file") && w.includes("protected"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects edits inside .meta-edit/tmp/", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: ".meta-edit/tmp/scratch.txt",
-          changes: [makeChange(".meta-edit/tmp/scratch.txt")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
-      }
-    });
-
-    it("rejects target_file aliasing into protected path via traversal", () => {
-      // dogfood-003 hardened this further: any `..` segment is now rejected
-      // before resolution, so the rejection reason is the traversal guard
-      // rather than the protected-path guard. Either is acceptable; both
-      // refuse the alias attempt without writing.
-      const aliased = "src/../.meta-edit/state/edits.jsonl";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: aliased,
-          changes: [makeChange(aliased)],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              (w.includes("protected") && w.includes("resolves")) ||
-              w.includes('".." traversal segment'),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects change.file aliasing into protected path via traversal", () => {
-      const innerAlias = "tests/../.meta-edit/tmp/scratch.txt";
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [makeChange("src/foo.ts"), makeChange(innerAlias)],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              (w.includes("protected") && w.includes("resolves")) ||
-              w.includes('".." traversal segment'),
-          ),
-        ).toBe(true);
-      }
-    });
-  });
-
-  describe("changes shape", () => {
-    it("rejects an empty changes array via zod (the .min(1) refinement)", () => {
-      // The schema enforces .min(1); but validateRequest is called with an
-      // already-typed object so we exercise the in-handler defensive
-      // re-check via a cast.
-      const req = baseRequest({ changes: [] as unknown as EditToolRequest["changes"] });
-      const r = validateRequest("edit_boundary_condition", req, ctx);
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("changes") && w.includes("at least one")),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects more than MAX_CHANGES_PER_REQUEST entries", () => {
-      // Defensive cap: too many changes per request would force a
-      // large `Buffer.byteLength` sweep + `createTwoFilesPatch`
-      // synthesis. The cap is 100; 101 must be rejected.
-      const tooMany = Array.from({ length: 101 }, (_, i) =>
-        makeChange(`src/foo.ts`, `o${i}`, `n${i}`),
-      );
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({ changes: tooMany }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("entries") && w.includes("entry limit"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects total payload over MAX_CHANGE_BYTES", () => {
-      const big = "x".repeat(MAX_CHANGE_BYTES);
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [makeChange("src/foo.ts", "y", big)],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("exceeds the") && w.includes("byte limit"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects NUL byte in old_content", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [makeChange("src/foo.ts", "before\0after", "after")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("old_content") && w.includes("NUL"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects a no-op change (old_content === new_content)", () => {
-      // Codex GitHub bot review on PR #29 (P2): pre-PR-D the jsdiff
-      // parser rejected zero-hunk patches, so no-op edits never
-      // reached apply. Under the content-pair shape we must enforce
-      // the same posture explicitly — otherwise stage+rename runs
-      // for semantically empty edits and bumps mtime / inode for
-      // downstream watchers and audit consumers.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [makeChange("src/foo.ts", "same\n", "same\n")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("no-op") && w.includes("src/foo.ts"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects NUL byte in new_content", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [makeChange("src/foo.ts", "before", "after\0and-more")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("new_content") && w.includes("NUL"),
-          ),
-        ).toBe(true);
-      }
-    });
-  });
-
-  describe("scope", () => {
-    it("rejects a change touching files outside target_file + test_files", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [
-            makeChange("src/foo.ts"),
-            makeChange("src/other.ts", "x", "y"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes('"src/other.ts"') && w.includes("scope"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects a request with multiple changes targeting the same canonical", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [
-            makeChange("src/foo.ts", "alpha", "beta"),
-            makeChange("src/foo.ts", "beta", "gamma"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("multiple entries") && w.includes("src/foo.ts"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    // Issue 020 (a5-03): the existing test above pins string-identical
-    // duplicates only. The case below covers two changes whose paths
-    // canonicalize to the same physical file via embedded dot-segments
-    // ("src/./foo.ts" vs "src/foo.ts"). path.resolve folds the dot
-    // segment so both entries surface as the same canonical and the
-    // duplicate guard fires. Either that guard or the scope guard must
-    // reject; ok:true is unacceptable because applyChanges would then
-    // catch the duplicate at apply time with an "internal error"
-    // assertion instead of a clean validation rejection.
-    it("rejects a request with two changes that resolve to the same canonical via path normalization", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [
-            makeChange("src/foo.ts", "alpha", "beta"),
-            makeChange("src/./foo.ts", "alpha", "beta"),
-          ],
-        }),
-        ctx,
-      );
-      // Either the duplicate-canonical guard fires (paths normalized
-      // identically) or the scope guard fires (paths not normalized,
-      // "src/./foo.ts" not in allowed set). Either is acceptable; what
-      // is NOT acceptable is ok:true.
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("foo.ts") &&
-              (w.includes("multiple entries") || w.includes("scope")),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    // a5-03 strengthen: cover `../` dot-dot segment normalization.
-    // Originally validated that the duplicate-canonical guard caught
-    // "src/nested/../foo.ts" aliasing "src/foo.ts". dogfood-003 now
-    // rejects any `..` segment up-front, so this test pins the stronger
-    // behavior: the alias is refused before even reaching the duplicate
-    // guard.
-    it("rejects two changes that alias the same file via ../ dot-dot segments", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          target_file: "src/foo.ts",
-          test_files: ["tests/foo.test.ts"],
-          changes: [
-            makeChange("src/foo.ts", "alpha", "beta"),
-            makeChange("src/nested/../foo.ts", "alpha", "beta"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes('".." traversal segment') ||
-              (w.includes("multiple entries") && w.includes("foo.ts")),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("duplicate-canonical guard fires before applyChanges internal assertion", () => {
-      // If validateRequest lets through duplicate canonicals, applyChanges
-      // catches them as an internal-error assertion (apply.ts:100-104).
-      // This pins the rejection at validation time, not apply time.
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [
-            makeChange("src/foo.ts", "alpha", "beta"),
-            makeChange("src/foo.ts", "beta", "gamma"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes("multiple entries") && w.includes("src/foo.ts"),
-          ),
-        ).toBe(true);
-        // Must NOT come from applyChanges' defensive assertion — that would
-        // mean the rejection slipped past validateRequest.
-        expect(r.warnings.every((w) => !w.includes("internal error"))).toBe(true);
-      }
-    });
-
-    it("accepts a change touching target_file and listed test_files", () => {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        baseRequest({
-          changes: [
-            makeChange("src/foo.ts"),
-            makeChange("tests/foo.test.ts", "old", "new"),
-          ],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles.sort()).toEqual(
-          ["src/foo.ts", "tests/foo.test.ts"].sort(),
-        );
-      }
-    });
-
-    it("rejects edit_test_only_change with a change.file other than target_file", () => {
-      // For edit_test_only_change, only target_file is in scope; test_files
-      // must be empty so a second change is automatically out-of-scope.
-      const r = validateRequest(
-        "edit_test_only_change",
-        baseRequest({
-          target_file: "tests/foo.test.ts",
-          changes: [
-            makeChange("tests/foo.test.ts"),
-            makeChange("tests/bar.test.ts", "x", "y"),
-          ],
-          test_files: [],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes('"tests/bar.test.ts"') && w.includes("scope"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("accepts edit_docs_only with target_file plus declared test_files changes", () => {
-      const r = validateRequest(
-        "edit_docs_only",
-        baseRequest({
-          target_file: "README.md",
-          changes: [
-            makeChange("README.md"),
-            makeChange("tests/foo.test.ts", "x", "y"),
-          ],
-          test_files: ["tests/foo.test.ts"],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles.sort()).toEqual(
-          ["README.md", "tests/foo.test.ts"].sort(),
-        );
-      }
-    });
-
-    it("rejects edit_docs_only changes touching files outside target_file + test_files", () => {
-      const r = validateRequest(
-        "edit_docs_only",
-        baseRequest({
-          target_file: "README.md",
-          changes: [
-            makeChange("README.md"),
-            makeChange("src/foo.ts", "x", "y"),
-          ],
-          test_files: [],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) => w.includes('"src/foo.ts"') && w.includes("scope"),
-          ),
-        ).toBe(true);
-      }
-    });
-  });
-
-  describe("happy path", () => {
-    it("accepts a well-formed boundary condition edit", () => {
-      const r = validateRequest("edit_boundary_condition", baseRequest(), ctx);
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.touchedFiles).toEqual(["src/foo.ts"]);
-        expect(r.changes.length).toBe(1);
-        expect(r.changes[0]?.canonical).toBe("src/foo.ts");
-        expect(r.changes[0]?.oldContent).toBe("foo\n");
-        expect(r.changes[0]?.newContent).toBe("bar\n");
-      }
-    });
-
-    it("accepts the new shape for every one of the nineteen edit_* tools", () => {
-      // Smoke test: validate each tool's typical request shape passes.
-      // For tools requiring test_files, use the default test_files entry;
-      // for edit_test_only_change, target only itself; for refactor /
-      // docs, no test_files; for edit_create_file, old_content must be
-      // empty (the file does not yet exist on disk).
-      for (const name of TOOL_NAMES) {
-        let req: EditToolRequest;
-        if (name === "edit_test_only_change") {
-          req = baseRequest({
-            target_file: "tests/foo.test.ts",
-            changes: [makeChange("tests/foo.test.ts")],
-            test_files: [],
-          });
-        } else if (name === "edit_refactor_only" || name === "edit_docs_only") {
-          req = baseRequest({ test_files: [] });
-        } else if (name === "edit_create_file") {
-          req = baseRequest({
-            target_file: "src/new.ts",
-            changes: [makeChange("src/new.ts", "", "fresh\n")],
-          });
-        } else {
-          req = baseRequest();
-        }
-        const r = validateRequest(name, req, ctx);
-        expect(r.ok).toBe(true);
-      }
-    });
-  });
-
-  describe("edit_create_file create-mode rules", () => {
-    it("rejects edit_create_file when test_files is empty", () => {
-      const r = validateRequest(
-        "edit_create_file",
-        baseRequest({
-          target_file: "src/new.ts",
-          changes: [makeChange("src/new.ts", "", "fresh\n")],
-          test_files: [],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) =>
-            w.includes("test_files must be non-empty for edit_create_file"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("rejects edit_create_file when any change carries non-empty old_content", () => {
-      // create-mode contract: old_content must be the empty string because
-      // the file does not yet exist on disk. A non-empty old_content would
-      // imply the agent thinks the file exists, which contradicts the tool
-      // selection.
-      const r = validateRequest(
-        "edit_create_file",
-        baseRequest({
-          target_file: "src/new.ts",
-          changes: [makeChange("src/new.ts", "stale\n", "fresh\n")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("src/new.ts") &&
-              w.includes("old_content must be empty"),
-          ),
-        ).toBe(true);
-      }
-    });
-
-    it("accepts edit_create_file with empty old_content and non-empty new_content", () => {
-      const r = validateRequest(
-        "edit_create_file",
-        baseRequest({
-          target_file: "src/new.ts",
-          changes: [makeChange("src/new.ts", "", "fresh\n")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.changes[0]?.oldContent).toBe("");
-        expect(r.changes[0]?.newContent).toBe("fresh\n");
-      }
-    });
-
-    it("accepts edit_create_file creating an empty file (old=new=\"\") — bypasses the modify-mode no-op rejection", () => {
-      // In modify mode, old===new is rejected as a no-op (the file already
-      // has that content; nothing changes). In create mode, old===""===new
-      // is a valid empty-file creation: the file goes from non-existent to
-      // existent, which is observable on disk.
-      const r = validateRequest(
-        "edit_create_file",
-        baseRequest({
-          target_file: "src/empty.ts",
-          changes: [makeChange("src/empty.ts", "", "")],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-    });
-
-    it("rejects edit_create_file targeting a path inside a protected directory", () => {
-      const r = validateRequest(
-        "edit_create_file",
-        baseRequest({
-          target_file: ".meta-edit/state/seed.json",
-          changes: [makeChange(".meta-edit/state/seed.json", "", "{}\n")],
-          test_files: ["tests/seed.test.ts"],
-        }),
-        ctx,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some((w) => w.includes("protected")),
-        ).toBe(true);
-      }
-    });
-  });
+beforeEach(() => {
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-common-"));
+  fs.mkdirSync(path.join(tmpRoot, ".git"));
 });
 
-describe("validateRequest with real filesystem (symlink)", () => {
-  let tmpRoot: string;
+afterEach(() => {
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 
-  beforeAll(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-test-"));
-    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
-    fs.symlinkSync(
-      path.join(tmpRoot, ".meta-edit", "state"),
-      path.join(tmpRoot, "src", "state-link"),
-    );
+function writeFile(rel: string, content: string): void {
+  const abs = path.join(tmpRoot, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content, "utf8");
+}
+
+function ctx(): ValidationContext {
+  return { repoRoot: tmpRoot };
+}
+
+const HEX64 = "a".repeat(64);
+const HEX64_B = "b".repeat(64);
+
+describe("EditToolRequestSchema — zod surface", () => {
+  it("accepts a well-formed request without additional_files", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      test_files: ["t.test.ts"],
+      before_sha256: HEX64,
+      after_sha256: HEX64_B,
+    });
+    expect(r.success).toBe(true);
   });
 
-  afterAll(() => {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  });
-
-  it("rejects target_file that traverses a symlink into protected dir", () => {
-    const aliased = "src/state-link/edits.jsonl";
-    const r = validateRequest(
-      "edit_boundary_condition",
-      {
-        target_file: aliased,
-        rationale: "should be rejected",
-        risk_level: "medium",
-        test_files: ["tests/foo.test.ts"],
-        changes: [makeChange(aliased)],
-      },
-      { repoRoot: tmpRoot },
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(
-        r.warnings.some(
-          (w) => w.includes("protected") || w.includes("escapes"),
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it("rejects change.file that traverses a symlink into protected dir", () => {
-    const innerAlias = "src/state-link/edits.jsonl";
-    const r = validateRequest(
-      "edit_boundary_condition",
-      {
+  it("rejects sha256 that is not exactly 64 lowercase hex", () => {
+    const tries = ["short", "A".repeat(64), "z".repeat(64), "a".repeat(63)];
+    for (const bad of tries) {
+      const r = EditToolRequestSchema.safeParse({
         target_file: "src/foo.ts",
-        rationale: "should be rejected via change path",
+        rationale: "ok",
         risk_level: "medium",
-        test_files: ["tests/foo.test.ts"],
-        changes: [makeChange("src/foo.ts"), makeChange(innerAlias)],
-      },
-      { repoRoot: tmpRoot },
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(
-        r.warnings.some(
-          (w) => w.includes("protected") || w.includes("escapes"),
-        ),
-      ).toBe(true);
+        test_files: [],
+        before_sha256: bad,
+        after_sha256: HEX64_B,
+      });
+      expect(r.success).toBe(false);
     }
   });
 
-  it("fails closed when realpath cannot canonicalize (symlink loop)", () => {
-    const loopPath = path.join(tmpRoot, "loop");
-    fs.symlinkSync(loopPath, loopPath);
-    try {
-      const r = validateRequest(
-        "edit_boundary_condition",
-        {
-          target_file: "loop",
-          rationale: "should be rejected because realpath cannot resolve",
-          risk_level: "medium",
-          test_files: ["tests/foo.test.ts"],
-          changes: [makeChange("loop")],
-        },
-        { repoRoot: tmpRoot },
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(
-          r.warnings.some(
-            (w) =>
-              w.includes("could not be canonicalized") ||
-              w.includes("realpath"),
-          ),
-        ).toBe(true);
-      }
-    } finally {
-      fs.unlinkSync(loopPath);
+  it("rejects additional_files with > MAX_ADDITIONAL_FILES entries", () => {
+    const af = [];
+    for (let i = 0; i <= MAX_ADDITIONAL_FILES; i++) {
+      af.push({ file: `f${i}`, before_sha256: HEX64, after_sha256: HEX64_B });
     }
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "low",
+      test_files: [],
+      before_sha256: HEX64,
+      after_sha256: HEX64_B,
+      additional_files: af,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects unknown risk_level", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "extreme",
+      test_files: [],
+      before_sha256: HEX64,
+      after_sha256: HEX64_B,
+    });
+    expect(r.success).toBe(false);
   });
 });
 
-// Issue 029 (a7-04): when log.append throws, the failure must surface as a
-// structured `audit_error` field on the response — not be silently merged into
-// `warnings` (which carries routine validation notices). Mixing the two
-// signals destroys audit integrity: a caller cannot distinguish between
-// "applied edit + clean log" and "applied edit + missing audit record".
-describe("appendLogSafely audit-integrity", () => {
-  let repoRoot: string;
-
-  beforeAll(() => {
-    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-logfail-"));
-    fs.writeFileSync(path.join(repoRoot, "src.ts"), "const x = 1;\n", "utf8");
-  });
-  afterAll(() => {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  });
-
-  /** Fake log whose append always throws the supplied error. */
-  function makeFailingLog(error: Error): EditLogLike {
-    let callCount = 0;
+describe("validateRequest — disk + path-safety", () => {
+  function modifyReq(overrides: Partial<EditToolRequest> = {}): EditToolRequest {
     return {
-      nextEditId(_now?: Date): string {
-        return `edit_20260501_${String(++callCount).padStart(4, "0")}`;
-      },
-      append(_entry): void {
-        throw error;
-      },
+      target_file: "src/foo.ts",
+      rationale: "fix",
+      risk_level: "medium",
+      test_files: ["tests/foo.test.ts"],
+      before_sha256: sha256Hex("hello\n"),
+      after_sha256: sha256Hex("hello world\n"),
+      ...overrides,
     };
   }
 
-  /** Fake applyChanges that reports success without touching disk. */
-  const noopApply: ApplyChangesFn = (_repoRoot, _changes) => ({
-    applied: true,
-    warnings: [],
-    touchedAbsolutePaths: [],
+  it("rejects an absolute target_file", () => {
+    const r = validateRequest("edit_boundary_condition",
+      modifyReq({ target_file: "/etc/passwd" }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("absolute"))).toBe(true);
+    }
   });
 
-  function logFailRequest(): EditToolRequest {
-    return {
-      target_file: "src.ts",
-      rationale: "tighten guard",
+  it("rejects `..` traversal in target_file", () => {
+    const r = validateRequest("edit_boundary_condition",
+      modifyReq({ target_file: "src/../escape.ts" }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("traversal"))).toBe(true);
+    }
+  });
+
+  it("rejects target_file resolving to a protected path", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    writeFile(".meta-edit/state/x.txt", "");
+    const r = validateRequest("edit_boundary_condition",
+      modifyReq({
+        target_file: ".meta-edit/state/x.txt",
+        before_sha256: SHA256_EMPTY,
+      }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
+    }
+  });
+
+  it("rejects a modify-only call when target_file does not exist", () => {
+    const r = validateRequest("edit_boundary_condition",
+      modifyReq({ target_file: "src/missing.ts" }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("does not exist"))).toBe(true);
+    }
+  });
+
+  it("rejects edit_create_file when target_file already exists", () => {
+    writeFile("src/foo.ts", "x\n");
+    const r = validateRequest("edit_create_file",
+      modifyReq({ before_sha256: SHA256_EMPTY }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("already exists"))).toBe(true);
+    }
+  });
+
+  it("succeeds on a valid edit_create_file declaration", () => {
+    const r = validateRequest("edit_create_file",
+      modifyReq({
+        target_file: "src/new.ts",
+        before_sha256: SHA256_EMPTY,
+        after_sha256: sha256Hex("x\n"),
+      }), ctx());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.canonical).toBe("src/new.ts");
+      expect(r.primaryBinding.before_sha256).toBe(SHA256_EMPTY);
+      expect(r.additionalBindings).toEqual([]);
+    }
+  });
+
+  it("rejects additional_files for an SQLite-derived tool", () => {
+    writeFile("src/foo.ts", "hello\n");
+    writeFile("src/bar.ts", "world\n");
+    const r = validateRequest("edit_boundary_condition",
+      modifyReq({
+        before_sha256: sha256Hex("hello\n"),
+        additional_files: [
+          {
+            file: "src/bar.ts",
+            before_sha256: sha256Hex("world\n"),
+            after_sha256: sha256Hex("changed\n"),
+          },
+        ],
+      }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("additional_files"))).toBe(true);
+    }
+  });
+
+  it("rejects duplicate canonical paths within additional_files", () => {
+    writeFile("docs/a.md", "alpha\n");
+    writeFile("docs/b.md", "beta\n");
+    const r = validateRequest("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "...",
       risk_level: "low",
-      test_files: ["tests/src.test.ts"],
-      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
-    };
-  }
-
-  it("response.audit_error is set with the disk-full message when log.append throws", async () => {
-    const diskFullError = Object.assign(new Error("disk full"), {
-      code: "ENOSPC",
-    });
-    const ctx: ValidationContext = { repoRoot };
-    const handler = makeApplyingHandler({
-      ctx,
-      log: makeFailingLog(diskFullError),
-      applyChanges: noopApply,
-      applyCreates: noopApply,
-    });
-
-    const result = await handler("edit_boundary_condition", logFailRequest());
-    expect(result.applied).toBe(true);
-
-    // The structured contract: a typed `audit_error` field, distinct from
-    // routine validation warnings. Callers and monitoring tools can react
-    // to log failures without string-matching the warnings array.
-    expect(result.audit_error).toBeDefined();
-    expect(result.audit_error).toMatch(/disk full/);
-    expect(result.audit_error).toMatch(/ENOSPC/);
-    expect(result.audit_error).toMatch(/edit_20260501_0001/);
+      test_files: [],
+      before_sha256: sha256Hex("alpha\n"),
+      after_sha256: sha256Hex("alpha2\n"),
+      additional_files: [
+        {
+          file: "docs/b.md",
+          before_sha256: sha256Hex("beta\n"),
+          after_sha256: sha256Hex("beta2\n"),
+        },
+        {
+          file: "docs/b.md",
+          before_sha256: sha256Hex("beta\n"),
+          after_sha256: sha256Hex("beta3\n"),
+        },
+      ],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("duplicate"))).toBe(true);
+    }
   });
 
-  it("response.warnings does NOT mix log-failure with validation warnings", async () => {
-    const diskFullError = new Error("disk full");
-    const ctx: ValidationContext = { repoRoot };
-    const handler = makeApplyingHandler({
-      ctx,
-      log: makeFailingLog(diskFullError),
-      applyChanges: noopApply,
-      applyCreates: noopApply,
-    });
-
-    const result = await handler("edit_boundary_condition", logFailRequest());
-
-    // After the fix, log errors live in `audit_error`, not `warnings`. A caller
-    // using `response.warnings.length === 0` to check "clean" edits is no
-    // longer misled when there is a log failure.
-    expect(result.warnings.length).toBe(0);
-    expect(result.audit_error).toMatch(/disk full/);
-  });
-
-  it("response.audit_error is absent (undefined) when log.append succeeds", async () => {
-    const ctx: ValidationContext = { repoRoot };
-    const okLog: EditLogLike = {
-      nextEditId(): string {
-        return "edit_20260501_0099";
-      },
-      append(_entry): void {
-        /* succeed */
-      },
-    };
-    const handler = makeApplyingHandler({
-      ctx,
-      log: okLog,
-      applyChanges: noopApply,
-      applyCreates: noopApply,
-    });
-
-    const result = await handler("edit_boundary_condition", logFailRequest());
-    expect(result.applied).toBe(true);
-    expect(result.audit_error).toBeUndefined();
-  });
-
-  // Round-4 (defect 2): audit_error is also surfaced on validation-rejection
-  // paths. Previously the rejection-record audit append silently discarded
-  // its error, leaving callers blind to audit-log unavailability. The
-  // unified contract is "an audit-log write failed for this request",
-  // independent of apply outcome.
-  it("response.audit_error is set when log.append throws on validation rejection", async () => {
-    const diskFullError = Object.assign(new Error("disk full"), {
-      code: "ENOSPC",
-    });
-    const ctx: ValidationContext = { repoRoot };
-    const handler = makeApplyingHandler({
-      ctx,
-      log: makeFailingLog(diskFullError),
-      applyChanges: noopApply,
-      applyCreates: noopApply,
-    });
-
-    // empty rationale triggers a validation failure before any apply
-    const result = await handler("edit_boundary_condition", {
-      target_file: "src.ts",
-      rationale: "   ",
+  it("rejects when target_file appears again as an additional_files entry", () => {
+    writeFile("docs/a.md", "alpha\n");
+    const r = validateRequest("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "...",
       risk_level: "low",
-      test_files: ["tests/src.test.ts"],
-      changes: [makeChange("src.ts", "const x = 1;\n", "const x = 2;\n")],
-    });
+      test_files: [],
+      before_sha256: sha256Hex("alpha\n"),
+      after_sha256: sha256Hex("alpha2\n"),
+      additional_files: [
+        {
+          file: "docs/a.md",
+          before_sha256: sha256Hex("alpha\n"),
+          after_sha256: sha256Hex("alpha-other\n"),
+        },
+      ],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("duplicate"))).toBe(true);
+    }
+  });
 
-    expect(result.applied).toBe(false);
-    expect(result.audit_error).toBeDefined();
-    expect(result.audit_error).toMatch(/disk full/);
-    expect(result.audit_error).toMatch(/ENOSPC/);
-    expect(result.audit_error).toMatch(/edit_20260501_0001/);
+  it("succeeds for edit_test_only_change with empty test_files", () => {
+    writeFile("tests/foo.test.ts", "describe('foo', ()=>{})\n");
+    const r = validateRequest("edit_test_only_change", {
+      target_file: "tests/foo.test.ts",
+      rationale: "tighten the assertion",
+      risk_level: "low",
+      test_files: [],
+      before_sha256: sha256Hex("describe('foo', ()=>{})\n"),
+      after_sha256: sha256Hex("describe('foo', () => { it('x',()=>{})})\n"),
+    }, ctx());
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects edit_test_only_change with non-empty test_files", () => {
+    writeFile("tests/foo.test.ts", "x\n");
+    const r = validateRequest("edit_test_only_change", {
+      target_file: "tests/foo.test.ts",
+      rationale: "...",
+      risk_level: "low",
+      test_files: ["tests/foo.test.ts"],
+      before_sha256: sha256Hex("x\n"),
+      after_sha256: sha256Hex("y\n"),
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
+    }
   });
 });

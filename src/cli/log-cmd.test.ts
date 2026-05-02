@@ -3,30 +3,35 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { filterEntries, parseLogArgs, runLogCommand } from "./log-cmd.js";
-import { EditLog } from "../state/edit-log.js";
+import { EditLog, type IssuedEntry } from "../state/edit-log.js";
 import type { EditLogEntry } from "../state/edit-log.js";
 
-function entry(overrides: Partial<EditLogEntry> = {}): EditLogEntry {
+const HEX64_A = "a".repeat(64);
+const HEX64_B = "b".repeat(64);
+
+function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
   return {
     edit_id: "edit_20260430_0001",
-    timestamp: "2026-04-30T10:00:00+09:00",
-    tool_name: "edit_boundary_condition",
+    ts: "2026-04-30T10:00:00+09:00",
+    phase: "issued",
+    kind: "edit_boundary_condition",
     target_file: "src/foo.ts",
     rationale: "test",
     risk_level: "medium",
     test_files: ["tests/foo.test.ts"],
-    patch_size_bytes: 42,
-    applied: true,
-    warnings: [],
+    binding: [
+      { file: "src/foo.ts", before_sha256: HEX64_A, after_sha256: HEX64_B },
+    ],
+    token: "met_20260430_0123456789",
     ...overrides,
   };
 }
 
 describe("filterEntries", () => {
   const all: EditLogEntry[] = [
-    entry({ edit_id: "edit_20260428_0001", tool_name: "edit_boundary_condition", risk_level: "low",  timestamp: "2026-04-28T10:00:00+09:00" }),
-    entry({ edit_id: "edit_20260429_0001", tool_name: "edit_permission_logic",   risk_level: "high", timestamp: "2026-04-29T10:00:00+09:00" }),
-    entry({ edit_id: "edit_20260430_0001", tool_name: "edit_boundary_condition", risk_level: "high", timestamp: "2026-04-30T10:00:00+09:00" }),
+    issued({ edit_id: "edit_20260428_0001", kind: "edit_boundary_condition", risk_level: "low",  ts: "2026-04-28T10:00:00+09:00" }),
+    issued({ edit_id: "edit_20260429_0001", kind: "edit_permission_logic",   risk_level: "high", ts: "2026-04-29T10:00:00+09:00" }),
+    issued({ edit_id: "edit_20260430_0001", kind: "edit_boundary_condition", risk_level: "high", ts: "2026-04-30T10:00:00+09:00" }),
   ];
 
   it("returns all when no filter is set", () => {
@@ -56,6 +61,39 @@ describe("filterEntries", () => {
     });
     expect(r.length).toBe(1);
     expect(r[0]?.edit_id).toBe("edit_20260430_0001");
+  });
+
+  it("excludes consumed records when --tool is set (consumed has no kind)", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0010", kind: "edit_boundary_condition" }),
+      {
+        edit_id: "edit_20260430_0010",
+        ts: "2026-04-30T10:00:11+09:00",
+        phase: "consumed",
+        consuming_tool: "Edit",
+      },
+    ];
+    const r = filterEntries(mixed, { tool: "edit_boundary_condition" });
+    // Only the issued record carries `kind`; the consumed sibling drops out.
+    expect(r.length).toBe(1);
+    expect(r[0]?.phase).toBe("issued");
+  });
+
+  it("excludes non-issued records when --risk is set (only issued carries risk_level)", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0020", risk_level: "high" }),
+      {
+        edit_id: "edit_20260430_0021",
+        ts: "2026-04-30T10:01:00+09:00",
+        phase: "rejected",
+        kind: "edit_boundary_condition",
+        target_file: "src/foo.ts",
+        audit_error: "rationale must be non-empty",
+      },
+    ];
+    const r = filterEntries(mixed, { risk: "high" });
+    expect(r.length).toBe(1);
+    expect(r[0]?.phase).toBe("issued");
   });
 });
 
@@ -121,21 +159,14 @@ function tmpRepo(): string {
   return dir;
 }
 
-function poisonEntry(repoRoot: string, rationale: string): void {
-  const e: EditLogEntry = {
+function poisonRationale(repoRoot: string, rationale: string): void {
+  const e: IssuedEntry = issued({
     edit_id: "edit_20260501_0001",
-    timestamp: "2026-05-01T12:00:00+09:00",
-    tool_name: "edit_boundary_condition",
-    target_file: "src/foo.ts",
+    ts: "2026-05-01T12:00:00+09:00",
     rationale,
-    risk_level: "medium",
-    test_files: ["tests/foo.test.ts"],
-    patch_size_bytes: 42,
-    applied: true,
-    warnings: [],
-  };
+  });
   const log = new EditLog(repoRoot);
-  log.append(e);
+  log.appendIssued(e);
 }
 
 function captureLogOutput(repoRoot: string): string {
@@ -154,7 +185,7 @@ describe("ANSI escape injection - runLogCommand", () => {
   it("does NOT emit raw ANSI escape sequences from rationale", () => {
     const repoRoot = tmpRepo();
     try {
-      poisonEntry(repoRoot, "\x1b[31mFAKE_ERROR\x1b[0m");
+      poisonRationale(repoRoot, "\x1b[31mFAKE_ERROR\x1b[0m");
       const output = captureLogOutput(repoRoot);
       expect(output).not.toContain("\x1b");
     } finally {
@@ -166,18 +197,14 @@ describe("ANSI escape injection - runLogCommand", () => {
     const repoRoot = tmpRepo();
     try {
       const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
-      const e: EditLogEntry = {
+      const e: IssuedEntry = issued({
         edit_id: "edit_20260501_0002",
-        timestamp: "2026-05-01T12:00:00+09:00",
-        tool_name: "edit_boundary_condition",
+        ts: "2026-05-01T12:00:00+09:00",
         target_file: "\x1b]0;INJECTED_TITLE\x07",
         rationale: "normal rationale",
         risk_level: "low",
         test_files: [],
-        patch_size_bytes: 10,
-        applied: true,
-        warnings: [],
-      };
+      });
       fs.appendFileSync(logPath, JSON.stringify(e) + "\n");
       const output = captureLogOutput(repoRoot);
       expect(output).not.toContain("\x1b");

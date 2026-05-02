@@ -32,7 +32,7 @@ export function runSummaryCommand(options: SummaryOptions): number {
     options.since === undefined
       ? all
       : all.filter((e) => {
-          const t = new Date(e.timestamp).getTime();
+          const t = new Date(e.ts).getTime();
           return Number.isFinite(t) && t >= (options.since as Date).getTime();
         });
   const text = formatSummary(filtered, options.since);
@@ -44,23 +44,47 @@ export function formatSummary(
   entries: EditLogEntry[],
   since: Date | undefined,
 ): string {
-  const total = entries.length;
-  const applied = entries.filter((e) => e.applied).length;
-  const failed = total - applied;
+  // Reconcile by edit_id: an issued record paired with a consumed sibling is
+  // a fully-applied edit; an issued record without a consumed sibling is an
+  // abandoned/expired declaration. A rejected record never has a sibling.
+  const issuedIds = new Set<string>();
+  const consumedIds = new Set<string>();
+  const rejectedIds = new Set<string>();
+  for (const e of entries) {
+    if (e.phase === "issued") issuedIds.add(e.edit_id);
+    else if (e.phase === "consumed") consumedIds.add(e.edit_id);
+    else if (e.phase === "rejected") rejectedIds.add(e.edit_id);
+  }
+
+  // Total declarations the server processed = issued + rejected. A consumed
+  // record always has an issued sibling (or the audit log is corrupt; the
+  // reconciliation surfaces that as `issued without consumed`).
+  const totalDeclarations = issuedIds.size + rejectedIds.size;
+  let appliedCount = 0;
+  let abandonedCount = 0;
+  for (const id of issuedIds) {
+    if (consumedIds.has(id)) appliedCount++;
+    else abandonedCount++;
+  }
+  const rejectedCount = rejectedIds.size;
 
   const sinceLabel =
     since === undefined ? "all time" : `since ${formatIso(since)}`;
 
-  const byTool = countBy(entries, (e) => stripAnsi(e.tool_name));
-  const byRisk = countBy(entries, (e) => e.risk_level);
-  const byFile = countBy(entries, (e) => stripAnsi(e.target_file));
+  const issuedEntries = entries.filter(
+    (e): e is Extract<EditLogEntry, { phase: "issued" }> => e.phase === "issued",
+  );
+  const byTool = countBy(issuedEntries, (e) => stripAnsi(e.kind));
+  const byRisk = countBy(issuedEntries, (e) => e.risk_level);
+  const byFile = countBy(issuedEntries, (e) => stripAnsi(e.target_file));
 
   const lines: string[] = [];
   lines.push(`meta-edit summary (${sinceLabel})`);
   lines.push("");
-  lines.push(`Total edits: ${total}`);
-  lines.push(`  Applied successfully: ${applied}`);
-  lines.push(`  Validation failures:  ${failed}`);
+  lines.push(`Total declarations: ${totalDeclarations}`);
+  lines.push(`  Applied (issued + consumed):  ${appliedCount}`);
+  lines.push(`  Abandoned (issued, never consumed): ${abandonedCount}`);
+  lines.push(`  Rejected (validation failure): ${rejectedCount}`);
   lines.push("");
 
   lines.push("By tool:");
@@ -72,7 +96,9 @@ export function formatSummary(
     if (count === 0 && name !== "edit_policy_change") {
       continue;
     }
-    lines.push(`  ${name.padEnd(28)}${String(count).padStart(4)}  (${pct(count, total)})`);
+    lines.push(
+      `  ${name.padEnd(28)}${String(count).padStart(4)}  (${pct(count, issuedEntries.length)})`,
+    );
   }
   lines.push("");
 
