@@ -930,3 +930,44 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
   test layer and dropped hash-format zod tests). Typecheck clean,
   dist/ rebuilt.
 - Spec deviations: none.
+
+## v0.2.2: server-side active-grant lookup (dogfood-blocker fix)
+
+- Completed: 2026-05-02
+- Motivation: dogfooding v0.2.1 surfaced that Claude Code's native
+  Edit / Write / MultiEdit tools have strict input schemas that
+  reject extra fields. The framework strips `_meta_edit_token` from
+  `tool_input` before the deny-raw-edit hook ever sees it, so the
+  v0.2.0 / v0.2.1 design — agent passes token on the native call —
+  was end-to-end unusable. The agent could declare via typed_edit
+  and receive a token, but had no way to surface that token to the
+  hook; every native Edit was denied with "no _meta_edit_token".
+- What changed:
+  - `state/grants.ts`: added `findActiveBindingForFile(canonicalFile)`.
+    Scans `.meta-edit/state/grants/`, skips expired entries and
+    bindings already in `consumed_files`, returns the most-recently-
+    issued match (LIFO on `issued_at`). Existing `lookup(token_id)`
+    and `consume(token_id, file_path)` retained for audit/test paths.
+  - `hooks/raw-edit-policy.ts`: `evaluateTokenedEdit` rewritten —
+    drops the `_meta_edit_token` read from `tool_input` entirely.
+    Now: NotebookEdit guard → file_path canonicalize →
+    `findActiveBindingForFile` → before_sha256 staleness check →
+    `consume` → appendConsumed → allow. The `RawToolInput`
+    `_meta_edit_token` field type was dropped.
+  - `tools/apply.ts`: `next_action` message rewritten. Was: "pass
+    _meta_edit_token: '...'"; now: "the deny-raw-edit hook will
+    resolve this declaration automatically (no extra parameters
+    needed)". The agent only declares; the server does the rest.
+  - SPEC §5.1 pseudocode updated (server-side scan). v0.2.2 fix
+    note added under §3 next_action paragraph and §5.1.
+  - Macro-plan Part III pseudocode updated; v0.2.2 note added
+    citing the dogfood discovery. Article 5 principles unchanged
+    (binding satisfies (a) presence-check, (b) file-targeting,
+    (c) before-state agreement; only how (a) is implemented moved
+    from agent-passed to server-resolved).
+  - `package.json` and `.claude-plugin/plugin.json` bumped to 0.2.2.
+- Tests: 574 (same total as v0.2.1; +7 grants tests for
+  findActiveBindingForFile, +2 hook LIFO tests, with the obsolete
+  token-passing-in-tool_input deny / lookup tests dropped or
+  rewritten as file-based). Typecheck clean.
+- Spec deviations: none.

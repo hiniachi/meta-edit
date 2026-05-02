@@ -14,11 +14,20 @@
 //      Kept for the CLI hooks-cmd matcher tests AND used by
 //      `evaluateTokenedEdit` as the first gate.
 //
-//   2. `evaluateTokenedEdit({...})` — the token-aware flow per SPEC §5.1.
-//      Looks up the `_meta_edit_token`, finds the matching binding,
-//      verifies the disk pre-condition (current sha256 vs binding
-//      before_sha256), and consumes the binding. Appends a `consumed`
-//      record to the edit log on success.
+//   2. `evaluateTokenedEdit({...})` — the SPEC §5.1 flow. Canonicalizes
+//      the native call's `file_path`, looks up the most-recently-issued
+//      active grant covering it (server-side, by file path), verifies
+//      the disk pre-condition (current sha256 vs binding before_sha256),
+//      and consumes the binding. Appends a `consumed` record on success.
+//
+// v0.2.2 fix: agent-passed `_meta_edit_token` removed. Claude Code's
+// native Edit / Write / MultiEdit tools have strict input schemas that
+// strip / reject extra fields; the framework never delivers a token to
+// the hook. The hook now resolves the declaration server-side by
+// scanning the on-disk grants directory for the most-recently-issued
+// unconsumed binding matching the file_path. LIFO multi-match. The
+// agent makes a normal native Edit call after typed_edit; nothing
+// extra crosses the wire.
 //
 // v0.2.1 thinning: simulate() and the after_sha256 post-condition check
 // have been removed. Under Article 3 (non-adversarial threat model), the
@@ -41,7 +50,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { HookDecision } from "./hook-runtime.js";
-import type { Grant, GrantsStore } from "../state/grants.js";
+import type { GrantsStore } from "../state/grants.js";
 import type { ConsumedEntry, EditLog } from "../state/edit-log.js";
 import { isoTimestamp } from "../state/edit-log.js";
 import { realpathOfDeepestExisting } from "../utils/realpath.js";
@@ -93,14 +102,17 @@ export function evaluateRawEdit(toolName: string): HookDecision {
 // Token-aware flow (SPEC §5.1)
 // ---------------------------------------------------------------------
 
-/** Tool input payload shape (subset). All fields optional / unknown-shaped. */
+/** Tool input payload shape (subset). All fields optional / unknown-shaped.
+ *
+ * v0.2.2: `_meta_edit_token` removed — Claude Code's native Edit / Write /
+ * MultiEdit input schemas reject extra fields, so the agent cannot pass a
+ * token through. The hook resolves grants server-side by file_path. */
 export type RawToolInput = {
   file_path?: unknown;
   old_string?: unknown;
   new_string?: unknown;
   content?: unknown;
   edits?: unknown;
-  _meta_edit_token?: unknown;
 };
 
 export type TokenedEvalArgs = {
@@ -114,17 +126,21 @@ export type TokenedEvalArgs = {
 };
 
 /**
- * Run the SPEC §5.1 token-aware flow on a native Edit / Write /
- * MultiEdit / NotebookEdit call.
+ * Run the SPEC §5.1 flow on a native Edit / Write / MultiEdit /
+ * NotebookEdit call.
  *
- * Decision policy (v0.2.1):
- *   - allow: the call carries a valid token, the binding matches, and
- *     before_sha256 matches disk. The binding is consumed and a `consumed`
- *     record is appended to the edit log.
- *   - deny: any of the above checks fail; OR the toolName is not one of
- *     the four raw edit primitives (the latter should never happen when
- *     wired through the matcher, but is fail-closed); OR the toolName is
- *     NotebookEdit (out of v0.2 scope).
+ * Decision policy (v0.2.2):
+ *   - deny: toolName is not one of the four raw edit primitives
+ *     (defensive); toolName is NotebookEdit (out of v0.2 scope);
+ *     `file_path` is missing or escapes the repo; no active grant
+ *     covers `file_path`; before_sha256 disagrees with disk; consume
+ *     fails for any reason.
+ *   - allow: an active grant covers the canonicalized file_path, the
+ *     binding's before_sha256 matches disk, and consume() succeeded.
+ *     A `consumed` record is appended to the edit log.
+ *
+ * The agent passes nothing extra to native Edit / Write / MultiEdit;
+ * the hook discovers the relevant grant by file_path on its own.
  */
 export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDecision> {
   const { toolName, toolInput, repoRoot, grants, log } = args;
@@ -133,8 +149,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   // 0. The matcher should already have filtered to the four raw edits;
   // re-check defensively. evaluateRawEdit returns `allow` for unknown
   // names — promote that to a deny so a misconfigured matcher fails
-  // closed rather than waving the call through. (We never want this
-  // function to return `allow` for a non-raw-edit name.)
+  // closed rather than waving the call through.
   if (!LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
@@ -142,8 +157,9 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     };
   }
 
-  // 1. NotebookEdit is out of v0.2 scope. Refuse before token lookup so
-  // a misdirected token does not get partially consumed.
+  // 1. NotebookEdit is out of v0.2 scope. Refuse before grant lookup so
+  // a multi-binding grant covering the file does not get partially
+  // consumed by a NotebookEdit that the hook would never authorize.
   if (toolName.toLowerCase() === "notebookedit") {
     return {
       decision: "deny",
@@ -151,38 +167,18 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     };
   }
 
-  // 2. Token presence.
-  const tokenId = typeof toolInput._meta_edit_token === "string"
-    ? toolInput._meta_edit_token
-    : "";
-  if (tokenId.length === 0) {
-    return {
-      decision: "deny",
-      reason: `meta-edit denies "${toolName}": no "_meta_edit_token" parameter (call a typed edit_* first).`,
-    };
-  }
-
-  // 3. Lookup. Expired tokens read as null (grants.lookup TTL filter).
-  const grant = await grants.lookup(tokenId);
-  if (grant === null) {
-    return {
-      decision: "deny",
-      reason: `meta-edit token "${tokenId}" is expired or unknown.`,
-    };
-  }
-
-  // 4. Canonicalize the file_path. We must reach the same form as
-  // binding[].file (post-realpath, repo-relative, normalized) — the
-  // issuer populates that via tools/common.ts checkPathSafety. Failing
-  // canonicalization is a deny: a path that escapes the repo or vanishes
-  // under realpath cannot match any honest binding.
+  // 2. file_path presence + canonicalization. The grant lookup is keyed
+  // on the canonical (post-realpath, repo-relative, normalized) form
+  // produced at issue time by tools/common.ts checkPathSafety; we must
+  // reach the same form here. A path that escapes the repo or vanishes
+  // under realpath cannot match any honest binding — fail closed.
   const filePathRaw = typeof toolInput.file_path === "string"
     ? toolInput.file_path
     : "";
   if (filePathRaw.length === 0) {
     return {
       decision: "deny",
-      reason: `${toolName} call missing "file_path"; the token-aware hook requires a file path to match the binding.`,
+      reason: `${toolName} call missing "file_path"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`,
     };
   }
   const canonical = canonicalizeForBinding(filePathRaw, repoRoot);
@@ -193,26 +189,24 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     };
   }
 
-  // 5. Find the binding for this canonical path within the token.
-  const bound = findBinding(grant, canonical);
-  if (bound === null) {
+  // 3. Lookup the most-recently-issued active grant covering this file.
+  // The findActiveBindingForFile scan: not expired, file appears in
+  // binding[], file is not yet in consumed_files. LIFO on issued_at.
+  // (v0.2.2: replaces the agent-passed `_meta_edit_token` lookup —
+  // Claude Code's strict input schema strips extra fields, so the
+  // agent has no way to surface a token to the hook.)
+  const match = await grants.findActiveBindingForFile(canonical);
+  if (match === null) {
     return {
       decision: "deny",
       reason:
-        `${toolName} targets "${canonical}" but token "${tokenId}" does not bind that file. ` +
-        `Re-issue a typed_edit declaration for this file, or use the token whose binding lists it.`,
+        `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` +
+        `Call a typed edit_* MCP tool first.`,
     };
   }
-  if (grant.consumed_files.includes(canonical)) {
-    return {
-      decision: "deny",
-      reason:
-        `${toolName}'s binding for "${canonical}" has already been consumed by an earlier write. ` +
-        `Re-issue a typed_edit declaration to obtain a fresh token.`,
-    };
-  }
+  const { grant, binding: bound } = match;
 
-  // 6. Pre-condition: declared starting state matches disk.
+  // 4. Pre-condition: declared starting state matches disk.
   // ENOENT is the create-file path (treated as ""); any other read
   // failure (EACCES, EISDIR, ELOOP, …) is a fail-closed deny — we
   // cannot confirm the precondition without the bytes. (Codex v0.2.0
@@ -238,22 +232,23 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     };
   }
 
-  // 7. Pre-condition met. Consume the binding via grants.consume.
+  // 5. Pre-condition met. Consume the binding via grants.consume.
   // grants.consume serialises read/modify/write through a per-token
-  // IN-PROCESS mutex (state/grants.ts withSharedLock). The deny-raw-edit
-  // hook is, however, a single-shot Node process per Claude Code hook
-  // invocation, so two concurrent hook processes against the same token
-  // share NO mutex. Cross-process locking is out of scope per Article 7;
-  // this is the residual race accepted under Article 3 (non-adversarial
-  // threat model). The honest-mistake outcome is that the second
-  // consume() returns "binding already consumed" or "token not found" and
-  // the second native write is denied — partial workflow, not corruption.
-  const consumeRes = await grants.consume(tokenId, canonical);
+  // (per-grant-file-path) IN-PROCESS mutex (state/grants.ts
+  // withSharedLock). The deny-raw-edit hook is, however, a single-shot
+  // Node process per Claude Code hook invocation, so two concurrent
+  // hook processes against the same grant share NO mutex. Cross-process
+  // locking is out of scope per Article 7; this is the residual race
+  // accepted under Article 3 (non-adversarial threat model). The
+  // honest-mistake outcome is that the second consume() returns
+  // "binding already consumed" or "token not found" and the second
+  // native write is denied — partial workflow, not corruption.
+  const consumeRes = await grants.consume(grant.token_id, canonical);
   if (!consumeRes.consumed) {
     return {
       decision: "deny",
       reason:
-        `meta-edit could not consume token "${tokenId}" for "${canonical}": ${consumeRes.error ?? "unknown error"}.`,
+        `meta-edit could not consume the typed_edit declaration for "${canonical}": ${consumeRes.error ?? "unknown error"}.`,
     };
   }
 
@@ -284,13 +279,6 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
-
-function findBinding(grant: Grant, canonical: string) {
-  for (const b of grant.binding) {
-    if (b.file === canonical) return b;
-  }
-  return null;
-}
 
 /**
  * Canonicalize an incoming `file_path` to the same form the issuer writes

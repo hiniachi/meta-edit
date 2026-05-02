@@ -77,6 +77,11 @@ export type ConsumeResult = {
   error?: string;
 };
 
+export type ActiveBindingMatch = {
+  grant: Grant;
+  binding: GrantBinding;
+};
+
 export interface GrantsStore {
   issue(args: {
     edit_id: string;
@@ -86,6 +91,16 @@ export interface GrantsStore {
   lookup(token_id: string): Promise<Grant | null>;
 
   consume(token_id: string, file_path: string): Promise<ConsumeResult>;
+
+  /**
+   * Scan all on-disk grants and return the most-recently-issued unconsumed
+   * binding that matches `canonicalFile`. Skips expired grants and bindings
+   * already in `consumed_files`. Returns null if none match. (v0.2.2: Claude
+   * Code's native Edit/Write/MultiEdit input schemas reject extra fields, so
+   * the agent cannot surface a token to the hook; the hook resolves the
+   * declaration server-side by file path instead.)
+   */
+  findActiveBindingForFile(canonicalFile: string): Promise<ActiveBindingMatch | null>;
 
   /** Best-effort housekeeping. Returns the number of grant files removed. */
   reapExpired(): Promise<number>;
@@ -435,6 +450,63 @@ class GrantsStoreImpl implements GrantsStore {
     }
 
     return { consumed: true, fully_consumed: fullyConsumed };
+  }
+
+  async findActiveBindingForFile(
+    canonicalFile: string,
+  ): Promise<ActiveBindingMatch | null> {
+    if (typeof canonicalFile !== "string" || canonicalFile.length === 0) {
+      return null;
+    }
+    let names: string[];
+    try {
+      names = await fs.readdir(this.grantsDir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e;
+    }
+    const now = Date.now();
+    let best: ActiveBindingMatch | null = null;
+    let bestIssuedMs = -Infinity;
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const filePath = path.join(this.grantsDir, name);
+      let text: string;
+      try {
+        text = await fs.readFile(filePath, "utf8");
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+        // Best-effort: skip unreadable entries — a grant we cannot read
+        // cannot authorize a write either.
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      if (!isGrant(parsed)) continue;
+      // Skip expired grants — same TTL semantics as lookup().
+      if (Date.parse(parsed.expires_at) <= now) continue;
+      // Skip if this file is already consumed in this grant.
+      if (parsed.consumed_files.includes(canonicalFile)) continue;
+      // Find a matching unconsumed binding entry.
+      const binding = parsed.binding.find((b) => b.file === canonicalFile);
+      if (!binding) continue;
+
+      // LIFO: prefer the most-recently-issued grant (agent's freshest
+      // intent). Date.parse can return NaN for malformed input; isGrant
+      // already guarantees issued_at is a string but does not validate
+      // ISO format, so guard against NaN by treating it as "very old".
+      const issuedMs = Date.parse(parsed.issued_at);
+      const issuedScore = Number.isFinite(issuedMs) ? issuedMs : -Infinity;
+      if (issuedScore > bestIssuedMs) {
+        bestIssuedMs = issuedScore;
+        best = { grant: parsed, binding };
+      }
+    }
+    return best;
   }
 
   async reapExpired(): Promise<number> {

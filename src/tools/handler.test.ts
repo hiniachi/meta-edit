@@ -89,13 +89,15 @@ describe("makeIssuingHandler — successful declaration", () => {
     expect(typeof result.expires_at).toBe("string");
     expect(result.expires_at.length).toBeGreaterThan(0);
 
-    // v0.2.1: next_action is populated whenever a token is issued so the
-    // agent doesn't have to know the _meta_edit_token contract from
-    // outside the tool surface (SPEC §3 / Article 4 — server-handled
-    // bookkeeping).
+    // v0.2.2: next_action is populated whenever a token is issued so the
+    // agent gets a friendly reminder that the next native Edit / Write /
+    // MultiEdit call will be authorized automatically (SPEC §3 / Article
+    // 4 — server-handled bookkeeping). The message no longer references
+    // `_meta_edit_token` because Claude Code's strict input schema rejects
+    // extra fields; the hook resolves the declaration server-side.
     expect(typeof result.next_action).toBe("string");
     expect(result.next_action!.length).toBeGreaterThan(0);
-    expect(result.next_action).toContain("_meta_edit_token");
+    expect(result.next_action).not.toContain("_meta_edit_token");
     expect(result.next_action).toContain(result.expires_at);
 
     // Grant is queryable.

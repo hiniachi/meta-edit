@@ -336,7 +336,9 @@ Replace the entire `## 5.` block (from `## 5. Hooks` to the next `---` separator
 
 Two PreToolUse hooks, both shipped under `hooks/` in this repo.
 
-### 5.1. deny-raw-edit (token-aware)
+### 5.1. deny-raw-edit (server-side declaration lookup)
+
+> **v0.2.2 fix** — current canonical pseudocode is in `docs/SPEC.md` §5.1. The version preserved below is the v0.2.0 / v0.2.1 historical baseline that this task initially shipped. v0.2.2 dropped the `_meta_edit_token` field (Claude Code's strict input schema strips extras) and replaced it with a server-side `grants.findActiveBindingForFile(file_path)` scan with LIFO multi-match. v0.2.1 had already removed the `simulate()` post-condition replay. The task description below is left as-is for git-history continuity.
 
 Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit` tools. Validates that each call carries a `_meta_edit_token` parameter referencing a fresh declaration in `.meta-edit/state/grants/`.
 
