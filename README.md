@@ -9,7 +9,6 @@
 
 > An MCP server that replaces a coding agent's generic file-edit tool with **nineteen kind-specific edit tools**, each encoding the testing obligations for that kind of change directly in its tool description.
 
-**破壊的な変更を実施中なので、v0.1.5を推奨**
 
 ## Why typed edits?
 
