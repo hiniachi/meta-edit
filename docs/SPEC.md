@@ -287,36 +287,30 @@ The MVP is built to find out whether this works. If AIs systematically misuse `e
 ## 2. Architecture
 
 ```
-Claude Code
+Claude Code (host)
   │
-  │ built-in Edit / Write / MultiEdit / NotebookEdit: deny via permissions
-  │
+  │  Edit / Write / MultiEdit / NotebookEdit
   ▼
-Hook layer (minimal, just two)
-  ├─ PreToolUse: deny-raw-edit
-  └─ PreToolUse: deny-bash-write-bypass
-  │
+PreToolUse hook: deny-raw-edit (token-aware, see §5)
+  ├─ valid token + sha256 checks pass → allow + consume
+  └─ otherwise → deny
   ▼
+File system (write performed by native Edit/Write)
+
+Independently:
+PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
+
 MCP server: meta-edit-mcp
-  ├─ edit_refactor_only          edit_test_only_change
-  ├─ edit_boundary_condition     edit_boolean_condition
-  ├─ edit_state_transition       edit_db_schema
-  ├─ edit_data_migration         edit_api_contract
-  ├─ edit_serialization          edit_error_handling
-  ├─ edit_retry_timeout          edit_concurrency
-  ├─ edit_external_side_effect   edit_cache_invalidation
-  ├─ edit_permission_logic       edit_dependency_config
-  └─ edit_policy_change
-  │
-  ▼
+  ├─ 17 SQLite-discipline-derived tools (single-file declarations)
+  ├─ 2 workflow tools (batch declarations of N files)
+  └─ Issues tokens; never writes files
+
 State
-  └─ .meta-edit/state/edits.jsonl    (append-only edit log, protected)
-  │
-  ▼
+  ├─ .meta-edit/state/grants/         in-flight tokens
+  └─ .meta-edit/state/edits.jsonl     append-only audit log
+
 CLI
-  ├─ meta-edit serve                  (start MCP stdio server)
-  ├─ meta-edit log                    (display edits)
-  └─ meta-edit summary                (aggregate by tool / risk / file)
+  ├─ meta-edit serve / log / summary
 ```
 
 That is the entire system.
