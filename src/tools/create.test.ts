@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, it, expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -214,6 +214,53 @@ describe("applyCreates", () => {
     const result = applyCreates(tmpRoot, [create("src/empty.ts", "")]);
     expect(result.applied).toBe(true);
     expect(fs.readFileSync(path.join(tmpRoot, "src/empty.ts"), "utf8")).toBe("");
+  });
+
+  // Regression for issue 2026-05-02-1000: applyCreates leaves the
+  // partially-created file on disk after a write/fsync failure (e.g.
+  // ENOSPC mid-write), blocking retries with EEXIST. The fix unlinks
+  // the target in the catch branch when fd is non-null AND code is not
+  // EEXIST/ELOOP (those are open-time errors where the file was never
+  // created). Simulate ENOSPC on the first fd-based writeFileSync.
+  it("removes the file created by openSync when writeFileSync fails (ENOSPC simulation, issue 1000)", () => {
+    ensureParent("src/new.ts");
+
+    const originalWriteFileSync = fs.writeFileSync;
+    let writeCallCount = 0;
+    const spy = spyOn(fs, "writeFileSync");
+    spy.mockImplementation(((fdOrPath: unknown, ...args: unknown[]) => {
+      // Throw ENOSPC on the first fd-based write — the applyCreates
+      // content write opens with O_CREAT|O_EXCL, then writes by fd.
+      if (typeof fdOrPath === "number") {
+        writeCallCount++;
+        if (writeCallCount === 1) {
+          const err = Object.assign(
+            new Error("ENOSPC: no space left on device, write"),
+            { code: "ENOSPC" },
+          );
+          throw err;
+        }
+      }
+      return (originalWriteFileSync as (...a: unknown[]) => unknown)(
+        fdOrPath,
+        ...args,
+      );
+    }) as typeof fs.writeFileSync);
+
+    try {
+      const result = applyCreates(tmpRoot, [create("src/new.ts", "alpha\n")]);
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(
+          result.warnings.some((w) => w.includes("src/new.ts")),
+        ).toBe(true);
+      }
+      // Critical: the partially-created file MUST NOT remain on disk
+      // after the fix; otherwise a retry would hit EEXIST forever.
+      expect(fs.existsSync(path.join(tmpRoot, "src/new.ts"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("surfaces partial-write warning when an earlier create succeeds and a later one fails on parent permissions", () => {

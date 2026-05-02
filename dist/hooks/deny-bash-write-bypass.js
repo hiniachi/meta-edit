@@ -79,6 +79,20 @@ function replyDeny(reason) {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
+function replyAllowWithWarning(reason) {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      permissionDecisionReason: reason,
+      additionalContext: reason
+    }
+  };
+  process.stdout.write(JSON.stringify(payload));
+  process.stderr.write(`[meta-edit] ${reason}
+`);
+  return 0;
+}
 
 // src/hooks/bash-write-policy.ts
 import * as path3 from "node:path";
@@ -185,7 +199,7 @@ function isProtectedPath(p, options = {}) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.4",
+  version: "0.1.5",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -329,12 +343,18 @@ function evaluateBashCommand(command, opts = {}) {
   if (segments.length === 0) {
     return { decision: "allow" };
   }
+  let firstWarn = null;
   for (const segment of segments) {
     const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
+    if (decision.decision === "warn" && firstWarn === null) {
+      firstWarn = decision;
+    }
   }
+  if (firstWarn !== null)
+    return firstWarn;
   return { decision: "allow" };
 }
 function evaluateSegment(rawSegment, opts = {}) {
@@ -366,14 +386,18 @@ function evaluateSegment(rawSegment, opts = {}) {
       };
     }
   }
-  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
-  if (hostedDeny !== null) {
-    return hostedDeny;
+  let firstWarn = null;
+  const hosted = evaluateShellHostedPayload(rawSegment, opts);
+  if (hosted !== null) {
+    if (hosted.decision === "deny")
+      return hosted;
+    if (hosted.decision === "warn")
+      firstWarn = hosted;
   }
-  if (redirectsToInRepoPath(rawSegment)) {
-    return {
-      decision: "deny",
-      reason: "command redirects (`>` / `>>` / `>|`) to a path that is not on " + "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). Use an edit_* tool for in-repo writes; capture command " + "output to /tmp/ or /dev/null if you need a sink."
+  if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
+    firstWarn = {
+      decision: "warn",
+      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_create_file, edit_refactor_only); this redirect is " + "permitted but is recorded as a bypass-risk and may be " + "tightened to deny in a future version."
     };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
@@ -414,6 +438,8 @@ function evaluateSegment(rawSegment, opts = {}) {
       reason: "inline interpreter write (python -c / node -e / perl -e / ruby -e / php -r) " + "is a bash bypass; use an edit_* tool instead."
     };
   }
+  if (firstWarn !== null)
+    return firstWarn;
   return { decision: "allow" };
 }
 function splitSegments(cmd) {
@@ -1084,7 +1110,10 @@ function recursivelyEvaluateArg(arg, opts) {
     return null;
   const deEscaped = arg.replace(/\\/g, "");
   const decision = evaluateBashCommand(deEscaped, opts);
-  return decision.decision === "deny" ? decision : null;
+  if (decision.decision === "deny" || decision.decision === "warn") {
+    return decision;
+  }
+  return null;
 }
 function extractEvalArg(rawSegment) {
   let s = stripLeadingEnvAssignments(rawSegment.trimStart());
@@ -1120,7 +1149,7 @@ function extractEvalArg(rawSegment) {
   }
   return null;
 }
-function redirectsToInRepoPath(rawSegment) {
+function redirectsOutsideSafeSinkAllowlist(rawSegment) {
   for (const target of iterRedirectTargets(rawSegment)) {
     if (target.length === 0)
       continue;
@@ -1572,6 +1601,9 @@ async function main() {
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-bash-write-bypass");
   }
+  if (decision.decision === "warn") {
+    return replyAllowWithWarning(decision.reason ?? "redirect target outside safe-sink allowlist");
+  }
   return replyAllow();
 }
 main().then((code) => process.exit(code), (err) => {
@@ -1579,4 +1611,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=3235C159A30AA00664756E2164756E21
+//# debugId=CA4ED39E8754901864756E2164756E21

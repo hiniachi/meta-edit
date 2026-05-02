@@ -18873,6 +18873,11 @@ function applyCreates(repoRoot, changes, options = {}) {
       fs4.fsyncSync(fd);
     } catch (e) {
       const code = e?.code;
+      if (fd !== null && code !== "EEXIST" && code !== "ELOOP") {
+        try {
+          fs4.unlinkSync(w.absolute);
+        } catch {}
+      }
       const reason = code === "EEXIST" ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)` : code === "ELOOP" ? `change.file "${w.canonical}" resolves through a symlink at the leaf; O_NOFOLLOW refused` : `failed to create "${w.canonical}": ${code ?? "ERR"}`;
       warnings.push(reason);
       partialWriteWarning();
@@ -19055,10 +19060,14 @@ class EditLog {
     }
   }
   readAll() {
-    if (!fs5.existsSync(this.logPath)) {
-      return [];
+    let text;
+    try {
+      text = fs5.readFileSync(this.logPath, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return [];
+      throw e;
     }
-    const text = fs5.readFileSync(this.logPath, "utf8");
     const out = [];
     for (const line of text.split(`
 `)) {
@@ -19141,7 +19150,7 @@ function formatDayKey(d) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.4",
+  version: "0.1.5",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19247,4 +19256,4 @@ export {
   createServer
 };
 
-//# debugId=E5EED1ECAB499DBE64756E2164756E21
+//# debugId=3F93E77ABD48965C64756E2164756E21

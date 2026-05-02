@@ -6,6 +6,13 @@
 // has no fallback path that bypasses the nineteen typed tools.
 
 import { SPEC_TOOLS_URL } from "../docs-urls.js";
+// HookDecision is the canonical shape shared with bash-write-policy.
+// Imported (not redeclared) so any future addition to the decision
+// union (beyond `allow` / `deny` / `warn`) does not silently diverge
+// between the two policies.
+import type { HookDecision } from "./hook-runtime.js";
+
+export type { HookDecision };
 
 export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "Edit",
@@ -25,11 +32,6 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
 const LOWER_RAW_EDIT_TOOLS: ReadonlySet<string> = new Set(
   [...RAW_EDIT_TOOLS].map((t) => t.toLowerCase()),
 );
-
-export type HookDecision = {
-  decision: "allow" | "deny";
-  reason?: string;
-};
 
 export function evaluateRawEdit(toolName: string): HookDecision {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {

@@ -298,10 +298,22 @@ export class EditLog {
   }
 
   readAll(): EditLogEntry[] {
-    if (!fs.existsSync(this.logPath)) {
-      return [];
+    // Issue 2026-05-02-1002: previously this method did existsSync +
+    // readFileSync, leaving a TOCTOU window where ENOENT from
+    // readFileSync after a true-returning existsSync would propagate as
+    // an uncaught error and crash `meta-edit log` / `meta-edit summary`.
+    // Drop existsSync and catch ENOENT directly; this matches the
+    // pattern already used by scanMaxCounterForKey below. Non-ENOENT
+    // errors (EACCES, EIO, EISDIR, …) still propagate so a corrupt or
+    // unreadable log surfaces as an error rather than a silent empty
+    // read.
+    let text: string;
+    try {
+      text = fs.readFileSync(this.logPath, "utf8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
     }
-    const text = fs.readFileSync(this.logPath, "utf8");
     const out: EditLogEntry[] = [];
     for (const line of text.split("\n")) {
       const trimmed = line.trim();

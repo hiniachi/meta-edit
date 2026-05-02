@@ -45,7 +45,10 @@ That is the entire reading list.
 Everything in `SPEC.md`. Specifically:
 
 - Nineteen `edit_*` MCP tools, each with the description from `SPEC.md` §4
-- Two hooks: `deny-raw-edit`, `deny-bash-write-bypass`
+- Two hooks: `deny-raw-edit`, `deny-bash-write-bypass`. The bash hook's
+  structural redirect-target rule is **warn-only** since v0.1.5 (verb-deny
+  and protected-path checks remain deny). See `SPEC.md` §5.2 for the
+  contract and `OBSERVED-FAILURES.md` for the warn→deny restore trigger.
 - Argument validation (rationale non-empty, test_files non-empty where required, target_file inside repo, target_file not in protected paths, patch applies cleanly)
 - Edit log at `.meta-edit/state/edits.jsonl`
 - Protected paths: `.meta-edit/state/**`, `.meta-edit/tmp/**`
