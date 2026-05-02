@@ -94,6 +94,31 @@ describe("filterEntries", () => {
     expect(r[0]?.phase).toBe("issued");
   });
 
+  // Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+  // filterEntries used to drop unparseable ts only when --since was set,
+  // creating a count discrepancy between filtered and unfiltered views.
+  // Now invalid ts is dropped unconditionally.
+  it("drops entries with unparseable ts even without --since (inversion test)", () => {
+    const bad = issued({ edit_id: "edit_bad_0001", ts: "not-a-date" });
+    const r = filterEntries([bad], {});
+    // OLD behavior: kept (length 1). NEW behavior: dropped (length 0).
+    expect(r.length).toBe(0);
+  });
+
+  it("drops entries with unparseable ts when --since is set (existing path, now unified)", () => {
+    const bad = issued({ edit_id: "edit_bad_0002", ts: "not-a-date" });
+    const r = filterEntries([bad], {
+      since: new Date("2026-04-29T00:00:00+09:00"),
+    });
+    expect(r.length).toBe(0);
+  });
+
+  it("keeps entries with valid ts regardless of --since (regression-free)", () => {
+    const good = issued({ edit_id: "edit_good_0001", ts: "2026-04-30T10:00:00+09:00" });
+    expect(filterEntries([good], {}).length).toBe(1);
+    expect(filterEntries([good], { since: new Date("2026-04-29T00:00:00+09:00") }).length).toBe(1);
+  });
+
   it("excludes non-issued records when --risk is set (only issued carries risk_level)", () => {
     const mixed: EditLogEntry[] = [
       issued({ edit_id: "edit_20260430_0020", risk_level: "high" }),

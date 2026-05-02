@@ -18523,6 +18523,9 @@ function runLogCommand(options) {
 }
 function filterEntries(entries, filters) {
   return entries.filter((e) => {
+    const ts = parseTimestamp(e.ts);
+    if (ts === null)
+      return false;
     if (filters.tool !== undefined) {
       if (e.phase === "consumed")
         return false;
@@ -18536,10 +18539,7 @@ function filterEntries(entries, filters) {
         return false;
     }
     if (filters.since !== undefined) {
-      const t = parseTimestamp(e.ts);
-      if (t === null)
-        return false;
-      if (t.getTime() < filters.since.getTime())
+      if (ts.getTime() < filters.since.getTime())
         return false;
     }
     return true;
@@ -18606,9 +18606,10 @@ function stripAnsi(s) {
 function runSummaryCommand(options) {
   const log = new EditLog(options.repoRoot);
   const all = log.readAll();
-  const filtered = options.since === undefined ? all : all.filter((e) => {
+  const tsValid = all.filter((e) => Number.isFinite(new Date(e.ts).getTime()));
+  const filtered = options.since === undefined ? tsValid : tsValid.filter((e) => {
     const t = new Date(e.ts).getTime();
-    return Number.isFinite(t) && t >= options.since.getTime();
+    return t >= options.since.getTime();
   });
   const text = formatSummary(filtered, options.since);
   options.out.write(text);
@@ -19077,4 +19078,4 @@ export {
   main
 };
 
-//# debugId=99587781196FA43864756E2164756E21
+//# debugId=8BBFA82BBC45DD6F64756E2164756E21

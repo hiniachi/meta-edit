@@ -35,12 +35,16 @@ export type SummaryOptions = {
 export function runSummaryCommand(options: SummaryOptions): number {
   const log = new EditLog(options.repoRoot);
   const all = log.readAll();
+  // Unparseable timestamps are dropped UNCONDITIONALLY so summary counts
+  // never silently change between with-and-without --since views. Per
+  // issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+  const tsValid = all.filter((e) => Number.isFinite(new Date(e.ts).getTime()));
   const filtered =
     options.since === undefined
-      ? all
-      : all.filter((e) => {
+      ? tsValid
+      : tsValid.filter((e) => {
           const t = new Date(e.ts).getTime();
-          return Number.isFinite(t) && t >= (options.since as Date).getTime();
+          return t >= (options.since as Date).getTime();
         });
   const text = formatSummary(filtered, options.since);
   options.out.write(text);

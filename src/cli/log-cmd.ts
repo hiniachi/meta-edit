@@ -37,6 +37,12 @@ export function filterEntries(
   filters: LogFilters,
 ): EditLogEntry[] {
   return entries.filter((e) => {
+    // Unparseable timestamps are dropped UNCONDITIONALLY (whether or not
+    // --since is in play) so that invalid-ts entries can never silently
+    // change the count between filtered and unfiltered views. Per issue
+    // 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+    const ts = parseTimestamp(e.ts);
+    if (ts === null) return false;
     if (filters.tool !== undefined) {
       // `kind` only exists on issued + rejected; consumed records carry
       // only the consuming_tool, which is never an edit_* tool name.
@@ -50,9 +56,7 @@ export function filterEntries(
       if (e.risk_level !== filters.risk) return false;
     }
     if (filters.since !== undefined) {
-      const t = parseTimestamp(e.ts);
-      if (t === null) return false;
-      if (t.getTime() < filters.since.getTime()) return false;
+      if (ts.getTime() < filters.since.getTime()) return false;
     }
     return true;
   });

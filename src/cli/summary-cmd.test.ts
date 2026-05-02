@@ -103,6 +103,48 @@ describe("formatSummary", () => {
   });
 });
 
+// Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter
+// (summary-cmd half). Mirrors the log-cmd half: invalid ts dropped both with
+// and without --since for consistent counts.
+describe("runSummaryCommand — invalid timestamp handling", () => {
+  it("drops entries with unparseable ts even without --since (inversion)", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-bad-ts-1-"));
+    fs.mkdirSync(path.join(repoRoot, ".meta-edit", "state"), { recursive: true });
+    try {
+      const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
+      const bad: IssuedEntry = issued({ edit_id: "edit_bad_0010", ts: "not-a-date" });
+      fs.appendFileSync(logPath, JSON.stringify(bad) + "\n");
+      const chunks: string[] = [];
+      const out = { write(c: string) { chunks.push(c); return true; } } as unknown as NodeJS.WritableStream;
+      const err = { write(_c: string) { return true; } } as unknown as NodeJS.WritableStream;
+      runSummaryCommand({ repoRoot, out, err });
+      const output = chunks.join("");
+      // Without the fix, the invalid-ts entry inflates Total declarations to 1.
+      expect(output).toContain("Total declarations: 0");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("drops entries with unparseable ts when --since is set (existing path)", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-bad-ts-2-"));
+    fs.mkdirSync(path.join(repoRoot, ".meta-edit", "state"), { recursive: true });
+    try {
+      const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
+      const bad: IssuedEntry = issued({ edit_id: "edit_bad_0011", ts: "not-a-date" });
+      fs.appendFileSync(logPath, JSON.stringify(bad) + "\n");
+      const chunks: string[] = [];
+      const out = { write(c: string) { chunks.push(c); return true; } } as unknown as NodeJS.WritableStream;
+      const err = { write(_c: string) { return true; } } as unknown as NodeJS.WritableStream;
+      runSummaryCommand({ repoRoot, since: new Date("2026-01-01T00:00:00Z"), out, err });
+      const output = chunks.join("");
+      expect(output).toContain("Total declarations: 0");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("parseSummaryArgs", () => {
   it("parses --since YYYY-MM-DD", () => {
     const r = parseSummaryArgs(["--since", "2026-04-30"]);
