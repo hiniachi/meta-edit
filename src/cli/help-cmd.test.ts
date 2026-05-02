@@ -62,9 +62,11 @@ describe("renderHelp — per-tool full description", () => {
   });
 
   it("includes the tool name in a banner above the description", () => {
-    const result = renderHelp("edit_create_file");
+    // v0.3.1: edit_create_file was dropped; use edit_docs_only as a
+    // sample workflow tool that's still in TOOL_NAMES.
+    const result = renderHelp("edit_docs_only");
     if (!result.ok) throw new Error("expected ok=true");
-    expect(result.output).toContain("edit_create_file");
+    expect(result.output).toContain("edit_docs_only");
   });
 
   it("rejects unknown tool names with a discoverable error", () => {

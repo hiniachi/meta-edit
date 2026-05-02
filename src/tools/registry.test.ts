@@ -5,14 +5,15 @@ import {
   TOOLS_REQUIRING_TEST_FILES,
 } from "./descriptions.js";
 
-describe("twenty tools", () => {
-  it("registers exactly twenty tool names", () => {
-    // v0.2.4: 17 SQLite-derived + 3 workflow tools (edit_docs_only,
-    // edit_create_file, edit_create_planning_artifact). Issue 1104
-    // added the third workflow tool for planning-only artifacts where
-    // no test obligation applies.
-    expect<number>(TOOL_NAMES.length).toBe(20);
-    expect(new Set(TOOL_NAMES).size).toBe(20);
+describe("eighteen tools", () => {
+  it("registers exactly eighteen tool names", () => {
+    // v0.3.1: edit_create_file and edit_create_planning_artifact were
+    // dropped. Empty file creation is now free at the deny-raw-edit
+    // hook level; content fills go through the appropriate type-specific
+    // tool's modify path. Surface count: 17 SQLite-derived + 1 workflow
+    // tool (edit_docs_only) = 18.
+    expect<number>(TOOL_NAMES.length).toBe(18);
+    expect(new Set(TOOL_NAMES).size).toBe(18);
   });
 
   it("has a non-empty description for each tool", () => {
@@ -30,37 +31,15 @@ describe("twenty tools", () => {
     );
   });
 
-  it("registers edit_create_file with a verbatim creation description", () => {
-    expect(TOOL_NAMES).toContain("edit_create_file");
-    // Description must mention the explicit non-existent precondition and the
-    // Case C declaration-time invariant (target_file must not exist; binding
-    // fails if any path already exists). These are the load-bearing
-    // properties that distinguish creation from modify.
-    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
-      "Create a new file",
-    );
-    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
-      "the binding fails if any path already exists on disk",
-    );
-    // v0.2.1: the server binds before_sha256 to sha256("") itself; the
-    // description tells the agent the file must not exist on disk and that
-    // the binding is server-computed.
-    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
-      'the server binds `before_sha256` to `sha256("")`',
-    );
+  it("does NOT register edit_create_file or edit_create_planning_artifact (v0.3.1 removal)", () => {
+    expect(TOOL_NAMES).not.toContain("edit_create_file" as never);
+    expect(TOOL_NAMES).not.toContain("edit_create_planning_artifact" as never);
   });
 
   it("treats edit_docs_only as test-files-optional, like edit_refactor_only", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_docs_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_refactor_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_test_only_change");
-  });
-
-  it("requires test_files for edit_create_file", () => {
-    // Per dogfood-006: bootstrapping new files always introduces new code
-    // that needs coverage; creation without declared tests is the bootstrap
-    // anti-pattern this tool exists to displace.
-    expect(TOOLS_REQUIRING_TEST_FILES).toContain("edit_create_file");
   });
 
   it("includes the universal General principles block verbatim in every description", () => {

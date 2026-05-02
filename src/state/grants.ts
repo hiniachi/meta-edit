@@ -37,10 +37,11 @@ import * as path from "node:path";
  * from accumulating abandoned files), not a defensive boundary. Agent
  * thinking time between typed_edit and the native Edit / Write call can
  * comfortably exceed 30 seconds — especially during multi-step reasoning
- * or when the user pauses — and a 5-minute window absorbs that without
- * weakening the model. (v0.2.1: extended from 30s.)
+ * or when the user pauses — and a 10-minute window absorbs that without
+ * weakening the model. (v0.2.1: extended from 30s; v0.3.1: 5 → 10 min
+ * after dogfood report that medium-size edits expired mid-thought.)
  */
-export const GRANT_TTL_MS = 300_000;
+export const GRANT_TTL_MS = 600_000;
 
 export type GrantBinding = {
   /** Absolute path (post-realpath) of the file this binding governs. */

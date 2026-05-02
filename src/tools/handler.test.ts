@@ -207,36 +207,12 @@ describe("makeIssuingHandler — validation rejection", () => {
     );
   });
 
-  it("rejects edit_create_file when target already exists", async () => {
-    writeFile("src/foo.ts", "hello\n");
-    await expectRejection(
-      "edit_create_file",
-      modifyRequest(),
-      (w) => w.some((s) => s.includes("already exists")),
-    );
-  });
-
-  it("accepts edit_create_file when target does not exist (server binds sha256(\"\"))", async () => {
-    fs.mkdirSync(path.join(tmpRoot, "src")); // parent dir required (v0.2.2 issue 1101)
-    const { handler, log, grants } = makeHandler();
-    const result = await handler(
-      "edit_create_file",
-      {
-        target_file: "src/new.ts",
-        rationale: "scaffold a new module",
-        risk_level: "low",
-        test_files: ["tests/new.test.ts"],
-      },
-    );
-    expect(result.warnings).toEqual([]);
-    expect(result.token.length).toBeGreaterThan(0);
-    const grant = await grants.lookup(result.token);
-    expect(grant?.binding[0]?.before_sha256).toBe(SHA256_EMPTY);
-
-    const entries = log.readAll();
-    expect(entries.length).toBe(1);
-    expect(entries[0]?.phase).toBe("issued");
-  });
+  // v0.3.1 removal: edit_create_file is gone. Empty file creation is
+  // hook-free (deny-raw-edit allows content === "" Write to a non-
+  // existent in-repo path). Content fills run against the now-empty
+  // file via the appropriate type-specific tool. The 2 handler tests
+  // that asserted edit_create_file's already-exists rejection and
+  // sha256("") binding accept were dropped along with the tool.
 
   it("rejects target_file outside the repo", async () => {
     writeFile("src/foo.ts", "hello\n");

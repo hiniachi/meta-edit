@@ -51,13 +51,15 @@ export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 export const MAX_ADDITIONAL_FILES = 32;
 
 // SQLite-derived tools (the 17): MUST omit `additional_files`.
-// Workflow tools (the 3: edit_docs_only, edit_create_file,
-// edit_create_planning_artifact): MAY include it. (v0.2.4 added the
-// third workflow tool — issue 1104.)
+// Workflow tool (only 1 remaining post-v0.3.1: edit_docs_only): MAY
+// include it for sweeping documentation updates. v0.3.1 dropped
+// edit_create_file and edit_create_planning_artifact when empty
+// creates became free at the deny-raw-edit hook level (no MCP
+// declaration needed for an empty Write to a non-existent in-repo
+// path). additional_files now functions purely as a doc-batching
+// affordance.
 export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
   "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact",
 ];
 
 export const EditToolRequestSchema = z
@@ -217,14 +219,13 @@ export function validateRequest(
   }
 
   // ---- 5. target_file path-safety + disk read -------------------------
-  // edit_create_planning_artifact is CREATE-only (per its description),
-  // so the same "target MUST NOT exist; before_sha256 = sha256("")"
-  // validation path applies. Codex HIGH review: without this branch
-  // the validator falls through to modify-mode and rejects every
-  // planning-artifact filing on ENOENT.
-  const isCreate =
-    toolName === "edit_create_file" ||
-    toolName === "edit_create_planning_artifact";
+  // v0.3.1: no typed_edit tool flags as CREATE. Empty file creation is
+  // a free native Write at the deny-raw-edit hook level (no MCP
+  // declaration); content fills run in modify mode against the now-
+  // empty file (before_sha256 = sha256("")). isCreate is retained as a
+  // constant for the validation surface in case a typed create
+  // primitive returns later, but is currently always false.
+  const isCreate = false;
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding: ValidatedBinding | null = null;
   if (!targetCheck.ok) {
