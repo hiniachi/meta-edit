@@ -6,6 +6,265 @@ This document is the complete specification of `meta-edit`.
 
 ---
 
+## Part I — Constitution
+
+### Article 1 — Mission
+
+`meta-edit` replaces the AI coding agent's raw file-editing tools with
+a family of typed declaration tools. Each tool is registered separately
+under a Model Context Protocol server with a description that encodes
+when it must be used, when it must not be used, and what tests must
+accompany the edit. **The descriptions are the product.** Everything
+else is plumbing for getting the descriptions in front of the agent at
+the moment of edit.
+
+### Article 2 — The bet
+
+A well-designed tool surface is more useful than a complex verification
+surface. By forcing the agent to classify its intent before each
+modification — as a tool-selection step, recorded in a tool call —
+behavior is shaped at the moment the edit is being formed, not after
+the fact.
+
+The MVP is run to find out whether this works. If the experiment shows
+that descriptions alone are insufficient, the next addition is a
+lightweight diff classifier as a backstop. Adding detection prematurely
+makes the question impossible to answer cleanly, so it is forbidden in
+MVP scope (see Article 7).
+
+Falsifiability is a known gap of this article: "do descriptions change
+behavior" is sharper if accompanied by observable measurements. The
+edit log already records every typed call; useful indicators that
+should be derivable from it include declaration-without-Edit
+follow-through rate, expired-token rate, and per-tool selection
+distribution against a manually classified ground truth. Concrete
+thresholds for "descriptions are insufficient → add a classifier" are
+left for v0.2 observation, but the indicators above are the intended
+signal channel.
+
+### Article 3 — Threat model
+
+The user's AI agent is assumed to be **lazy, fallible, and
+non-adversarial.**
+
+- **Lazy** — It skips declaration steps that feel like ceremony.
+  It batches when batching feels natural. It routes around friction
+  (shell redirects, alternative tools, encoded payloads) when the
+  typed path is more expensive than a workaround.
+- **Fallible** — It misclassifies edits. It lists wrong test files.
+  It writes subtly incorrect content despite holding the right
+  intent. Honest mistakes are the modal failure.
+- **Non-adversarial** — It does not race the hook. It does not forge
+  tokens. It does not exfiltrate. It does not deliberately evade.
+  Prompt-injection-compromised agents are explicitly out of scope;
+  defending against them requires sandboxing, not declaration
+  discipline.
+
+This is the operative threat model. **Misalignment with this model is
+the historical source of implementation bloat in this project**:
+defenses designed against adversarial scenarios (deep TOCTOU loops,
+HMAC signing, sibling-temp atomicity, exhaustive symlink resolution)
+accreted in `apply.ts` and the hooks even though the actual operator
+was always lazy-and-fallible. This article exists so that the next
+round of "we should harden X" review pressure is adjudicated against
+the right adversary, not against an imagined attacker.
+
+Two consequences follow:
+
+1. **Ergonomics is a primary constraint, not a nice-to-have.** The
+   typed surface MUST be at least as ergonomic as native Edit plus
+   one declaration step. If using the typed tool feels harder than
+   slipping a `cat > file` past the hook, the lazy agent will skip
+   it, and the trial returns no signal.
+2. **The bash-write-policy hook is the load-bearing defense line for
+   accidental bypass routes**, not for adversarial forgery. Even when
+   the server delegates writes to native Edit (Article 5), an honest
+   `printf > .meta-edit/state/grants/...` typo still has to be
+   blocked. Hardening against deliberate forgery is out of scope.
+
+What is NOT defended against (constitutionally accepted): an agent
+that deliberately mis-selects a tool, lists irrelevant files in
+`test_files`, or writes plausible-but-false `rationale` text. Catching
+these requires diff classification or test-content inspection, which
+Article 7 forbids in MVP. Under the non-adversarial assumption, these
+are honest classification mistakes, not deception, and the cure is
+description-tuning (not detection).
+
+### Article 4 — Surface: nineteen tools (17 + 2)
+
+**Seventeen SQLite-derived tools.** Each is one element of a bug-class
+classification grounded in SQLite's testing strategy
+(https://sqlite.org/testing.html). The strategy's *per-change
+checklist* discipline maps each bug class to a specific obligation
+pattern (boundary triple, MC/DC, anomaly testing, etc.). The
+categories themselves are application-level (permission logic, API
+contract, …) — what is borrowed from SQLite is the discipline of
+classifying every edit before it lands. `edit_refactor_only` is the
+zero element of this classification: a change that introduces no new
+bug class, so existing tests must remain sufficient.
+
+```
+edit_refactor_only            edit_test_only_change
+edit_boundary_condition       edit_boolean_condition
+edit_state_transition         edit_db_schema
+edit_data_migration           edit_api_contract
+edit_serialization            edit_error_handling
+edit_retry_timeout            edit_concurrency
+edit_external_side_effect     edit_cache_invalidation
+edit_permission_logic         edit_dependency_config
+edit_policy_change
+```
+
+**Two workflow-required tools.** The development workflow imposes
+actions that are not "code edits as cognitive units" but "environment
+setup that the agent feels motivated to perform in batches"
+(scaffolding new files, sweeping documentation updates). Forcing those
+into a one-call-per-file rhythm creates friction that biases the agent
+toward shell-redirect bypass. They are recognized constitutionally as
+batch-friendly:
+
+```
+edit_docs_only                edit_create_file
+```
+
+The full per-tool descriptions live in Part II §4 of SPEC.md and in
+`src/tools/descriptions.ts` verbatim. They are unconstitutional only in
+the sense that the spec does not constrain their wording — they are
+free to evolve as observation accumulates, provided every change keeps
+spec and code in sync in the same change.
+
+### Article 5 — Mechanism (binding principles)
+
+Three principles, no implementation. The current best implementation
+of these principles lives in Part III; better implementations can
+replace it without amending the constitution.
+
+1. **The MCP server does not write.** A typed_edit call is a
+   declaration of intent. Validation is the server's only
+   responsibility. Real writes are performed by the agent's native
+   tools (Edit / Write / MultiEdit / NotebookEdit), which the agent is
+   tuned for. This routes around the friction of forcing a foreign
+   content-pair schema onto the agent's tool-calling pattern.
+
+2. **Every write must be bound to a fresh declaration.** A binding
+   mechanism MUST (a) prevent native Edit / Write / MultiEdit /
+   NotebookEdit from landing bytes inside the repository unless a
+   matching declaration exists, (b) verify the write targets the
+   declaration's file(s), and (c) verify the disk state at write time
+   matches the declaration's pre-condition. The binding has a short
+   lifetime (single use, time-bounded) so that stale declarations do
+   not accumulate authority.
+
+3. **The bash-write-policy hook is the load-bearing defense for
+   shell-route bypasses.** Whatever binding mechanism is in use,
+   shell-route bypasses (`cat >`, `sed -i`, `tee`, heredocs,
+   encoded-payload pipelines) are blocked independently. The bash hook
+   is the line that prevents accidental binding-forgery from outside
+   the typed surface.
+
+   Other-MCP write paths (e.g. `ctx_execute` writing to disk
+   without going through any meta-edit-aware hook — see issue 1108)
+   are an acknowledged hook-scope gap. Closing that gap belongs to a
+   future hook expansion (PostToolUse monitoring, MCP-write
+   allowlist), not to the constitution. The friendly-AI threat model
+   in Article 3 means the gap shows up as honest workflow misses, not
+   as adversarial bypasses.
+
+The current implementation choice is a single-use, TTL-bound,
+HMAC-signed token (Part III). It satisfies all three principles. If a
+future proposal — capability-based addressing, signed manifests,
+content-addressed declarations, etc. — satisfies the same three
+principles with better ergonomics or smaller surface, it can replace
+the token mechanism without re-opening the constitution.
+
+### Article 6 — Granularity rules
+
+The granularity follows directly from the surface split in Article 4.
+
+**Seventeen SQLite-derived tools — 1 declaration ≡ 1 target_file.**
+Each call binds exactly one file. A change that spans multiple
+production files is multiple typed_edit calls, each producing its own
+binding. Per-file kind selection IS the unit of cognitive intervention
+for code changes; collapsing multiple files into one declaration would
+weaken the bet. Atomic multi-file rename (today's `apply.ts`
+invariant) is **not** preserved; partial application is recoverable in
+the friendly-AI threat model. This is a deliberate behavior change
+from current `main`, accepted as the cost of moving real writes into
+native Edit.
+
+**Two workflow-required tools — 1 declaration ≡ N target_files.**
+`edit_docs_only` and `edit_create_file` accept a batch of files in one
+declaration. The binding's TTL covers the whole batch; native Edit /
+Write calls consume the batch's entries in any order until the
+declaration is exhausted or expires. Per-file classification has no
+cognitive value here (sweeping a docs rename across 30 markdown files
+is one act, not 30; scaffolding `index.ts` + `impl.ts` + `impl.test.ts`
+is one act, not three), and observation suggests that forcing them
+1-by-1 is the friction surface most likely to push the agent toward
+shell-redirect bypass.
+
+**Test obligations.** SQLite-derived tools that modify production code
+declare `test_files: [...]` as a **forward declaration** — paths the
+agent commits to fulfilling test obligations on. Forward declarations
+are recorded in the edit log but are NOT bound by the production
+declaration; they do not authorize writes to the test files. Test
+edits are made through `edit_test_only_change`, each producing its own
+binding. Selecting `edit_test_only_change` is the agent's
+re-affirmation that this edit is test-only; the cognitive intervention
+fires twice, once for the production change and once for the test
+addition.
+
+If the production edit's `test_files` lists multiple paths, the agent
+issues one `edit_test_only_change` declaration per test file. This is
+the intended cost: each test file is its own cognitive unit ("this
+change is test-only"), so multi-file fulfillment cannot be batched
+under a single declaration.
+
+**`edit_test_only_change` is a strict 1-file SQLite-derived tool**:
+target_file is the test file itself, `test_files` MUST be empty, and
+the call binds exactly one file.
+
+**`edit_refactor_only` is a strict 1-file SQLite-derived tool** despite
+having no test obligation: it carries the cognitive intervention "I
+believe no new bug class is introduced", which is per-file by
+definition.
+
+### Article 7 — Out of scope (constitutional)
+
+The following are NOT in MVP scope, and proposals to add them must
+clear a constitutional-amendment bar (i.e., must explicitly argue why
+the experimental signal of the bet is preserved):
+
+- **Diff classification** — inspecting patch contents to verify the
+  declared kind matches.
+- **Test verification** — confirming `test_files` exist, contain
+  meaningful assertions, or are eventually updated.
+- **Mutation testing, regression verification, coverage gates.**
+- **Server-side defense-in-depth** for filesystem hardening (TOCTOU
+  loops beyond the single sha256 check, symlink-swap defenses,
+  sibling-temp atomicity, parent-directory fsync). These belong to
+  the native Edit tool and to OS file APIs.
+- **Sidecar classifiers, auto-repair loops, agent-feedback loops.**
+- **Heavy hooks** that re-implement what tool descriptions already say.
+
+The temptation will recur, especially after observed bypasses. The
+correct response is almost always to refine a description, not to add
+machinery. If observation eventually shows descriptions to be
+insufficient, Article 2's escape hatch (a v0.2 lightweight diff
+classifier) is the planned next step — and only that.
+
+### Article 8 — References
+
+- SQLite testing strategy: https://sqlite.org/testing.html
+- Issue 1103 — typed `edit_*` as thin Edit wrapper via grant-token
+  (`issues/2026-05-02-1103-typed-edit-as-thin-edit-wrapper-via-grant-token.md`)
+- Issue 1108 — `deny-raw-edit` MCP tool scope gap
+  (`issues/2026-05-02-1108-deny-raw-edit-mcp-tool-scope-gap.md`)
+
+---
+
+## Part II — Derived Specification
+
 ## 1. The bet
 
 Modern AI coding agents (Claude Code, Cursor, Cline, Aider, Codex) all use a generic edit interface: one or two tools that take a file path and a patch. The agent decides what to edit, writes the patch, applies it, and moves on. The kind of change being made — boundary condition, permission logic, refactor, schema migration — is invisible to the system. The agent's reasoning about *what kind of edit this is* happens silently in its hidden state, if at all.
