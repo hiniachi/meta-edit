@@ -51,6 +51,23 @@ async function callBefore(
   }
 }
 
+/** Capture stderr writes during `fn()`. */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const original = process.stderr.write.bind(process.stderr);
+  let buf = "";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  process.stderr.write = ((chunk: any) => {
+    buf += typeof chunk === "string" ? chunk : String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = original;
+  }
+  return buf;
+}
+
 // =====================================================================
 // Branch 1: opencode raw-edit primitives → evaluateTokenedEdit
 // =====================================================================
@@ -220,6 +237,84 @@ describe("opencode pass-through", () => {
       { args: {} },
     );
     expect(r.ok).toBe(true);
+  });
+});
+
+// =====================================================================
+// Review-fix coverage: R2 fallback / fail-closed / warn surfacing
+// =====================================================================
+
+describe("opencode plugin defensive paths (review fix)", () => {
+  it("sets output.aborted = true on a deny throw (R2 fallback readiness)", async () => {
+    const plugin = createMetaEditPlugin();
+    const hooks = await plugin(ctx);
+    const out: OpencodeToolBeforeOutput = {
+      args: { input: "*** Update File: x" },
+    };
+    await expect(
+      hooks["tool.execute.before"]?.({ tool: "apply_patch" }, out),
+    ).rejects.toThrow();
+    expect(out.aborted).toBe(true);
+  });
+
+  it("fail-closed denies when evaluateTokenedEdit throws unexpectedly", async () => {
+    // Inject a grants store whose findActiveBindingForFile throws.
+    const plugin = createMetaEditPlugin({
+      newGrantsStore: () => ({
+        async issue() {
+          throw new Error("not used");
+        },
+        async lookup() {
+          return null;
+        },
+        async consume() {
+          return { consumed: false, fully_consumed: false };
+        },
+        async findActiveBindingForFile() {
+          throw new Error("simulated grants store I/O error");
+        },
+        async reapExpired() {
+          return 0;
+        },
+      }),
+    });
+    writeFile("src/foo.ts", "x\n");
+    const hooks = await plugin(ctx);
+    const out: OpencodeToolBeforeOutput = {
+      args: {
+        filePath: path.join(tmpRoot, "src/foo.ts"),
+        oldString: "x",
+        newString: "y",
+      },
+    };
+    let caught: Error | null = null;
+    try {
+      await hooks["tool.execute.before"]?.({ tool: "edit" }, out);
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("meta-edit opencode plugin errored");
+    expect(caught?.message).toContain("simulated grants store I/O error");
+    expect(out.aborted).toBe(true);
+  });
+
+  it("emits warn decisions to stderr (empty Write create authorization)", async () => {
+    const stderr = await captureStderr(async () => {
+      const r = await callBefore(
+        { tool: "write" },
+        {
+          args: {
+            filePath: path.join(tmpRoot, "src/freshly-created.ts"),
+            content: "",
+          },
+        },
+      );
+      expect(r.ok).toBe(true);
+    });
+    expect(stderr).toContain("[meta-edit] WARN");
+    expect(stderr).toContain("Write");
+    expect(stderr).toContain("typed_edit");
   });
 });
 
