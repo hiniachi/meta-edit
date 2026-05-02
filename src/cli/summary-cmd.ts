@@ -13,9 +13,16 @@ import { parseStrictSince } from "./parse-since.js";
  * record of ground truth.
  */
 function stripAnsi(s: string): string {
-  // CSI: ESC [ ... letter ; OSC: ESC ] ... BEL ; plus any bare ESC byte.
+  // CSI: ESC [ ... letter
+  // OSC: ESC ] ... terminator, where terminator is BEL (\x07) OR ST
+  //      (ESC \). Content forbids ESC so a malformed sequence cannot
+  //      swallow the next escape's introducer.
+  // Bare ESC: any leftover ESC byte (last alternative).
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|.)/g, "");
+  return s.replace(
+    /\x1b(?:\[[0-?]*[ -/]*[@-~]|\](?:[^\x07\x1b]*\x07|[^\x07\x1b]*\x1b\\)|.)/g,
+    "",
+  );
 }
 
 export type SummaryOptions = {

@@ -18589,7 +18589,7 @@ function parseSinceDate(s) {
 
 // src/cli/summary-cmd.ts
 function stripAnsi(s) {
-  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|.)/g, "");
+  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\](?:[^\x07\x1b]*\x07|[^\x07\x1b]*\x1b\\)|.)/g, "");
 }
 function runSummaryCommand(options) {
   const log = new EditLog(options.repoRoot);
@@ -19065,4 +19065,4 @@ export {
   main
 };
 
-//# debugId=8EAA0A000974785064756E2164756E21
+//# debugId=3434D11901D5586664756E2164756E21

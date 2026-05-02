@@ -187,4 +187,70 @@ describe("ANSI escape injection - runSummaryCommand", () => {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+
+  // Closes issue 2026-05-01-0912-strip-ansi-st-osc-content-leak.
+  // Regression-guard for the ST-terminator branch of stripAnsi's OSC
+  // alternative. Old code only handled BEL-terminated OSC (\x1b]...\x07);
+  // ST-terminated OSC (\x1b]...\x1b\\) fell through the bare-ESC fallback
+  // and leaked the content text. MC/DC: BEL path covered, ST path
+  // covered, inversion test below would FAIL on the old regex.
+  it("strips ST-terminated OSC content fully (no leak past inversion)", () => {
+    const repoRoot = tmpRepoForSummary();
+    try {
+      const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
+      // ESC ] 0 ; INJECTED ESC \ src/leak.ts → old code leaks "0;INJECTED"
+      const e: IssuedEntry = issued({
+        edit_id: "edit_20260501_0004",
+        ts: "2026-05-01T12:01:00+09:00",
+        target_file: "\x1b]0;INJECTED\x1b\\src/leak.ts",
+        risk_level: "low",
+      });
+      fs.appendFileSync(logPath, JSON.stringify(e) + "\n");
+      const chunks: string[] = [];
+      const out = {
+        write(chunk: string) { chunks.push(chunk); return true; },
+      } as unknown as NodeJS.WritableStream;
+      const err = {
+        write(_chunk: string) { return true; },
+      } as unknown as NodeJS.WritableStream;
+      runSummaryCommand({ repoRoot, out, err });
+      const output = chunks.join("");
+      // Inversion: the OSC content "0;INJECTED" must NOT appear in output.
+      // The bare path "src/leak.ts" must remain.
+      expect(output).not.toContain("0;INJECTED");
+      expect(output).not.toContain("\x1b");
+      expect(output).toContain("src/leak.ts");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("strips BEL-terminated OSC (existing branch still works)", () => {
+    const repoRoot = tmpRepoForSummary();
+    try {
+      const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
+      // ESC ] 0 ; TITLE BEL src/normal.ts → BEL terminator branch
+      const e: IssuedEntry = issued({
+        edit_id: "edit_20260501_0005",
+        ts: "2026-05-01T12:02:00+09:00",
+        target_file: "\x1b]0;TITLE\x07src/normal.ts",
+        risk_level: "low",
+      });
+      fs.appendFileSync(logPath, JSON.stringify(e) + "\n");
+      const chunks: string[] = [];
+      const out = {
+        write(chunk: string) { chunks.push(chunk); return true; },
+      } as unknown as NodeJS.WritableStream;
+      const err = {
+        write(_chunk: string) { return true; },
+      } as unknown as NodeJS.WritableStream;
+      runSummaryCommand({ repoRoot, out, err });
+      const output = chunks.join("");
+      expect(output).not.toContain("0;TITLE");
+      expect(output).not.toContain("\x1b");
+      expect(output).toContain("src/normal.ts");
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
