@@ -4888,13 +4888,12 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = false;
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, isCreate, "target_file");
+    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, "target_file");
     if (!beforeRead.ok) {
       warnings.push(beforeRead.error);
     } else {
@@ -4921,7 +4920,7 @@ function validateRequest(toolName, request, ctx) {
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, `additional_files entry "${af.file}"`);
       if (!beforeRead.ok) {
         warnings.push(beforeRead.error);
         continue;
@@ -5007,7 +5006,7 @@ function containsParentTraversal(p) {
   }
   return false;
 }
-function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
+function computeBeforeSha256(canonical, repoRoot, fieldLabel) {
   const absolute = path4.join(repoRoot, canonical);
   let onDisk = null;
   try {
@@ -5015,45 +5014,14 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
   } catch (e) {
     const code = e?.code;
     if (code === "ENOENT") {
-      if (!isCreate) {
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
-        };
-      }
-      const parent = path4.dirname(absolute);
-      try {
-        const parentStat = fs4.statSync(parent);
-        if (!parentStat.isDirectory()) {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent path "${path4.dirname(canonical)}" exists but is not a directory`
-          };
-        }
-      } catch (parentErr) {
-        const parentCode = parentErr?.code;
-        if (parentCode === "ENOENT") {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent directory "${path4.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
-          };
-        }
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`
-        };
-      }
-      return { ok: true, before_sha256: SHA256_EMPTY };
+      return {
+        ok: false,
+        error: `${fieldLabel} "${canonical}" does not exist on disk. ` + `v0.3.1 expects you to create the empty file first via a ` + `native Write with content === "" (no MCP declaration needed; ` + `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` + `parent directories), THEN declare the typed_edit for the content fill.`
+      };
     }
     return {
       ok: false,
       error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`
-    };
-  }
-  if (isCreate) {
-    return {
-      ok: false,
-      error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
     };
   }
   return { ok: true, before_sha256: sha256Hex(onDisk) };
@@ -5941,4 +5909,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=781781C000BF55A864756E2164756E21
+//# debugId=FA54BD21F8A8D6FE64756E2164756E21

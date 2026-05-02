@@ -40,22 +40,26 @@ function resolveRepoRoot(eventCwd: unknown): string {
   return process.cwd();
 }
 
-function alreadyOnboarded(markerPath: string): boolean {
-  try {
-    fs.statSync(markerPath);
-    return true;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
-    // EACCES or similar — fail-quiet (don't onboard repeatedly on
-    // permission errors). The session will just miss the pointer this
-    // run; not a correctness issue.
-    return true;
-  }
-}
-
-function writeMarker(markerPath: string, sessionId: string): void {
+/**
+ * Atomically claim the marker for this session_id. Returns true when
+ * the caller successfully created the marker (this is the first
+ * onboarding) and false when the marker already exists (another
+ * process onboarded first).
+ *
+ * Uses `flag: "wx"` (O_EXCL | O_CREAT) so concurrent SessionStart
+ * events for the same session_id can't both succeed. The losing call
+ * sees EEXIST and returns false, suppressing the duplicate
+ * additionalContext emission. Codex HIGH #5b: this is the
+ * race-prevention move.
+ */
+function claimOnboardingMarker(markerPath: string, sessionId: string): boolean {
   try {
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  } catch {
+    // mkdir failure: degrade to "every session emits" — annoying but
+    // correct. We still try the write below in case the dir does exist.
+  }
+  try {
     fs.writeFileSync(
       markerPath,
       JSON.stringify(
@@ -66,12 +70,21 @@ function writeMarker(markerPath: string, sessionId: string): void {
         null,
         2,
       ),
-      { encoding: "utf8" },
+      { encoding: "utf8", flag: "wx" },
     );
-  } catch {
-    // Marker write failure is non-fatal — we still emit the pointer
-    // (idempotency degrades gracefully to "every session pointer-
-    // emits" if .meta-edit/state isn't writable).
+    return true;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST") {
+      // Another process won the race (or this session already
+      // onboarded in a prior run). Suppress the pointer emission.
+      return false;
+    }
+    // Other errors (EACCES, EROFS, etc.): fail-quiet (don't onboard
+    // repeatedly on permission errors). Returning false suppresses
+    // the pointer; the session will just miss the recovery path this
+    // run, which is a correctness-preserving degradation.
+    return false;
   }
 }
 
@@ -109,11 +122,12 @@ async function main(): Promise<number> {
     `${sessionId}.json`,
   );
 
-  if (alreadyOnboarded(markerPath)) {
+  if (!claimOnboardingMarker(markerPath, sessionId)) {
+    // Marker already existed (or could not be written) — another
+    // process has onboarded this session, or the FS is read-only.
+    // Either way, suppress the pointer emission to avoid duplicates.
     return replyAllow();
   }
-
-  writeMarker(markerPath, sessionId);
 
   // Emit the pointer via SessionStart hookSpecificOutput.
   // additionalContext is the standard injection field for SessionStart

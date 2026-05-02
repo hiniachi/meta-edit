@@ -346,7 +346,7 @@ PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
 
 MCP server: meta-edit-mcp
   ├─ 17 SQLite-discipline-derived tools (single-file declarations)
-  ├─ 3 workflow tools (batch declarations of N files)
+  ├─ 1 workflow tool (batch declarations of N files)
   └─ Issues tokens; never writes files
 
 State
@@ -411,7 +411,7 @@ The MCP server enforces:
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via subsequent `edit_test_only_change` calls. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - For modify-only tools, `target_file` MUST exist on disk; the server reads it and binds `before_sha256 := sha256(disk_content_utf8)`.
 - v0.3.1: there is no longer a CREATE-flagged tool. Empty file creation is authorized at the deny-raw-edit hook level (Write with `content === ""` to a non-existent in-repo path; see §5.1). Content fills run in modify mode against the now-empty file via the appropriate type-specific tool, treating `before_sha256 := sha256("")`.
-- `additional_files` is accepted only for the 3 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
+- `additional_files` is accepted only for the 1 workflow tool, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
 Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.

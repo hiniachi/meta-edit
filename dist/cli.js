@@ -17342,13 +17342,12 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = false;
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, isCreate, "target_file");
+    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, "target_file");
     if (!beforeRead.ok) {
       warnings.push(beforeRead.error);
     } else {
@@ -17375,7 +17374,7 @@ function validateRequest(toolName, request, ctx) {
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, `additional_files entry "${af.file}"`);
       if (!beforeRead.ok) {
         warnings.push(beforeRead.error);
         continue;
@@ -17461,7 +17460,7 @@ function containsParentTraversal(p) {
   }
   return false;
 }
-function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
+function computeBeforeSha256(canonical, repoRoot, fieldLabel) {
   const absolute = path4.join(repoRoot, canonical);
   let onDisk = null;
   try {
@@ -17469,45 +17468,14 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
   } catch (e) {
     const code = e?.code;
     if (code === "ENOENT") {
-      if (!isCreate) {
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
-        };
-      }
-      const parent = path4.dirname(absolute);
-      try {
-        const parentStat = fs4.statSync(parent);
-        if (!parentStat.isDirectory()) {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent path "${path4.dirname(canonical)}" exists but is not a directory`
-          };
-        }
-      } catch (parentErr) {
-        const parentCode = parentErr?.code;
-        if (parentCode === "ENOENT") {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent directory "${path4.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
-          };
-        }
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`
-        };
-      }
-      return { ok: true, before_sha256: SHA256_EMPTY };
+      return {
+        ok: false,
+        error: `${fieldLabel} "${canonical}" does not exist on disk. ` + `v0.3.1 expects you to create the empty file first via a ` + `native Write with content === "" (no MCP declaration needed; ` + `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` + `parent directories), THEN declare the typed_edit for the content fill.`
+      };
     }
     return {
       ok: false,
       error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`
-    };
-  }
-  if (isCreate) {
-    return {
-      ok: false,
-      error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
     };
   }
   return { ok: true, before_sha256: sha256Hex(onDisk) };
@@ -17578,14 +17546,14 @@ var workflowToolInputSchema = {
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
-      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 1 workflow tool (edit_docs_only). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
         required: ["file"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path. Same path-safety rules as target_file. For edit_create_file the file MUST NOT exist on disk; for edit_docs_only it MUST exist."
+            description: "Repository-relative path. Same path-safety rules as target_file. The file MUST exist on disk (edit_docs_only is modify-only). For new files, do an empty-content native Write first (free at the deny-raw-edit hook) and then declare the typed_edit against the now-empty file."
           }
         },
         additionalProperties: false
@@ -19066,7 +19034,7 @@ function renderToolHelp(name) {
 
 ${TOOL_DESCRIPTIONS[name]}
 
-See ${SPEC_TOOLS_URL} for all nineteen tool descriptions.
+See ${SPEC_TOOLS_URL} for all eighteen tool descriptions.
 `;
 }
 
@@ -19177,4 +19145,4 @@ export {
   main
 };
 
-//# debugId=05C186098036C5D764756E2164756E21
+//# debugId=8718546687657D4964756E2164756E21

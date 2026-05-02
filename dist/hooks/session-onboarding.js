@@ -109,24 +109,23 @@ function resolveRepoRoot(eventCwd) {
   }
   return process.cwd();
 }
-function alreadyOnboarded(markerPath) {
-  try {
-    fs.statSync(markerPath);
-    return true;
-  } catch (e) {
-    if (e.code === "ENOENT")
-      return false;
-    return true;
-  }
-}
-function writeMarker(markerPath, sessionId) {
+function claimOnboardingMarker(markerPath, sessionId) {
   try {
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  } catch {}
+  try {
     fs.writeFileSync(markerPath, JSON.stringify({
       session_id: sessionId,
       ts: new Date().toISOString()
-    }, null, 2), { encoding: "utf8" });
-  } catch {}
+    }, null, 2), { encoding: "utf8", flag: "wx" });
+    return true;
+  } catch (e) {
+    const code = e?.code;
+    if (code === "EEXIST") {
+      return false;
+    }
+    return false;
+  }
 }
 function buildOnboardingMessage() {
   return [
@@ -149,10 +148,9 @@ async function main() {
   }
   const repoRoot = resolveRepoRoot(event.cwd);
   const markerPath = path.join(repoRoot, ".meta-edit", "state", "sessions", `${sessionId}.json`);
-  if (alreadyOnboarded(markerPath)) {
+  if (!claimOnboardingMarker(markerPath, sessionId)) {
     return replyAllow();
   }
-  writeMarker(markerPath, sessionId);
   const payload = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
@@ -168,4 +166,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=03CBDB34DFC6BC4764756E2164756E21
+//# debugId=8CBE2DB458B527B364756E2164756E21

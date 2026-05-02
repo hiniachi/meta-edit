@@ -43,7 +43,7 @@ That is the entire reading list.
 
 Everything in `SPEC.md`. Specifically:
 
-- Nineteen `edit_*` MCP tools, each with the description from `SPEC.md` §4
+- Eighteen `edit_*` MCP tools, each with the description from `SPEC.md` §4
 - Two hooks: `deny-raw-edit`, `deny-bash-write-bypass`. The bash hook's
   structural redirect-target rule is **warn-only** since v0.1.5 (verb-deny
   and protected-path checks remain deny). See `SPEC.md` §5.2 for the
@@ -261,7 +261,7 @@ The log is how the next session picks up.
 
 ## 12. Reference invariants
 
-- **Scope**: Nineteen tools + two hooks + edit log + CLI summary. That is all.
+- **Scope**: Eighteen tools + two hooks + edit log + CLI summary. That is all.
 - **Descriptions are verbatim**: `SPEC.md` §4 → `descriptions.ts`, no paraphrasing.
 - **No detection in MVP**: classification, mismatch detection, mutation, regression — all forbidden.
 - **No abstractions over the tool surface**: eighteen separate registrations.

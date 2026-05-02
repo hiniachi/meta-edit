@@ -1,4 +1,6 @@
 import { describe, it, expect } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   TOOL_NAMES,
   TOOL_DESCRIPTIONS,
@@ -40,6 +42,26 @@ describe("eighteen tools", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_docs_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_refactor_only");
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_test_only_change");
+  });
+
+  it("typed-edit-onboarding Skill catalog mentions every TOOL_NAMES entry (drift guard)", () => {
+    // Codex review (v0.3.1 MED #6): the Skill ships a one-line
+    // catalog of all 18 tools as first-touch onboarding. If a tool is
+    // renamed or added in TOOL_NAMES without updating the Skill, the
+    // agent's first-tool choice would be misled. Pin the parity by
+    // asserting the Skill markdown contains every tool name.
+    const skillPath = path.resolve(
+      import.meta.dir,
+      "..",
+      "..",
+      "skills",
+      "typed-edit-onboarding",
+      "SKILL.md",
+    );
+    const skill = fs.readFileSync(skillPath, "utf8");
+    for (const name of TOOL_NAMES) {
+      expect(skill).toContain(name);
+    }
   });
 
   it("includes the universal General principles block verbatim in every description", () => {

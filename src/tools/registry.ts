@@ -57,8 +57,10 @@ const sqliteToolInputSchema = {
   additionalProperties: false,
 } as const;
 
-// JSON schema for the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact):
+// JSON schema for the 1 remaining workflow tool (edit_docs_only):
 // adds the optional `additional_files` array (≤ MAX_ADDITIONAL_FILES).
+// v0.3.1 dropped edit_create_file and edit_create_planning_artifact;
+// empty file creation is now hook-level (no MCP declaration).
 const workflowToolInputSchema = {
   type: "object",
   required: [
@@ -73,7 +75,7 @@ const workflowToolInputSchema = {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
       description:
-        "OPTIONAL. Additional files governed by this single declaration. Available only on the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " +
+        "OPTIONAL. Additional files governed by this single declaration. Available only on the 1 workflow tool (edit_docs_only). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " +
         String(MAX_ADDITIONAL_FILES) +
         ".",
       items: {
@@ -83,7 +85,7 @@ const workflowToolInputSchema = {
           file: {
             type: "string",
             description:
-              "Repository-relative path. Same path-safety rules as target_file. For edit_create_file the file MUST NOT exist on disk; for edit_docs_only it MUST exist.",
+              "Repository-relative path. Same path-safety rules as target_file. The file MUST exist on disk (edit_docs_only is modify-only). For new files, do an empty-content native Write first (free at the deny-raw-edit hook) and then declare the typed_edit against the now-empty file.",
           },
         },
         additionalProperties: false,
