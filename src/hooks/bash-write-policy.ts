@@ -12,8 +12,17 @@
 //      allowlist pattern.
 //   2. If the command matches any allowlist pattern (formatter, codegen),
 //      it is allowed.
-//   3. If the command matches any deny pattern, it is denied.
-//   4. Otherwise the command is allowed.
+//   3. If the command matches any deny pattern (verb denylist /
+//      DENY_SUBSTRINGS / heredoc-with-redirect / dangerous tee / dd-of=
+//      / inline interpreter writes / decode-and-execute), it is denied.
+//   4. If the command structurally redirects (`>` / `>>` / `>|`) to a
+//      target outside the safe-sink allowlist (/dev/null, /tmp/,
+//      /var/tmp/, /run/, /sys/), it is WARNED — allowed but with a
+//      `permissionDecisionReason` nudging the AI toward an edit_* tool.
+//      This was deny in v0.1.4 and prior; loosened in v0.1.5 (SPEC §5.2)
+//      because the safe-sink allowlist had a structural false-positive
+//      surface on legitimate redirects to outside-repo absolute paths.
+//   5. Otherwise the command is allowed.
 //
 // The allowlist exists because formatters and code generators are part of
 // normal development workflows. They are conventionally semantic-
@@ -23,11 +32,14 @@
 import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
 import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
+// `HookDecision` (with `"warn"` member) is the canonical shape shared
+// across every hook policy in this package. The structural redirect-
+// to-outside-safe-sink check below is the only producer of `"warn"`
+// today (SPEC §5.2). `deny` always wins over `warn` within a segment
+// AND across segments.
+import type { HookDecision } from "./hook-runtime.js";
 
-export type HookDecision = {
-  decision: "allow" | "deny";
-  reason?: string;
-};
+export type { HookDecision };
 
 // Codex round-1 a4-01: hooks now thread the agent's cwd through so the
 // protected-path check can resolve symlinks ("link/state/edits.jsonl"
@@ -182,10 +194,12 @@ export function evaluateBashCommand(
   // Heal redirect-target detachment caused by line-separator whitespace
   // sitting between the redirect operator and its target. Without this,
   // `printf x >\rsrc/foo.ts` splits into `printf x >` (empty target) and
-  // `src/foo.ts` (a separate segment), bypassing the in-repo redirect
-  // deny. Real bash treats bare `\r` as an ordinary filename byte, so
-  // the rewrite is a no-op for genuine CRLF copy-paste artifacts; the
-  // primary-split CR carve-out (line 619) remains for defense in depth.
+  // `src/foo.ts` (a separate segment), bypassing the structural
+  // redirect-target check (warn since v0.1.5; deny on verb-deny /
+  // protected-path forms of the same shape). Real bash treats bare
+  // `\r` as an ordinary filename byte, so the rewrite is a no-op for
+  // genuine CRLF copy-paste artifacts; the primary-split CR carve-out
+  // (line 619) remains for defense in depth.
   // Caught by dogfood-001 self-review.
   command = command.replace(
     new RegExp("(>>|>\\||>)([\\r\\n\\u2028\\u2029]+)", "g"),
@@ -223,12 +237,17 @@ export function evaluateBashCommand(
     return { decision: "allow" };
   }
 
+  let firstWarn: HookDecision | null = null;
   for (const segment of segments) {
     const decision = evaluateSegment(segment, opts);
     if (decision.decision === "deny") {
       return decision;
     }
+    if (decision.decision === "warn" && firstWarn === null) {
+      firstWarn = decision;
+    }
   }
+  if (firstWarn !== null) return firstWarn;
   return { decision: "allow" };
 }
 
@@ -346,27 +365,48 @@ function evaluateSegment(
   //   P1-1: protected-path writes inside shell-hosted payloads
   //         (`bash -c "printf x > .meta-edit/state/..."`)
   //   P1-2: wrapper-prefixed eval (`sudo eval "..."`, `env eval "..."`)
-  const hostedDeny = evaluateShellHostedPayload(rawSegment, opts);
-  if (hostedDeny !== null) {
-    return hostedDeny;
+  // `warn` from the recursion is held on `firstWarn` so a later deny
+  // check on the same outer segment still wins; if nothing else denies,
+  // the inner warn surfaces at the end of the function.
+  let firstWarn: HookDecision | null = null;
+  const hosted = evaluateShellHostedPayload(rawSegment, opts);
+  if (hosted !== null) {
+    if (hosted.decision === "deny") return hosted;
+    if (hosted.decision === "warn") firstWarn = hosted;
   }
 
-  // dogfood-001 + dogfood-005: structural deny for any `>` / `>>` / `>|`
+  // dogfood-001 + dogfood-005: structural WARN for any `>` / `>>` / `>|`
   // redirect whose target is not on the documented safe-sink allowlist
   // (/dev/null, /dev/std{out,err}, /dev/zero, /tmp/, /var/tmp/, /run/,
   // /sys/). Replaces the per-verb deny enumeration that left holes for
-  // every new write verb (printf, echo, jq with --rawfile, ...). Reading
-  // from any source, redirecting to a safe sink remains allowed; redirect
-  // targets that resolve in-repo (relative paths) or to arbitrary
-  // absolute paths outside the safe-sink list are denied.
-  if (redirectsToInRepoPath(rawSegment)) {
-    return {
-      decision: "deny",
+  // every new write verb (printf, echo, jq with --rawfile, ...).
+  //
+  // Loosened from `deny` to `warn` in v0.1.5 (SPEC §5.2): the verb-
+  // denylist (DENY_SUBSTRINGS / DENY_VERBS / DENY_PREFIX_PATTERNS) keeps
+  // the well-known bypasses (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`,
+  // ...) on `deny`, and protected-path writes (.meta-edit/state/**,
+  // .meta-edit/tmp/**) are still denied earlier in this function via
+  // touchesProtectedPathTokenized + redirectsToProtected. The remaining
+  // case — an unenumerated write verb (`printf`, `echo`, `jq --rawfile`,
+  // future utilities) redirecting to an in-repo or arbitrary absolute
+  // path — is permitted with a `permissionDecisionReason` so the AI is
+  // nudged toward an edit_* tool but the redirect is not blocked.
+  // Background: the safe-sink allowlist had a structural false-positive
+  // surface on legitimate redirects to outside-repo absolute paths
+  // (`~/.cache/`, `$RUNNER_TEMP`, `/home/user/scratch/`); deny→warn is
+  // the smallest change that removes that surface while keeping verb-
+  // and protected-path denies intact. See OBSERVED-FAILURES.md for
+  // the deny-restore trigger.
+  if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
+    firstWarn = {
+      decision: "warn",
       reason:
-        "command redirects (`>` / `>>` / `>|`) to a path that is not on " +
-        "the safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
-        "/sys/). Use an edit_* tool for in-repo writes; capture command " +
-        "output to /tmp/ or /dev/null if you need a sink.",
+        "command redirects (`>` / `>>` / `>|`) to a path outside the " +
+        "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
+        "/sys/). For in-repo writes prefer an edit_* tool (e.g. " +
+        "edit_create_file, edit_refactor_only); this redirect is " +
+        "permitted but is recorded as a bypass-risk and may be " +
+        "tightened to deny in a future version.",
     };
   }
 
@@ -454,6 +494,9 @@ function evaluateSegment(
     };
   }
 
+  // No deny matched. If the structural redirect-warn (or a recursed warn
+  // from a shell-hosted payload) was captured earlier, surface it now.
+  if (firstWarn !== null) return firstWarn;
   return { decision: "allow" };
 }
 
@@ -639,7 +682,9 @@ function primarySplitSegments(cmd: string): string[] {
       // segment-internal token. Without this carve-out, `printf x >|
       // notes.md` splits into `printf x >` and `notes.md`, which hides
       // the redirect target from iterRedirectTargets and bypasses the
-      // dogfood-001 in-repo redirect deny.
+      // dogfood-001 structural redirect surface (warn since v0.1.5;
+      // deny still applies to verb-deny / protected-path forms of the
+      // same shape).
       if (c === "|" && cmd[i - 1] === ">") {
         buf += c;
         continue;
@@ -1369,9 +1414,10 @@ function redirectsToProtected(
 
 // Walk `s` and yield each `>`/`>>`/`>|` redirect's target token, ignoring
 // `>&` fd duplications and quoted regions. Shared by redirectsToProtected
-// (substring-tests against PROTECTED_PATH_NEEDLES) and the in-repo redirect
-// deny (dogfood-001 / dogfood-005). Returns dequoted, unparsed-token
-// strings — callers apply their own predicate.
+// (substring-tests against PROTECTED_PATH_NEEDLES) and the structural
+// redirect-target check (dogfood-001 / dogfood-005; warn since v0.1.5,
+// see redirectsOutsideSafeSinkAllowlist). Returns dequoted,
+// unparsed-token strings — callers apply their own predicate.
 function* iterRedirectTargets(s: string): IterableIterator<string> {
   let i = 0;
   let inSingle = false;
@@ -1433,8 +1479,8 @@ function* iterRedirectTargets(s: string): IterableIterator<string> {
 // the outer quote-stripping pass blanks the payload before any of the
 // per-segment scans see it. Recover the literal argument and re-evaluate
 // it through the full policy pipeline so every check that runs on a
-// top-level command (DENY_SUBSTRINGS, protected-path needles, in-repo
-// redirect deny, heredoc, decode-and-execute, ...) also runs on the
+// top-level command (DENY_SUBSTRINGS, protected-path needles, structural
+// redirect warn, heredoc, decode-and-execute, ...) also runs on the
 // wrapper's payload.
 //
 // Codex P1-1 review: a needle-only rescan missed protected-path writes
@@ -1481,7 +1527,10 @@ function recursivelyEvaluateArg(
   // escape forms are handled there.
   const deEscaped = arg.replace(/\\/g, "");
   const decision = evaluateBashCommand(deEscaped, opts);
-  return decision.decision === "deny" ? decision : null;
+  if (decision.decision === "deny" || decision.decision === "warn") {
+    return decision;
+  }
+  return null;
 }
 
 // Peel WRAPPER_VERBS and env assignments off the head, then check whether
@@ -1525,14 +1574,24 @@ function extractEvalArg(rawSegment: string): string | null {
   return null;
 }
 
-// dogfood-001 + dogfood-005: deny any `>`/`>>`/`>|` redirect whose target
-// is not in the safe-sink allowlist. This is the structural replacement
-// for the per-verb enumeration (printf, echo, ...) the dogfood pass
-// found incomplete. The check operates on the raw segment so quoted
-// strings inside arguments are not misread as redirect targets — e.g.
-// `printf '... > foo.ts ...' > /tmp/notes.md` walks past the quoted `>`
-// and only sees the real one whose target is `/tmp/notes.md` (allowed).
-function redirectsToInRepoPath(rawSegment: string): boolean {
+// dogfood-001 + dogfood-005: detect any `>`/`>>`/`>|` redirect whose
+// target is not in the safe-sink allowlist (/dev/null, /dev/std{out,err},
+// /dev/zero, /tmp/, /var/tmp/, /run/, /sys/). This is the structural
+// replacement for the per-verb enumeration (printf, echo, ...) the
+// dogfood pass found incomplete. The check operates on the raw segment
+// so quoted strings inside arguments are not misread as redirect
+// targets — e.g. `printf '... > foo.ts ...' > /tmp/notes.md` walks past
+// the quoted `>` and only sees the real one whose target is
+// `/tmp/notes.md` (allowed).
+//
+// Returns true for both relative (in-repo) targets AND absolute paths
+// outside the safe-sink list (e.g. `/home/user/something.txt`); the
+// historical name "in-repo" is retained for git-blame continuity but
+// the predicate's semantic is "redirect target outside safe-sink
+// allowlist". The caller treats the result as a v0.1.5 `warn` (SPEC
+// §5.2) — verb-deny and protected-path checks fire earlier with their
+// own `deny`.
+function redirectsOutsideSafeSinkAllowlist(rawSegment: string): boolean {
   for (const target of iterRedirectTargets(rawSegment)) {
     if (target.length === 0) continue;
     if (isInRepoWriteTarget(target)) return true;

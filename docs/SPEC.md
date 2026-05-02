@@ -974,15 +974,16 @@ This hook operates on a **best-effort basis**. It uses substring matching on the
 
 Deny families:
 
-1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization):
+1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization). All entries below are `deny`, not `warn`:
 
    ```
    sed -i
    sed --in-place
    perl -pi
    perl -i
-   python -c    (when the snippet contains write_text, write, open( ... 'w', etc.)
-   node -e      (when the snippet contains writeFile, writeFileSync)
+   perl -e / ruby -e / php -r        (when the snippet writes a file)
+   python -c                         (when the snippet contains write_text, write, open(... 'w', etc.)
+   node -e                           (when the snippet contains writeFile, writeFileSync)
    cat >
    cat >>
    tee <in-repo target>
@@ -993,16 +994,32 @@ Deny families:
    git apply
    patch
    rsync
+
+   heredoc-with-redirect             (`cat <<MARKER ... > target`,
+                                      `cat <<-MARKER ... > target`,
+                                      `cat <<"MARKER" ... > target`,
+                                      `cat <<'MARKER' ... > target`)
+   eval <non-literal argument>       (`eval "$X"`, eval of `$(...)` /
+                                      backticks / variable expansions)
+   decode-and-execute pipelines      (`base64 -d | bash`,
+                                      `xxd -r -p | sh`,
+                                      `openssl base64 -d | bash`, …)
    ```
 
-2. **Structural in-repo redirect deny** (dogfood-001 + dogfood-005). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is denied, regardless of the upstream verb. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
+   The deny set is intentionally larger than the verb list above — it covers shape-based detections too. Source of truth for the exact set is `src/hooks/bash-write-policy.ts` (`DENY_SUBSTRINGS`, `DENY_PREFIX_PATTERNS`, `DENY_VERBS`, `matchesDangerousDd`, `matchesDangerousTee`, `matchesEvalDeferredString`, `matchesPythonNodeWrite`, `matchesDecodeAndExecute`, plus the heredoc-with-redirect regex in `evaluateSegment`).
+
+2. **Structural redirect-target warn** (dogfood-001 + dogfood-005, loosened to warn in v0.1.5). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is **warned-and-allowed** — the call proceeds, but the hook returns `permissionDecision: "allow"` together with a `permissionDecisionReason` and mirrors the same text on stderr, so the AI is nudged toward an `edit_*` tool while a human reviewer sees the warning in the transcript. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) structurally, without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
 
    ```
    exact: /dev/null  /dev/stdout  /dev/stderr  /dev/zero
    prefix: /tmp/  /var/tmp/  /run/  /sys/
    ```
 
-   Relative paths and absolute paths outside the safe-sink list are treated as in-repo and denied. Use one of the nineteen `edit_*` tools for in-repo writes; capture command output to `/tmp/` or `/dev/null` if you need a sink.
+   Relative paths and absolute paths outside the safe-sink list are treated as bypass-risk and warned. Use one of the nineteen `edit_*` tools for in-repo writes; capture command output to `/tmp/` or `/dev/null` if you need a sink.
+
+   **`deny` always wins over `warn`** when both fire on the same command. Verb-deny patterns (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, the heredoc-with-redirect form, the inline-interpreter writes, etc.) and protected-path checks run *before* the structural redirect check, so well-known bypasses still produce `deny`. Across segments, the top-level evaluator surfaces `deny` if any segment denies; otherwise it surfaces the first `warn`; otherwise `allow`.
+
+   v0.1.4 and prior denied this case outright. The loosening (deny → warn) was driven by a structural false-positive surface: legitimate redirects to outside-repo absolute paths (`~/.cache/...`, `$RUNNER_TEMP`, `/home/user/scratch/...`) had no safe-sink entry and were uniformly denied. The verb-denylist still catches the well-known bypasses, and `.meta-edit/state/**` / `.meta-edit/tmp/**` writes are still denied earlier in the pipeline. If observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around the typed tools through this surface at scale, the warn will be tightened back to deny — see `OBSERVED-FAILURES.md` for the restore trigger.
 
    The DENY_SUBSTRINGS verb scan and the protected-path scan apply `stripQuotedContent` first, so a documentation string containing the literal trigger phrase inside a quoted argument (`printf 'do not use sed -i' > /tmp/notes.md`) is not denied. Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`) re-extract their literal argument and scan it raw so embedded bypasses inside the wrapper's quoted code remain caught.
 
@@ -1161,7 +1178,7 @@ There is no PASS/WARN/BLOCK return. Judgment is delegated to humans, for now.
 What we defend against, in MVP scope:
 
 - **AI uses raw Edit / Write / MultiEdit / NotebookEdit**: blocked by Claude Code permissions and `deny-raw-edit` hook (defense in depth)
-- **AI uses common Bash write patterns to bypass typed tools**: blocked on a best-effort basis by `deny-bash-write-bypass`. The hook uses substring matching and can be bypassed by determined commands (heredocs in alternative languages, encoded payloads, etc.); the goal is to make the obvious bypasses harder than using an `edit_*` tool, not to provide a sandbox
+- **AI uses common Bash write patterns to bypass typed tools**: blocked on a best-effort basis by `deny-bash-write-bypass` for the verb-denylist (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, heredoc-with-redirect, inline interpreter writes, decode-and-execute, …). The structural "redirect to a target outside the safe-sink allowlist" case is **warned, not denied** since v0.1.5 (see §5.2): the call proceeds with a `permissionDecisionReason` nudging the AI toward an `edit_*` tool. The hook uses substring matching and can be bypassed by determined commands (heredocs in alternative languages, encoded payloads, etc.); the goal is to make the obvious bypasses harder than using an `edit_*` tool, not to provide a sandbox
 - **AI rewrites the edit log through `meta-edit` tools or common shell write patterns**: blocked on a best-effort basis by protected-path checks and the bash hook. The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees
 - **AI provides empty `rationale` or empty `test_files` to slip past requirements**: blocked by argument validation
 
@@ -1251,6 +1268,8 @@ The classifier would inspect the patch and flag obvious mismatches (e.g., `<=` c
 That is the only planned semantic-enforcement direction. Workspace protocols, VCS adapters, mutation testing, regression verification, plan/spec/reference structuring — all of these are explicitly out of scope for `meta-edit`. They are valuable, but they belong to other projects.
 
 Smaller maintenance changes — refining tool descriptions based on observed usage, tightening the bash hook's allowlist if it becomes a bypass route, improving log details — are not "future directions" in the same sense; they are ordinary upkeep and will happen as needed.
+
+The structural redirect-target check (§5.2) sits in the same upkeep bucket. It was tightened to `deny` in v0.1.3 (dogfood-001) and loosened to `warn` in v0.1.5 because the safe-sink allowlist had a structural false-positive surface on legitimate redirects to outside-repo absolute paths. The expected restore path, if observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around typed tools through this surface, is to flip the structural redirect check back to `deny` — not to add a classifier. The verb-denylist and protected-path checks remain on `deny` regardless. The trigger and revert procedure live in `OBSERVED-FAILURES.md`.
 
 `meta-edit` is exactly this: nineteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
 
