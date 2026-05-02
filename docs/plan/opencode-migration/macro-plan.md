@@ -9,7 +9,7 @@
 
 ## Objective
 
-Run the same nineteen `edit_*` tools and the two safety policies
+Run the same eighteen `edit_*` tools and the two safety policies
 (`deny-raw-edit`, `deny-bash-write-bypass`) under opencode, with parity
 to the Claude Code experience: the agent loses access to the raw
 `edit` / `write` / `apply_patch` / `bash`-as-write primitives and is
@@ -37,7 +37,7 @@ Out of scope for this migration:
 The implication for `meta-edit`:
 
 1. **MCP server** — reusable as-is. opencode connects to the same
-   stdio MCP server we already ship; the nineteen tool descriptions and
+   stdio MCP server we already ship; the eighteen tool descriptions and
    the edit log don't change.
 2. **Hooks** — must be **rewritten** as an opencode plugin module
    (TypeScript exporting a `Plugin`). The pure policy modules
@@ -121,7 +121,7 @@ The MCP server is unchanged — opencode users add it to their
 
 1. A user with the npm package installed and the two config snippets
    above gets:
-   - The nineteen `edit_*` MCP tools in the opencode tool list with
+   - The eighteen `edit_*` MCP tools in the opencode tool list with
      full descriptions visible.
    - Raw `edit` / `write` / `apply_patch` calls aborted by the plugin
      with the same human-readable reason text the Claude Code hook
@@ -244,7 +244,7 @@ Recommendation: **hook-only**, no declarative bash patterns. Confirm.
 
 opencode's plugin API supports defining tools directly in TS:
 `tool: { edit_refactor_only: tool({ ... }) }`. We could expose the
-nineteen tools natively, skipping MCP entirely.
+eighteen tools natively, skipping MCP entirely.
 
 - **Pro**: better type integration, no separate stdio process, single
   source of truth in TS.

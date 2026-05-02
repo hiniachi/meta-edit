@@ -17334,7 +17334,7 @@ function validateRequest(toolName, request, ctx) {
     }
   }
   if (request.additional_files !== undefined && !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
-    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the 2 workflow tools (edit_docs_only, edit_create_file). Submit each ` + `file as its own typed_edit call.`);
+    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the workflow tool (edit_docs_only). Submit each ` + `file as its own typed_edit call.`);
   }
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
@@ -18365,7 +18365,7 @@ function createGrantsStore(repoRoot) {
 var package_default = {
   name: "@hiniachi/meta-edit",
   version: "0.3.1",
-  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
+  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -19145,4 +19145,4 @@ export {
   main
 };
 
-//# debugId=8718546687657D4964756E2164756E21
+//# debugId=BE3EDB670090496C64756E2164756E21
