@@ -1390,6 +1390,53 @@ describe("evaluateBashCommand — 1042-tee fd-redirect false-deny", () => {
 // target is classified as in-repo by isInRepoWriteTarget. Safe-sink
 // targets (/tmp/, /dev/null, ~/.claude/, ...) remain allowed.
 // ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// Codex review fixes — adversarial cases caught during the bundle's
+// pre-commit review.
+// ----------------------------------------------------------------------
+describe("evaluateBashCommand — codex review fixes", () => {
+  it("denies cat src > .claude/../src/file.ts (relative `..` escapes safe-sink)", () => {
+    // Codex #1 (HIGH): the relative-path branch of isInRepoWriteTarget
+    // didn't normalize `..` segments, so `.claude/../src/foo.ts`
+    // matched the `.claude` safe-sink and was allowed even though the
+    // path resolves back inside the repo. Fix: path.normalize the
+    // relative target, parity with the absolute branch.
+    const r = evaluateBashCommand(
+      "cat src/foo.ts > .claude/../src/escaped.ts",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows cat src > .claude/notes/foo.md (genuine .claude target)", () => {
+    // Negative: the parity fix must not break legitimate in-component
+    // .claude writes.
+    const r = evaluateBashCommand("cat src/foo.ts > .claude/notes/foo.md");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("denies tee >|src/out (codex #3 — restore tee's repo-internal deny)", () => {
+    // Codex #3 (MEDIUM): the B3 fd-redirect skip ignores `>|src/out`,
+    // so the prior matchesDangerousTee scan no longer caught it. tee
+    // is a write verb by design — restore the deny via
+    // iterRedirectTargets(segment) inside matchesDangerousTee.
+    const r = evaluateBashCommand("echo x | tee >|src/out");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies tee 2>src/err (stderr redirect to in-repo path)", () => {
+    const r = evaluateBashCommand("echo x | tee 2>src/err");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows tee /tmp/log 2>&1 (B3 regression guard)", () => {
+    // The codex-#3 fix must NOT re-introduce the original 1042-tee
+    // false-positive — `2>&1` is fd-duplication and iterRedirectTargets
+    // skips it.
+    const r = evaluateBashCommand("echo x | tee /tmp/log.txt 2>&1");
+    expect(r.decision).toBe("allow");
+  });
+});
+
 describe("evaluateBashCommand — 1100 cp-bypass via read-only verb redirect", () => {
   it("denies cat <file> > <in-repo> (the original 1100 bypass)", () => {
     const r = evaluateBashCommand(

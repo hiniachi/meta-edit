@@ -1137,10 +1137,13 @@ function isInRepoWriteTarget(target: string): boolean {
   // `/tmp/` but resolves OUTSIDE the safe sink. Resolve `..` segments
   // before the prefix check so traversal cannot escape the allowlist.
   // path.normalize on POSIX collapses `a/b/../c` → `a/c` while leaving
-  // genuine path strings unchanged. dogfood-001 self-review caught this.
-  const resolved = target.startsWith("/")
-    ? path.normalize(target)
-    : target;
+  // genuine path strings unchanged. dogfood-001 self-review caught
+  // this for the absolute branch; codex-review #1 (HIGH) caught the
+  // matching parity bug on the relative branch — `.claude/../src/foo.ts`
+  // had `.claude` as a path component (matched the safe-sink needle)
+  // even though the path resolves to `src/foo.ts` inside the repo.
+  // Normalize relative targets too to close that escape.
+  const resolved = path.normalize(target);
   if (SAFE_EXACT_TARGETS.has(resolved)) return false;
   // Path-component-aware safe sinks. Apply BEFORE the absolute-prefix
   // branch so `~/.claude/...` (relative-shaped, since we don't expand
@@ -1250,11 +1253,21 @@ function matchesDangerousTee(segment: string): boolean {
     // SAFE_EXACT_TARGETS / SAFE_ABSOLUTE_PREFIXES as a relative
     // (in-repo) path, so these fd-redirect tokens were producing
     // false-positive denies on legitimate pipelines like
-    // `npm test 2>&1 | tee /tmp/log`. The redirect target itself
-    // (the path after `>`, when present) is a separate concern
-    // already covered by iterRedirectTargets in higher-level scans.
+    // `npm test 2>&1 | tee /tmp/log`.
     if (isFdRedirectToken(tok)) continue;
     if (isInRepoWriteTarget(tok)) return true;
+  }
+  // Codex review #3 (MEDIUM): the fd-redirect skip above intentionally
+  // ignores tokens like `>|src/out` so legitimate `tee /tmp/log 2>&1`
+  // pipelines aren't denied. But tee is a write verb by design — when
+  // the redirect FORM carries a real in-repo target (`tee >|src/out`,
+  // `tee 2>src/err`, `tee 1>src/log`), the higher-level
+  // redirectsOutsideSafeSinkAllowlist only emits warn (v0.1.5
+  // loosening), which is too weak for tee. Run iterRedirectTargets
+  // explicitly here and restore the deny if any target lands in-repo.
+  for (const target of iterRedirectTargets(segment)) {
+    if (target.length === 0) continue;
+    if (isInRepoWriteTarget(target)) return true;
   }
   return false;
 }
