@@ -869,3 +869,28 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
     stay `deny`.
 - Spec deviations: none. SPEC and code stay in lockstep per
   CLAUDE.md §4.
+
+## Phase 9: Constitutional restructure (SPEC Part I + Part II slim)
+
+- Completed: 2026-05-02
+- What works:
+  - SPEC.md Part I (Articles 1–8) added at the head as the constitution.
+  - Part II §2, §3, §5, §6, §10 slimmed per the disposition map in
+    `docs/plan/case-c-token-spec-restructure/macro-plan.md`.
+  - §1, §8, §11, §12 deleted (absorbed into Articles 2, 3, 2/7, 8
+    respectively).
+  - Article 4 augmented with description-style principle and
+    fallback-obligation framework for the three easy-to-grab tools
+    (edit_refactor_only / edit_dependency_config / edit_policy_change).
+  - Three tool descriptions in §4 grew "Fallback obligation:" blocks,
+    mirrored verbatim into `src/tools/descriptions.ts`.
+  - External references in CLAUDE.md, README.md, README.ja.md updated
+    (§11 → Article 2 / Article 7).
+- Known issues:
+  - SPEC.md now describes Case C target semantics (declaration + token)
+    while `src/tools/apply.ts` still implements v0.1.x content-pair.
+    This spec-vs-code drift is a deliberate spec-first migration choice
+    (see macro-plan Part IV); subsequent micro-plans bring code into
+    alignment.
+- Tests added: none (docs-only change). Existing 581 tests still pass.
+- Spec deviations: none — this commit IS the spec.
