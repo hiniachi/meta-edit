@@ -6,58 +6,332 @@ This document is the complete specification of `meta-edit`.
 
 ---
 
-## 1. The bet
+## Part I — Constitution
 
-Modern AI coding agents (Claude Code, Cursor, Cline, Aider, Codex) all use a generic edit interface: one or two tools that take a file path and a patch. The agent decides what to edit, writes the patch, applies it, and moves on. The kind of change being made — boundary condition, permission logic, refactor, schema migration — is invisible to the system. The agent's reasoning about *what kind of edit this is* happens silently in its hidden state, if at all.
+### Article 1 — Mission
 
-`meta-edit` is built on a different bet:
+`meta-edit` replaces the AI coding agent's raw file-editing tools with
+a family of typed declaration tools. Each tool is registered separately
+under a Model Context Protocol server with a description that encodes
+when it must be used, when it must not be used, and what tests must
+accompany the edit. **The descriptions are the product.** Everything
+else is plumbing for getting the descriptions in front of the agent at
+the moment of edit.
 
-> If you split the generic edit tool into nineteen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
->
-> 1. Be forced to decide which kind of edit it is making, *as a tool selection step*
-> 2. Read the testing obligations every time, because tool descriptions are part of the prompt
-> 3. Tend to follow those obligations, because instruction-following on tool descriptions is strong in current models
-> 4. Self-correct when the description says "if you cannot do X, stop and ask"
+### Article 2 — The bet
 
-There is no detection, no verification, no enforcement beyond preventing the AI from bypassing the typed tools entirely. The bet is that **tool design alone is enough**.
+A well-designed tool surface is more useful than a complex verification
+surface. By forcing the agent to classify its intent before each
+modification — as a tool-selection step, recorded in a tool call —
+behavior is shaped at the moment the edit is being formed, not after
+the fact.
 
-The MVP is built to find out whether this works. If AIs systematically misuse `edit_refactor_only` for behavioral changes, or skip writing tests despite the descriptions requiring them, v0.2 adds a lightweight diff classifier as a backstop. Until then, we keep it simple and observe.
+The MVP is run to find out whether this works. If the experiment shows
+that descriptions alone are insufficient, the next addition is a
+lightweight diff classifier as a backstop. Adding detection prematurely
+makes the question impossible to answer cleanly, so it is forbidden in
+MVP scope (see Article 7).
+
+Falsifiability is a known gap of this article: "do descriptions change
+behavior" is sharper if accompanied by observable measurements. The
+edit log already records every typed call; useful indicators that
+should be derivable from it include declaration-without-Edit
+follow-through rate, expired-token rate, and per-tool selection
+distribution against a manually classified ground truth. Concrete
+thresholds for "descriptions are insufficient → add a classifier" are
+left for v0.2 observation, but the indicators above are the intended
+signal channel.
+
+### Article 3 — Threat model
+
+The user's AI agent is assumed to be **lazy, fallible, and
+non-adversarial.**
+
+- **Lazy** — It skips declaration steps that feel like ceremony.
+  It batches when batching feels natural. It routes around friction
+  (shell redirects, alternative tools, encoded payloads) when the
+  typed path is more expensive than a workaround.
+- **Fallible** — It misclassifies edits. It lists wrong test files.
+  It writes subtly incorrect content despite holding the right
+  intent. Honest mistakes are the modal failure.
+- **Non-adversarial** — It does not race the hook. It does not forge
+  tokens. It does not exfiltrate. It does not deliberately evade.
+  Prompt-injection-compromised agents are explicitly out of scope;
+  defending against them requires sandboxing, not declaration
+  discipline.
+
+This is the operative threat model. **Misalignment with this model is
+the historical source of implementation bloat in this project**:
+defenses designed against adversarial scenarios (deep TOCTOU loops,
+HMAC signing, sibling-temp atomicity, exhaustive symlink resolution)
+accreted in `apply.ts` and the hooks even though the actual operator
+was always lazy-and-fallible. This article exists so that the next
+round of "we should harden X" review pressure is adjudicated against
+the right adversary, not against an imagined attacker.
+
+Two consequences follow:
+
+1. **Ergonomics is a primary constraint, not a nice-to-have.** The
+   typed surface MUST be at least as ergonomic as native Edit plus
+   one declaration step. If using the typed tool feels harder than
+   slipping a `cat > file` past the hook, the lazy agent will skip
+   it, and the trial returns no signal.
+2. **The bash-write-policy hook is the load-bearing defense line for
+   accidental bypass routes**, not for adversarial forgery. Even when
+   the server delegates writes to native Edit (Article 5), an honest
+   `printf > .meta-edit/state/grants/...` typo still has to be
+   blocked. Hardening against deliberate forgery is out of scope.
+
+What is NOT defended against (constitutionally accepted): an agent
+that deliberately mis-selects a tool, lists irrelevant files in
+`test_files`, or writes plausible-but-false `rationale` text. Catching
+these requires diff classification or test-content inspection, which
+Article 7 forbids in MVP. Under the non-adversarial assumption, these
+are honest classification mistakes, not deception, and the cure is
+description-tuning (not detection).
+
+### Article 4 — Surface: nineteen tools (17 + 2)
+
+**Seventeen SQLite-derived tools.** Each is one element of a bug-class
+classification grounded in SQLite's testing strategy
+(https://sqlite.org/testing.html). The strategy's *per-change
+checklist* discipline maps each bug class to a specific obligation
+pattern (boundary triple, MC/DC, anomaly testing, etc.). The
+categories themselves are application-level (permission logic, API
+contract, …) — what is borrowed from SQLite is the discipline of
+classifying every edit before it lands. `edit_refactor_only` is the
+zero element of this classification: a change that introduces no new
+bug class, so existing tests must remain sufficient.
+
+```
+edit_refactor_only            edit_test_only_change
+edit_boundary_condition       edit_boolean_condition
+edit_state_transition         edit_db_schema
+edit_data_migration           edit_api_contract
+edit_serialization            edit_error_handling
+edit_retry_timeout            edit_concurrency
+edit_external_side_effect     edit_cache_invalidation
+edit_permission_logic         edit_dependency_config
+edit_policy_change
+```
+
+**Two workflow-required tools.** The development workflow imposes
+actions that are not "code edits as cognitive units" but "environment
+setup that the agent feels motivated to perform in batches"
+(scaffolding new files, sweeping documentation updates). Forcing those
+into a one-call-per-file rhythm creates friction that biases the agent
+toward shell-redirect bypass. They are recognized constitutionally as
+batch-friendly:
+
+```
+edit_docs_only                edit_create_file
+```
+
+The full per-tool descriptions live in Part II §4 of SPEC.md and in
+`src/tools/descriptions.ts` verbatim. They are unconstitutional only in
+the sense that the spec does not constrain their wording — they are
+free to evolve as observation accumulates, provided every change keeps
+spec and code in sync in the same change.
+
+**Description style (constitutional principle).** Each tool's
+description should read as **a safe, convenient, comfortable tool
+that helps the agent organize its thinking as it works** — not as a
+gatekeeper's prohibition list. Per Article 3's friendly-but-friction-
+driven actor, ergonomic framing is what keeps the typed path easier
+than shell-redirect bypasses. Restriction-heavy framing creates
+friction that pushes the agent off-path; positive framing turns the
+declaration step into a momentary pause that organizes intent before
+the edit lands.
+
+**Easy-to-grab tools carry fallback obligations.** The tools whose
+descriptions feel low-stakes (`edit_refactor_only`,
+`edit_dependency_config`, `edit_policy_change`) are the ones the
+agent will reach for under friction. Their descriptions therefore
+include explicit obligations that fire if the choice was wrong:
+
+- `edit_refactor_only`: if the patch turns out to contain logic
+  changes (boundary, boolean, state, error-handling, etc.), the
+  agent OWES the user a follow-up explanation in the next message —
+  what slipped in, why the typed surface didn't catch it earlier.
+- `edit_policy_change`: SPEC / configuration changes are
+  user-impacting. The agent MUST ask the user a clarifying question
+  about intended scope before applying, even when the change feels
+  obvious. A single confirmation message is the cost of the safer
+  path.
+- `edit_dependency_config`: environment changes affect everyone
+  running the project. The agent MUST summarize the change in
+  user-facing terms before applying, so the user can intercept
+  surprises.
+
+These obligations are part of the tool descriptions in §4 (and
+mirrored in `src/tools/descriptions.ts`). They are not detection
+machinery — selecting the right tool remains the agent's
+responsibility, but the description ensures that if the agent slips
+into one of these tools incorrectly, the *next* message visibly
+acknowledges the slip. Ergonomic rephrasing of the other 16 tools'
+descriptions is downstream work; only the three obligations above
+land in this restructure.
+
+### Article 5 — Mechanism (binding principles)
+
+Three principles, no implementation. The current best implementation
+of these principles lives in Part III; better implementations can
+replace it without amending the constitution.
+
+1. **The MCP server does not write.** A typed_edit call is a
+   declaration of intent. Validation is the server's only
+   responsibility. Real writes are performed by the agent's native
+   tools (Edit / Write / MultiEdit / NotebookEdit), which the agent is
+   tuned for. This routes around the friction of forcing a foreign
+   content-pair schema onto the agent's tool-calling pattern.
+
+2. **Every write must be bound to a fresh declaration.** A binding
+   mechanism MUST (a) prevent native Edit / Write / MultiEdit /
+   NotebookEdit from landing bytes inside the repository unless a
+   matching declaration exists, (b) verify the write targets the
+   declaration's file(s), and (c) verify the disk state at write time
+   matches the declaration's pre-condition. The binding has a short
+   lifetime (single use, time-bounded) so that stale declarations do
+   not accumulate authority.
+
+3. **The bash-write-policy hook is the load-bearing defense for
+   shell-route bypasses.** Whatever binding mechanism is in use,
+   shell-route bypasses (`cat >`, `sed -i`, `tee`, heredocs,
+   encoded-payload pipelines) are blocked independently. The bash hook
+   is the line that prevents accidental binding-forgery from outside
+   the typed surface.
+
+   Other-MCP write paths (e.g. `ctx_execute` writing to disk
+   without going through any meta-edit-aware hook — see issue 1108)
+   are an acknowledged hook-scope gap. Closing that gap belongs to a
+   future hook expansion (PostToolUse monitoring, MCP-write
+   allowlist), not to the constitution. The friendly-AI threat model
+   in Article 3 means the gap shows up as honest workflow misses, not
+   as adversarial bypasses.
+
+The current implementation choice is a single-use, TTL-bound,
+HMAC-signed token (Part III). It satisfies all three principles. If a
+future proposal — capability-based addressing, signed manifests,
+content-addressed declarations, etc. — satisfies the same three
+principles with better ergonomics or smaller surface, it can replace
+the token mechanism without re-opening the constitution.
+
+### Article 6 — Granularity rules
+
+The granularity follows directly from the surface split in Article 4.
+
+**Seventeen SQLite-derived tools — 1 declaration ≡ 1 target_file.**
+Each call binds exactly one file. A change that spans multiple
+production files is multiple typed_edit calls, each producing its own
+binding. Per-file kind selection IS the unit of cognitive intervention
+for code changes; collapsing multiple files into one declaration would
+weaken the bet. Atomic multi-file rename (today's `apply.ts`
+invariant) is **not** preserved; partial application is recoverable in
+the friendly-AI threat model. This is a deliberate behavior change
+from current `main`, accepted as the cost of moving real writes into
+native Edit.
+
+**Two workflow-required tools — 1 declaration ≡ N target_files.**
+`edit_docs_only` and `edit_create_file` accept a batch of files in one
+declaration. The binding's TTL covers the whole batch; native Edit /
+Write calls consume the batch's entries in any order until the
+declaration is exhausted or expires. Per-file classification has no
+cognitive value here (sweeping a docs rename across 30 markdown files
+is one act, not 30; scaffolding `index.ts` + `impl.ts` + `impl.test.ts`
+is one act, not three), and observation suggests that forcing them
+1-by-1 is the friction surface most likely to push the agent toward
+shell-redirect bypass.
+
+**Test obligations.** SQLite-derived tools that modify production code
+declare `test_files: [...]` as a **forward declaration** — paths the
+agent commits to fulfilling test obligations on. Forward declarations
+are recorded in the edit log but are NOT bound by the production
+declaration; they do not authorize writes to the test files. Test
+edits are made through `edit_test_only_change`, each producing its own
+binding. Selecting `edit_test_only_change` is the agent's
+re-affirmation that this edit is test-only; the cognitive intervention
+fires twice, once for the production change and once for the test
+addition.
+
+If the production edit's `test_files` lists multiple paths, the agent
+issues one `edit_test_only_change` declaration per test file. This is
+the intended cost: each test file is its own cognitive unit ("this
+change is test-only"), so multi-file fulfillment cannot be batched
+under a single declaration.
+
+**`edit_test_only_change` is a strict 1-file SQLite-derived tool**:
+target_file is the test file itself, `test_files` MUST be empty, and
+the call binds exactly one file.
+
+**`edit_refactor_only` is a strict 1-file SQLite-derived tool** despite
+having no test obligation: it carries the cognitive intervention "I
+believe no new bug class is introduced", which is per-file by
+definition.
+
+### Article 7 — Out of scope (constitutional)
+
+The following are NOT in MVP scope, and proposals to add them must
+clear a constitutional-amendment bar (i.e., must explicitly argue why
+the experimental signal of the bet is preserved):
+
+- **Diff classification** — inspecting patch contents to verify the
+  declared kind matches.
+- **Test verification** — confirming `test_files` exist, contain
+  meaningful assertions, or are eventually updated.
+- **Mutation testing, regression verification, coverage gates.**
+- **Server-side defense-in-depth** for filesystem hardening (TOCTOU
+  loops beyond the single sha256 check, symlink-swap defenses,
+  sibling-temp atomicity, parent-directory fsync). These belong to
+  the native Edit tool and to OS file APIs.
+- **Sidecar classifiers, auto-repair loops, agent-feedback loops.**
+- **Heavy hooks** that re-implement what tool descriptions already say.
+
+The temptation will recur, especially after observed bypasses. The
+correct response is almost always to refine a description, not to add
+machinery. If observation eventually shows descriptions to be
+insufficient, Article 2's escape hatch (a v0.2 lightweight diff
+classifier) is the planned next step — and only that.
+
+### Article 8 — References
+
+- SQLite testing strategy: https://sqlite.org/testing.html
+- Issue 1103 — typed `edit_*` as thin Edit wrapper via grant-token
+  (`issues/2026-05-02-1103-typed-edit-as-thin-edit-wrapper-via-grant-token.md`)
+- Issue 1108 — `deny-raw-edit` MCP tool scope gap
+  (`issues/2026-05-02-1108-deny-raw-edit-mcp-tool-scope-gap.md`)
 
 ---
+
+## Part II — Derived Specification
+
 
 ## 2. Architecture
 
 ```
-Claude Code
+Claude Code (host)
   │
-  │ built-in Edit / Write / MultiEdit / NotebookEdit: deny via permissions
-  │
+  │  Edit / Write / MultiEdit / NotebookEdit
   ▼
-Hook layer (minimal, just two)
-  ├─ PreToolUse: deny-raw-edit
-  └─ PreToolUse: deny-bash-write-bypass
-  │
+PreToolUse hook: deny-raw-edit (token-aware, see §5)
+  ├─ valid token + sha256 checks pass → allow + consume
+  └─ otherwise → deny
   ▼
+File system (write performed by native Edit/Write)
+
+Independently:
+PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
+
 MCP server: meta-edit-mcp
-  ├─ edit_refactor_only          edit_test_only_change
-  ├─ edit_boundary_condition     edit_boolean_condition
-  ├─ edit_state_transition       edit_db_schema
-  ├─ edit_data_migration         edit_api_contract
-  ├─ edit_serialization          edit_error_handling
-  ├─ edit_retry_timeout          edit_concurrency
-  ├─ edit_external_side_effect   edit_cache_invalidation
-  ├─ edit_permission_logic       edit_dependency_config
-  └─ edit_policy_change
-  │
-  ▼
+  ├─ 17 SQLite-discipline-derived tools (single-file declarations)
+  ├─ 2 workflow tools (batch declarations of N files)
+  └─ Issues tokens; never writes files
+
 State
-  └─ .meta-edit/state/edits.jsonl    (append-only edit log, protected)
-  │
-  ▼
+  ├─ .meta-edit/state/grants/         in-flight tokens
+  └─ .meta-edit/state/edits.jsonl     append-only audit log
+
 CLI
-  ├─ meta-edit serve                  (start MCP stdio server)
-  ├─ meta-edit log                    (display edits)
-  └─ meta-edit summary                (aggregate by tool / risk / file)
+  ├─ meta-edit serve / log / summary
 ```
 
 That is the entire system.
@@ -66,125 +340,72 @@ That is the entire system.
 
 ## 3. The nineteen tools: common schema
 
-All tools accept the same arguments and return the same result.
+A typed_edit MCP call is a **declaration of intent**. The server validates the request, issues a single-use token bound to one or more sha256 tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
 
 ```typescript
 type EditToolRequest = {
-  target_file: string;                        // primary file the edit is about
-  rationale: string;                          // 1-3 sentences, non-empty
+  target_file: string;            // primary bound file. Always present.
+  rationale: string;              // 1-3 sentences, non-empty after trim
   risk_level: "low" | "medium" | "high" | "critical";
-  test_files: string[];                       // paths of test files relevant to
-                                              // this edit. May be files modified
-                                              // in this request, files the agent
-                                              // commits to updating in
-                                              // immediately following
-                                              // edit_test_only_change calls, or
-                                              // existing tests that already
-                                              // cover the change.
-                                              // May be empty for
-                                              // edit_refactor_only and
-                                              // edit_docs_only.
-                                              // Must be empty for
-                                              // edit_test_only_change.
-  changes: Array<{                            // one or more content-pair
-    file: string;                             // changes; modify-only
-    old_content: string;                      // exact current disk content
-                                              // (server rejects on mismatch)
-    new_content: string;                      // new content to write
+  test_files: string[];           // forward declaration; not bound by token
+
+  before_sha256: string;          // hex(64). For edit_create_file's
+                                  // target_file, sha256("").
+  after_sha256: string;           // hex(64).
+
+  // ONLY accepted by the 2 workflow tools (edit_docs_only,
+  // edit_create_file). The 17 SQLite-derived tools MUST omit this
+  // field; validation rejects its presence elsewhere.
+  additional_files?: Array<{
+    file: string;
+    before_sha256: string;        // sha256("") for create entries
+    after_sha256: string;
   }>;
 };
 
 type EditToolResult = {
-  applied: boolean;
-  edit_id: string;                            // e.g. "edit_20260427_0001"
+  token: string;                  // e.g. "met_20260502_a3f9b2..."
+  expires_at: string;             // ISO-8601, declaration_time + 30s
+  edit_id: string;                // e.g. "edit_20260502_0001"
   warnings: string[];
-  audit_error?: string;                       // Present whenever an audit-log
-                                              // write fails (validation-
-                                              // rejection or post-apply).
-                                              // The caller MUST check
-                                              // `applied` for apply status;
-                                              // `audit_error` indicates only
-                                              // that the audit trail is
-                                              // incomplete for this edit_id.
-                                              // Distinguishes audit-log
-                                              // failures from validation
-                                              // warnings.
+  audit_error?: string;           // present whenever an audit-log write
+                                  // fails. The caller MUST check the
+                                  // edit_log directly for ground truth.
 };
 ```
-
-`test_files` is recorded as the agent's declaration. The server does not verify that the listed files exist, contain meaningful tests, or are eventually updated. This is consistent with the broader stance that the MVP relies on tool descriptions and self-declaration rather than verification.
 
 ### Argument validation
 
 The MCP server enforces:
 
-- `target_file` must be a path within the repository root (after `realpath` resolution; symlinks resolving outside the repository root are rejected)
-- `target_file` must not match `.meta-edit/state/**` or other protected paths
-- `rationale` must be non-empty after trim
-- `test_files` must be non-empty for tools other than `edit_refactor_only`, `edit_test_only_change`, and `edit_docs_only`
-- `test_files` must be empty for `edit_test_only_change` (the `target_file` is itself the declared test file)
-- `changes` must be a non-empty array (`.min(1)` zod refinement; defensive re-check at validation time)
-- Each `change.file` is validated under the same path-safety rules as `target_file` (inside repo after `realpath`, not in protected paths)
-- The total payload bytes — the sum of `Buffer.byteLength(change.old_content, "utf8") + Buffer.byteLength(change.new_content, "utf8")` across every change — must not exceed `MAX_CHANGE_BYTES` (1 MiB)
-- Each `change.old_content` and `change.new_content` must not contain a NUL byte
-- `change.file` must reference an existing file on disk at apply time, **except for `edit_create_file`**. For all other tools, the content-pair shape is **modify-only**: there is no representation for file deletion or rename, and missing files fail the call. For `edit_create_file`, the file MUST NOT exist on disk — `old_content` MUST be the empty string and the server opens the path with `O_CREAT | O_EXCL | O_NOFOLLOW`, refusing to overwrite or follow a symlink at the leaf.
-- `change.old_content` must equal the current disk content of `change.file` byte-for-byte at apply time (precondition). A mismatch fails the entire call without writing anything.
-- Apply is two-phase: precondition check (no writes) → per-change sibling temp-write → rename. If any precondition fails OR any temp-write fails, NO target file is modified. Rename failures after some renames committed are reported as warnings (best-effort multi-file atomicity on POSIX).
-- Patch scope rules apply (see below)
+- `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
+- `rationale` is non-empty after trim.
+- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only`.
+- `before_sha256` and `after_sha256` are exactly 64 hex chars.
+- `before_sha256` matches the current disk content of `target_file` at declaration time (sha256(disk_content), or sha256("") when `edit_create_file` and the file does not yet exist).
+- `additional_files` is accepted only for the 2 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
+- Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
-Validation failures result in `applied: false` and a clear error message in `warnings`. They do not crash the server.
+Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.
 
-### Patch scope
+### Token issuance
 
-The `changes` array may touch more than one file, but the set of touched files is restricted.
+A successful declaration produces a token bound to the set of
+`(file, before_sha256, after_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The token expires 30 seconds after issuance. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
-For all tools other than `edit_test_only_change`:
+The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 
-- A `change.file` may equal `target_file`
-- A `change.file` may equal any file listed in `test_files`
-- No `change.file` may reference any other path
-- Two `change.file` entries that resolve to the same canonical path are rejected (use separate `edit_*` calls so changes are not silently dropped)
+### Multi-kind precedence
 
-For `edit_test_only_change`:
+If a single change might fit multiple tools, prefer the more specific:
 
-- A `change.file` may equal `target_file` only; no other file may appear
-- `test_files` must be empty (the agent is declaring that `target_file` is itself the test edit)
-- The server does not pattern-match `target_file` against any test-file pattern. Choosing this tool is itself the agent's declaration that this is a test-only edit; tool selection is the obligation, not server-side classification
-
-A request that violates these rules is rejected with `applied: false`.
-
-This rule lets the agent submit a production change and a colocated test addition in a single tool call when convenient (using a non-test-only tool), without forcing it. Splitting into a production edit followed by one or more `edit_test_only_change` calls is also valid; in that case, `test_files` on the production edit lists the planned test-file paths, and each test-file change is its own `edit_test_only_change` call.
-
-### Path safety
-
-All paths — both `target_file` and any `change.file` — are resolved with `realpath` after symlink resolution. A path is valid only if its resolved absolute path is inside the resolved repository root. Symlinks that resolve outside the repository root are rejected.
-
-The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees for protected paths; protection is enforced through the server's path checks and the bash hook on a best-effort basis.
-
-### Multi-kind changes
-
-A change that spans multiple edit kinds should be split into multiple tool calls where possible. If splitting is unsafe or impractical, choose the highest-risk applicable tool and mention the secondary aspects in `rationale`.
-
-Specific tools take precedence over generic tools when both could apply:
-
-- `edit_permission_logic` over `edit_boolean_condition` or `edit_boundary_condition`
+- `edit_permission_logic` over `edit_boolean_condition` / `edit_boundary_condition`
 - `edit_retry_timeout` over generic `edit_boundary_condition`
 - `edit_external_side_effect` over generic `edit_error_handling` for failure-side-effect interactions
 - `edit_data_migration` over generic `edit_db_schema` when existing data is being modified
 - `edit_policy_change` over any ordinary code tool when the change touches `meta-edit` configuration, hooks, or tool descriptions
 
-### What the server does, in order
-
-1. Validate arguments (rationale, test_files cardinality, payload bound, NUL-byte rejection)
-2. Resolve and check all paths (`target_file`, `test_files`, every `change.file`)
-3. Verify changes scope (target_file ∪ test_files; modify-only tool's stricter rule)
-4. Apply phase 1 (preflight): re-realpath each target, read disk, compare to `old_content`. Stop and reject without writing if any check fails.
-5. Apply phase 2 (sibling temp writes): write each `new_content` to a randomly-named sibling file in the same directory as the target.
-6. Apply phase 3 (rename commits): rename each temp into place atomically.
-7. Append an entry to `.meta-edit/state/edits.jsonl`
-8. Return result
-
-The server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point is that tool descriptions, not server logic, do the work.
+A change that spans multiple kinds and cannot be safely split should choose the highest-risk applicable tool and mention secondary aspects in `rationale`.
 
 ---
 
@@ -250,6 +471,16 @@ If your patch contains any of these, choose a more specific edit_* tool:
 If you are unsure whether your change qualifies as refactor-only, choose a
 more specific tool. False precision is safer than false generality. Misusing
 this tool is the largest source of regression bugs in AI-generated code.
+
+Fallback obligation:
+If, after applying this tool, you discover that your patch did
+contain any of the change kinds listed above (comparison change,
+boolean change, guard clause, error-handling change, etc.), you
+owe the user a follow-up explanation in your next message: name
+what slipped in, and say why the typed surface didn't catch it
+before you applied. This is a personal debt that posts to the
+user, not a detection bypass — acknowledging the slip is what
+keeps the typed surface honest.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -802,6 +1033,13 @@ document it explicitly — do not silently absorb it.
 For security-related dependency upgrades, the rationale must say so
 explicitly.
 
+Fallback obligation:
+Before applying this tool, summarize the change in user-facing
+terms: which package, what version delta, runtime vs dev, expected
+impact on the build or development loop. Surprise dependency
+updates are how contributors lose a day to a broken local
+environment; the user has standing to intercept before it lands.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -844,6 +1082,14 @@ rationale.
 If your change loosens a restriction without a strong justification, do
 not use this tool. Reconsider whether the restriction was correct in the
 first place.
+
+Fallback obligation:
+Before applying this tool, ask the user a clarifying question
+about the intended scope of the policy change, even when the
+change feels obvious. A single confirmation message is the cost
+of the safer path. Loosening restrictions, modifying hook
+behavior, and editing tool descriptions all carry implications
+the user has the standing to weigh; do not assume.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -913,10 +1159,12 @@ Required tests (you MUST cover):
 2. If the new file is itself a test file, it must contain at least one
    explicit assertion. The mere existence of a test file is not a test.
 
-test_files must be non-empty (you must declare which test covers the new
-code). For each entry in `changes`, `old_content` MUST be the empty
-string — the file does not yet exist. `new_content` is the full content
-to write.
+test_files must be non-empty (you must declare which test covers the
+new code). The `target_file` MUST NOT exist on disk at declaration
+time; `before_sha256` MUST be `sha256("")`. `after_sha256` is the
+sha256 of the intended file content. For multi-file scaffolding, list
+additional creates in `additional_files` (this tool is one of the two
+workflow-required tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -946,155 +1194,107 @@ General principles (apply to every edit):
 
 ## 5. Hooks
 
-Two hooks. No more.
+Two PreToolUse hooks, both shipped under `hooks/` in this repo.
 
-### 5.1 `deny-raw-edit`
+### 5.1. deny-raw-edit (token-aware)
 
-Triggered on `PreToolUse` for `Edit`, `Write`, `MultiEdit`, `NotebookEdit`. Always denies.
-
-`NotebookEdit` is included because Jupyter (`.ipynb`) cells contain arbitrary executable code (Python, shell `!cmd`, JavaScript) — edits to them warrant the same kind-specific discipline as edits to `.py` or `.ts` source files. Tool-name comparison is case-insensitive so a host shim that delivers alternate casings (`"edit"`, `"WRITE"`, `"multiedit"`, `"notebookedit"`) cannot bypass the gate.
-
-Response payload:
-
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Raw Edit/Write/MultiEdit/NotebookEdit is disabled. Use one of the edit_* tools (e.g., edit_boundary_condition, edit_refactor_only). See tool descriptions for guidance on which to use."
-  }
-}
-```
-
-### 5.2 `deny-bash-write-bypass`
-
-Triggered on `PreToolUse` for `Bash`. Inspects the command line and denies if it matches a write-bypass pattern, unless it matches an allowlist pattern.
-
-This hook operates on a **best-effort basis**. It uses substring matching on the command line, which is straightforward to bypass (heredocs in alternative languages, base64-encoded commands, indirect invocations through shell aliases or wrappers, etc.). The MVP does not attempt to defeat a determined bypass; it raises the cost of the obvious bypasses to the point where using an `edit_*` tool is the path of least resistance. Stronger guarantees would require shell command parsing or a filesystem sandbox, both of which are out of scope.
-
-Deny families:
-
-1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization). All entries below are `deny`, not `warn`:
-
-   ```
-   sed -i
-   sed --in-place
-   perl -pi
-   perl -i
-   perl -e / ruby -e / php -r        (when the snippet writes a file)
-   python -c                         (when the snippet contains write_text, write, open(... 'w', etc.)
-   node -e                           (when the snippet contains writeFile, writeFileSync)
-   cat >
-   cat >>
-   tee <in-repo target>
-   tee -a <in-repo target>
-   mv ... <files in repo>
-   cp ... <files in repo>
-   dd of=<in-repo target>
-   git apply
-   patch
-   rsync
-
-   heredoc-with-redirect             (`cat <<MARKER ... > target`,
-                                      `cat <<-MARKER ... > target`,
-                                      `cat <<"MARKER" ... > target`,
-                                      `cat <<'MARKER' ... > target`)
-   eval <non-literal argument>       (`eval "$X"`, eval of `$(...)` /
-                                      backticks / variable expansions)
-   decode-and-execute pipelines      (`base64 -d | bash`,
-                                      `xxd -r -p | sh`,
-                                      `openssl base64 -d | bash`, …)
-   ```
-
-   The deny set is intentionally larger than the verb list above — it covers shape-based detections too. Source of truth for the exact set is `src/hooks/bash-write-policy.ts` (`DENY_SUBSTRINGS`, `DENY_PREFIX_PATTERNS`, `DENY_VERBS`, `matchesDangerousDd`, `matchesDangerousTee`, `matchesEvalDeferredString`, `matchesPythonNodeWrite`, `matchesDecodeAndExecute`, plus the heredoc-with-redirect regex in `evaluateSegment`).
-
-2. **Structural redirect-target warn** (dogfood-001 + dogfood-005, loosened to warn in v0.1.5). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is **warned-and-allowed** — the call proceeds, but the hook returns `permissionDecision: "allow"` together with a `permissionDecisionReason` and mirrors the same text on stderr, so the AI is nudged toward an `edit_*` tool while a human reviewer sees the warning in the transcript. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) structurally, without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
-
-   ```
-   exact: /dev/null  /dev/stdout  /dev/stderr  /dev/zero
-   prefix: /tmp/  /var/tmp/  /run/  /sys/
-   ```
-
-   Relative paths and absolute paths outside the safe-sink list are treated as bypass-risk and warned. Use one of the nineteen `edit_*` tools for in-repo writes; capture command output to `/tmp/` or `/dev/null` if you need a sink.
-
-   **`deny` always wins over `warn`** when both fire on the same command. Verb-deny patterns (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, the heredoc-with-redirect form, the inline-interpreter writes, etc.) and protected-path checks run *before* the structural redirect check, so well-known bypasses still produce `deny`. Across segments, the top-level evaluator surfaces `deny` if any segment denies; otherwise it surfaces the first `warn`; otherwise `allow`.
-
-   v0.1.4 and prior denied this case outright. The loosening (deny → warn) was driven by a structural false-positive surface: legitimate redirects to outside-repo absolute paths (`~/.cache/...`, `$RUNNER_TEMP`, `/home/user/scratch/...`) had no safe-sink entry and were uniformly denied. The verb-denylist still catches the well-known bypasses, and `.meta-edit/state/**` / `.meta-edit/tmp/**` writes are still denied earlier in the pipeline. If observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around the typed tools through this surface at scale, the warn will be tightened back to deny — see `OBSERVED-FAILURES.md` for the restore trigger.
-
-   The DENY_SUBSTRINGS verb scan and the protected-path scan apply `stripQuotedContent` first, so a documentation string containing the literal trigger phrase inside a quoted argument (`printf 'do not use sed -i' > /tmp/notes.md`) is not denied. Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`) re-extract their literal argument and scan it raw so embedded bypasses inside the wrapper's quoted code remain caught.
-
-Allowlist patterns (override deny):
+Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit` tools. Validates that each call carries a `_meta_edit_token` parameter referencing a fresh declaration in `.meta-edit/state/grants/`.
 
 ```
-prettier --write
-eslint --fix
-gofmt -w
-cargo fmt
-ruff --fix
-ruff format
-black
-prisma generate
-openapi-generator
-swagger-codegen
+on_pre_tool_use(toolName, toolInput):
+  token_id = toolInput["_meta_edit_token"]
+  if not token_id:
+    return deny("untyped raw edit")
+
+  token = grants.lookup(token_id)
+  if token is None or token.expired():
+    return deny("token expired or unknown")
+
+  file_path = realpath(toolInput["file_path"])
+  bound = token.find_binding(file_path)
+  if bound is None:
+    return deny("file_path not bound by this token")
+
+  # Pre-condition: declared starting state matches disk
+  disk_content = read(file_path) if exists(file_path) else b""
+  if sha256(disk_content) != bound.before_sha256:
+    return deny("disk has drifted from declaration (staleness)")
+
+  # Post-condition: simulated write produces declared content.
+  # Catches honest mistakes where toolInput would produce content
+  # differing from the declared after_sha256.
+  proposed = simulate(toolName, toolInput, disk_content)
+  if sha256(proposed) != bound.after_sha256:
+    return deny("simulated write does not match declared after_sha256")
+
+  grants.consume(token_id, file_path)
+  return allow()
+
+simulate(toolName, toolInput, current):
+  case "Edit":         return current.replace(toolInput.old_string,
+                                              toolInput.new_string, count=1)
+  case "Write":        return toolInput.content
+  case "MultiEdit":    apply each edit in sequence; return final
+  case "NotebookEdit": return UNSUPPORTED   # see Article 7
 ```
 
-The allowlist exists because formatters and code generators are part of normal development workflows, and forbidding them outright would make `meta-edit` unusable in real projects. These tools are conventionally semantic-preserving (formatters) or driven by separate input files (codegens), so they are unlikely to be used as deliberate edit-tool bypass. If observation shows AIs routing edits through formatters or codegens to avoid `edit_*` tools, the allowlist will be tightened in a future version.
+The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
 
-Allowlist applies only when the command's effect is bounded to formatting or codegen, never to arbitrary file rewrites.
+Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
-Writes to `.meta-edit/state/**` and `.meta-edit/tmp/**` are denied even if the command otherwise matches the allowlist. The hook decides "would write" along two axes:
+After the native write completes, a PostToolUse path appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6).
 
-1. **Verb is not in the read-only carve-out.** The hook maintains a small set of common read-only inspection utilities (`tail`, `head`, `cat`, `grep` / `egrep` / `fgrep`, `wc`, `cut`, `tr`, `od`, `hexdump`, `stat`, `ls`, `du`, `df`, `jq`, `diff`, `cmp`). If the command's leading verb (after wrapper / env-assignment / absolute-path normalization) is **not** in that set, any reference to a protected path is denied.
-2. **`>` / `>>` redirect target is protected.** Even when the leading verb is read-only, if the command has a write redirect whose target token references a protected path (substring match, after backslash strip and path-doubling collapse, ignoring `>&` fd-duplications and quoted regions), the deny still fires.
+Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through this hook — see issue 1108) are an acknowledged hook-scope gap. Closing that gap is a future hook expansion (PostToolUse monitoring, MCP-write allowlist), not part of this hook.
 
-This carve-out exists so debugging workflows like `tail -2 .meta-edit/state/edits.jsonl` or `jq . .meta-edit/state/edits.jsonl` work without disabling the hook. Any verb that has a non-redirect write side-effect — including in-place mutation, an output flag, an output positional, a shell-escape mode, or a subprocess-spawning option — is deliberately omitted from the read-only set so the protected-path deny still fires when targeting protected directories. Examples: `find -delete`, `sort -o OUT`, `uniq IN OUT`, `xxd -r`, `yq -i`, `less -O OUT`, `more !command`, `rg --pre=CMD`, `file -C`, `awk 'print > "..."'`, `dd of=...`.
+### 5.2. deny-bash-write-bypass
 
-When in doubt, the hook denies and asks the AI to use an `edit_*` tool.
+Fires on Claude Code's `Bash` tool. Denies write patterns that would route bytes into the repository without going through native Edit/Write:
+
+- **Verb denylist**: `cat >`, `sed -i`, `tee`, `dd of=`, `mv`, `cp`, `patch`, `rsync`, `git apply`, ...
+- **Heredoc-with-redirect**: `cat <<EOF > target`
+- **Inline interpreter writes**: `python -c '...write'`, `node -e '...write'`, `perl -e ...`, `ruby -e ...`, `php -r ...`
+- **Decode-and-execute pipelines**: `base64 -d | bash`, `eval "$(...)"`
+- **Protected-path writes**: `printf > .meta-edit/state/...` (always denied regardless of redirect target)
+
+The structural redirect-target check (a redirect to a path outside the safe-sink allowlist) is **warned, not denied** since v0.1.5. The call proceeds with a `permissionDecisionReason` nudging the agent toward an `edit_*` tool. The verb-denylist and protected-path checks remain `deny`.
+
+Substring-matching is the bypass-resistance limit. Determined commands (alternative interpreters, encoded payloads, exotic constructs) can evade. Per Article 3's non-adversarial assumption, the goal is to make the typed surface easier than honest workaround paths, not to provide a sandbox.
 
 ---
 
 ## 6. Edit log
 
-`.meta-edit/state/edits.jsonl` — append-only JSON Lines, one record per edit.
+`.meta-edit/state/edits.jsonl` — JSON Lines, append-only, protected.
+
+Each declaration produces two records:
+
+1. **Issued** — written when the typed_edit handler returns success.
 
 ```json
-{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
+{"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00",
+ "phase":"issued",
+ "kind":"edit_boundary_condition",
+ "target_file":"src/foo.ts",
+ "rationale":"...",
+ "risk_level":"medium",
+ "test_files":["tests/foo.test.ts"],
+ "binding":[{"file":"src/foo.ts","before_sha256":"...","after_sha256":"..."}],
+ "token":"met_20260502_a3f9b2..."}
 ```
 
-Fields:
+2. **Consumed** — written when the token is consumed by the deny-raw-edit hook (see §5).
 
-- `edit_id`: monotonically increasing within a day, format `edit_YYYYMMDD_NNNN`
-- `timestamp`: ISO 8601 with timezone
-- `tool_name`: one of the nineteen tool names
-- `target_file`: repository-relative path
-- `rationale`: as supplied by the AI (any language)
-- `risk_level`: as supplied by the AI (recorded for audit, not enforcement)
-- `test_files`: as supplied by the AI
-- `patch_size_bytes`: byte length of the synthesized unified diff (`Diff.createTwoFilesPatch` joined across every `change` in the request, encoded as UTF-8). The field name is preserved for log shape compatibility; the value is computed from the request inputs (no incoming `patch` string exists in v0.1.2+).
-- `applied`: whether the patch applied successfully
-- `warnings`: any warnings or validation errors associated with this edit (empty array on success)
-
-Per-change content is not stored. The synthesized diff is computed for `patch_size_bytes` and discarded; only its byte length lands in the log. If the repository is under version control, external VCS history can often be used to reconstruct individual edits, but `meta-edit` itself does not guarantee per-edit reconstruction — sequential edits to the same lines, rebases, or amends can make per-edit reconstruction lossy or impossible.
-
-Failed validations also append a record with `applied: false` and the relevant error messages in `warnings` for forensic purposes.
-
-### Protected paths
-
-The MCP server refuses any `target_file`, or any path appearing inside a patch, that resolves into:
-
-```
-.meta-edit/state/**
-.meta-edit/tmp/**
+```json
+{"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00",
+ "phase":"consumed",
+ "consuming_tool":"Edit"}
 ```
 
-Path matching uses the `realpath`-resolved absolute path against the resolved repository root (see §3 Path safety). These directories are also denied via the bash hook. They are not version-controlled. The recommended `.gitignore` is:
+Records reaching only `issued` without a `consumed` sibling are evidence of a half-finished declaration (token expired, agent abandoned the edit). Audit consumers reconcile by `edit_id`.
 
-```
-.meta-edit/state/
-.meta-edit/tmp/
-```
+Failed declarations (validation rejection at the MCP server) record one entry with `phase: "rejected"` and a non-empty `audit_error` field.
 
-This protection raises the cost for the AI to rewrite its own edit log. It does not provide cryptographic tamper resistance or OS-level append-only guarantees; protection is best-effort, consistent with the bash hook.
+Rotation and retention are not specified; in MVP the file grows unbounded. Operators that anticipate long-running deployments should add their own rotation outside `meta-edit`.
 
 ---
 
@@ -1173,26 +1373,6 @@ There is no PASS/WARN/BLOCK return. Judgment is delegated to humans, for now.
 
 ---
 
-## 8. Threat model and mitigations
-
-What we defend against, in MVP scope:
-
-- **AI uses raw Edit / Write / MultiEdit / NotebookEdit**: blocked by Claude Code permissions and `deny-raw-edit` hook (defense in depth)
-- **AI uses common Bash write patterns to bypass typed tools**: blocked on a best-effort basis by `deny-bash-write-bypass` for the verb-denylist (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, heredoc-with-redirect, inline interpreter writes, decode-and-execute, …). The structural "redirect to a target outside the safe-sink allowlist" case is **warned, not denied** since v0.1.5 (see §5.2): the call proceeds with a `permissionDecisionReason` nudging the AI toward an `edit_*` tool. The hook uses substring matching and can be bypassed by determined commands (heredocs in alternative languages, encoded payloads, etc.); the goal is to make the obvious bypasses harder than using an `edit_*` tool, not to provide a sandbox
-- **AI rewrites the edit log through `meta-edit` tools or common shell write patterns**: blocked on a best-effort basis by protected-path checks and the bash hook. The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees
-- **AI provides empty `rationale` or empty `test_files` to slip past requirements**: blocked by argument validation
-
-What we explicitly do NOT defend against, in MVP scope:
-
-- **AI deliberately chooses the wrong edit_* tool** (e.g., uses `edit_refactor_only` for a boundary change)
-- **AI provides plausible but false `rationale` text**
-- **AI lists irrelevant files in `test_files`** (the server does not verify they exist or contain meaningful tests, nor that they are actually updated)
-- **AI declares low `risk_level` on a critical change** (the field is recorded but not enforced)
-- **AI uses an exotic Bash construct to bypass the hook** (best-effort detection only)
-
-Defending against these requires diff classification, test verification, mutation testing, command parsing, or filesystem sandboxing. None of these are in MVP scope. They are the obvious next layer if observation shows that descriptions and best-effort hooks are insufficient.
-
----
 
 ## 9. Configuration
 
@@ -1206,11 +1386,10 @@ If configuration is needed in the future (e.g., adjusting allowlist for the bash
 
 ### Recommended stack
 
-- TypeScript for the MCP server and CLI
+- TypeScript for the MCP server, hooks, and CLI
 - `zod` for argument schemas
-- A well-maintained unified-diff library (e.g., `jsdiff`) for patch application — do not write your own diff engine. Verify the chosen library handles file additions, deletions, and renames if you intend to allow those in patches; restrict patch operations to the subset the library handles correctly
-- JSONL for the edit log — no database, no migration concerns
-- GitHub Actions for the CI sample
+- JSONL for the edit log; no database
+- Bun + Node 20 in CI
 
 ### Repository layout
 
@@ -1218,63 +1397,30 @@ If configuration is needed in the future (e.g., adjusting allowlist for the bash
 meta-edit/
   src/
     tools/
-      common.ts              shared types, validation, patch application
-      descriptions.ts        the nineteen descriptions, verbatim from §4
-      registry.ts            MCP tool registration
-    server.ts                MCP stdio server entry
-    cli.ts                   CLI entry
+      common.ts             shared types, validation, token issuance
+      descriptions.ts       the nineteen descriptions, verbatim from §4
+      registry.ts           MCP tool registration
+    server.ts               MCP stdio server entry
+    cli.ts                  CLI entry
     state/
-      edit-log.ts            jsonl read/write
-      protected-paths.ts     path matching
+      edit-log.ts           jsonl read/write
+      grants.ts             token issuance / lookup / consumption
+      protected-paths.ts    path matching
     hooks/
       deny-raw-edit.ts
       deny-bash-write-bypass.ts
   examples/
     .github/workflows/meta-edit-summary.yml
   package.json
-  README.md
-  CLAUDE.md
-  SPEC.md                    this document
-  LICENSE
+  README.md  CLAUDE.md  SPEC.md
 ```
 
-### The most important file
+### Descriptions-verbatim rule
 
-`src/tools/descriptions.ts` is the most important file in the repository. It contains the nineteen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
+`src/tools/descriptions.ts` contains the nineteen descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
 
-```typescript
-export const TOOL_DESCRIPTIONS = {
-  edit_refactor_only: `Refactor production code without changing observable behavior.
-
-Use this tool when:
-- ...`,
-
-  edit_test_only_change: `...`,
-
-  // ... nineteen total
-} as const;
-```
-
-Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of nineteen separate tools is that **tool selection is the reasoning step**.
+Tool handlers share common logic via helpers, but each tool is registered separately under the MCP server with its own description. Per Article 4, tool selection is the cognitive intervention; the surface is not collapsed into a generic `kind`-parameterized handler.
 
 ---
 
-## 11. Future direction
 
-If descriptions alone don't change AI behavior enough — for instance, if `edit_refactor_only` is routinely used for behavioral changes, or tests are routinely skipped — v0.2 adds a lightweight diff classifier as a backstop.
-
-The classifier would inspect the patch and flag obvious mismatches (e.g., `<=` changed to `<` in a patch declared as `edit_refactor_only`). Descriptions remain primary; classification flags mismatches as warnings in the edit log without blocking edits.
-
-That is the only planned semantic-enforcement direction. Workspace protocols, VCS adapters, mutation testing, regression verification, plan/spec/reference structuring — all of these are explicitly out of scope for `meta-edit`. They are valuable, but they belong to other projects.
-
-Smaller maintenance changes — refining tool descriptions based on observed usage, tightening the bash hook's allowlist if it becomes a bypass route, improving log details — are not "future directions" in the same sense; they are ordinary upkeep and will happen as needed.
-
-The structural redirect-target check (§5.2) sits in the same upkeep bucket. It was tightened to `deny` in v0.1.3 (dogfood-001) and loosened to `warn` in v0.1.5 because the safe-sink allowlist had a structural false-positive surface on legitimate redirects to outside-repo absolute paths. The expected restore path, if observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around typed tools through this surface, is to flip the structural redirect check back to `deny` — not to add a classifier. The verb-denylist and protected-path checks remain on `deny` regardless. The trigger and revert procedure live in `OBSERVED-FAILURES.md`.
-
-`meta-edit` is exactly this: nineteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
-
----
-
-## 12. References
-
-- SQLite Testing Strategy. https://sqlite.org/testing.html

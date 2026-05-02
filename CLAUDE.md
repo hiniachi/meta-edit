@@ -73,7 +73,7 @@ Everything else. Specifically:
 - jj-specific support
 - Auto-repair loops
 
-If the user asks for any of these, say "out of scope per `SPEC.md` §11; either the MVP demonstrates that descriptions are sufficient, or v0.2 adds a classifier — nothing else is planned." Then return to the actual scope.
+If the user asks for any of these, say "out of scope per `SPEC.md` Articles 2 and 7; either the MVP demonstrates that descriptions are sufficient, or v0.2 adds a classifier — nothing else is planned." Then return to the actual scope.
 
 ---
 
@@ -219,7 +219,7 @@ You have access to Bash.
 
 ## 9. Handling user requests that conflict with this CLAUDE.md
 
-- **Implement detection / verification / classification**: refuse, point at `SPEC.md` §11. Those belong to v0.2 if needed at all.
+- **Implement detection / verification / classification**: refuse, point at `SPEC.md` Article 7. Those belong to v0.2 if needed at all.
 - **Trust without descriptions**: refuse. The descriptions are the product.
 - **Use raw Edit/Write after Phase 3**: refuse. If `edit_*` tools are broken, fix them rather than bypass.
 - **Add scope creep**: refuse. Add a TODO with a reference to v0.2 if it's about a possible future classifier.

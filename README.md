@@ -184,7 +184,7 @@ If `meta-edit` saves you time or prevents a bad edit, please consider buying the
 Your support helps fund:
 
 - New `edit_*` categories based on observed AI failure modes
-- The optional v0.2 lightweight diff classifier (see [`SPEC.md` §11](./docs/SPEC.md))
+- The optional v0.2 lightweight diff classifier (see [`SPEC.md` Article 2](./docs/SPEC.md))
 - Tighter Claude Code Plugin integration
 
 ## License
