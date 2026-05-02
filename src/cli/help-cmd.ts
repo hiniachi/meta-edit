@@ -72,6 +72,10 @@ Usage:
                                            Install Claude Code hooks into settings.json.
   meta-edit uninstall-hooks --scope user|project
                                            Remove Claude Code hooks from settings.json.
+  meta-edit install-opencode --scope user|project
+                                           Install opencode mcp + plugin into opencode.json.
+  meta-edit uninstall-opencode --scope user|project
+                                           Remove opencode mcp + plugin from opencode.json.
   meta-edit help [TOOL]                    Show this help, or the verbatim
                                            description for one typed_edit tool.
   meta-edit --version                      Show version.
