@@ -319,125 +319,72 @@ That is the entire system.
 
 ## 3. The nineteen tools: common schema
 
-All tools accept the same arguments and return the same result.
+A typed_edit MCP call is a **declaration of intent**. The server validates the request, issues a single-use token bound to one or more sha256 tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
 
 ```typescript
 type EditToolRequest = {
-  target_file: string;                        // primary file the edit is about
-  rationale: string;                          // 1-3 sentences, non-empty
+  target_file: string;            // primary bound file. Always present.
+  rationale: string;              // 1-3 sentences, non-empty after trim
   risk_level: "low" | "medium" | "high" | "critical";
-  test_files: string[];                       // paths of test files relevant to
-                                              // this edit. May be files modified
-                                              // in this request, files the agent
-                                              // commits to updating in
-                                              // immediately following
-                                              // edit_test_only_change calls, or
-                                              // existing tests that already
-                                              // cover the change.
-                                              // May be empty for
-                                              // edit_refactor_only and
-                                              // edit_docs_only.
-                                              // Must be empty for
-                                              // edit_test_only_change.
-  changes: Array<{                            // one or more content-pair
-    file: string;                             // changes; modify-only
-    old_content: string;                      // exact current disk content
-                                              // (server rejects on mismatch)
-    new_content: string;                      // new content to write
+  test_files: string[];           // forward declaration; not bound by token
+
+  before_sha256: string;          // hex(64). For edit_create_file's
+                                  // target_file, sha256("").
+  after_sha256: string;           // hex(64).
+
+  // ONLY accepted by the 2 workflow tools (edit_docs_only,
+  // edit_create_file). The 17 SQLite-derived tools MUST omit this
+  // field; validation rejects its presence elsewhere.
+  additional_files?: Array<{
+    file: string;
+    before_sha256: string;        // sha256("") for create entries
+    after_sha256: string;
   }>;
 };
 
 type EditToolResult = {
-  applied: boolean;
-  edit_id: string;                            // e.g. "edit_20260427_0001"
+  token: string;                  // e.g. "met_20260502_a3f9b2..."
+  expires_at: string;             // ISO-8601, declaration_time + 30s
+  edit_id: string;                // e.g. "edit_20260502_0001"
   warnings: string[];
-  audit_error?: string;                       // Present whenever an audit-log
-                                              // write fails (validation-
-                                              // rejection or post-apply).
-                                              // The caller MUST check
-                                              // `applied` for apply status;
-                                              // `audit_error` indicates only
-                                              // that the audit trail is
-                                              // incomplete for this edit_id.
-                                              // Distinguishes audit-log
-                                              // failures from validation
-                                              // warnings.
+  audit_error?: string;           // present whenever an audit-log write
+                                  // fails. The caller MUST check the
+                                  // edit_log directly for ground truth.
 };
 ```
-
-`test_files` is recorded as the agent's declaration. The server does not verify that the listed files exist, contain meaningful tests, or are eventually updated. This is consistent with the broader stance that the MVP relies on tool descriptions and self-declaration rather than verification.
 
 ### Argument validation
 
 The MCP server enforces:
 
-- `target_file` must be a path within the repository root (after `realpath` resolution; symlinks resolving outside the repository root are rejected)
-- `target_file` must not match `.meta-edit/state/**` or other protected paths
-- `rationale` must be non-empty after trim
-- `test_files` must be non-empty for tools other than `edit_refactor_only`, `edit_test_only_change`, and `edit_docs_only`
-- `test_files` must be empty for `edit_test_only_change` (the `target_file` is itself the declared test file)
-- `changes` must be a non-empty array (`.min(1)` zod refinement; defensive re-check at validation time)
-- Each `change.file` is validated under the same path-safety rules as `target_file` (inside repo after `realpath`, not in protected paths)
-- The total payload bytes — the sum of `Buffer.byteLength(change.old_content, "utf8") + Buffer.byteLength(change.new_content, "utf8")` across every change — must not exceed `MAX_CHANGE_BYTES` (1 MiB)
-- Each `change.old_content` and `change.new_content` must not contain a NUL byte
-- `change.file` must reference an existing file on disk at apply time, **except for `edit_create_file`**. For all other tools, the content-pair shape is **modify-only**: there is no representation for file deletion or rename, and missing files fail the call. For `edit_create_file`, the file MUST NOT exist on disk — `old_content` MUST be the empty string and the server opens the path with `O_CREAT | O_EXCL | O_NOFOLLOW`, refusing to overwrite or follow a symlink at the leaf.
-- `change.old_content` must equal the current disk content of `change.file` byte-for-byte at apply time (precondition). A mismatch fails the entire call without writing anything.
-- Apply is two-phase: precondition check (no writes) → per-change sibling temp-write → rename. If any precondition fails OR any temp-write fails, NO target file is modified. Rename failures after some renames committed are reported as warnings (best-effort multi-file atomicity on POSIX).
-- Patch scope rules apply (see below)
+- `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
+- `rationale` is non-empty after trim.
+- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only`.
+- `before_sha256` and `after_sha256` are exactly 64 hex chars.
+- `before_sha256` matches the current disk content of `target_file` at declaration time (sha256(disk_content), or sha256("") when `edit_create_file` and the file does not yet exist).
+- `additional_files` is accepted only for the 2 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
+- Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
-Validation failures result in `applied: false` and a clear error message in `warnings`. They do not crash the server.
+Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.
 
-### Patch scope
+### Token issuance
 
-The `changes` array may touch more than one file, but the set of touched files is restricted.
+A successful declaration produces a token bound to the set of
+`(file, before_sha256, after_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The token expires 30 seconds after issuance. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
-For all tools other than `edit_test_only_change`:
+The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 
-- A `change.file` may equal `target_file`
-- A `change.file` may equal any file listed in `test_files`
-- No `change.file` may reference any other path
-- Two `change.file` entries that resolve to the same canonical path are rejected (use separate `edit_*` calls so changes are not silently dropped)
+### Multi-kind precedence
 
-For `edit_test_only_change`:
+If a single change might fit multiple tools, prefer the more specific:
 
-- A `change.file` may equal `target_file` only; no other file may appear
-- `test_files` must be empty (the agent is declaring that `target_file` is itself the test edit)
-- The server does not pattern-match `target_file` against any test-file pattern. Choosing this tool is itself the agent's declaration that this is a test-only edit; tool selection is the obligation, not server-side classification
-
-A request that violates these rules is rejected with `applied: false`.
-
-This rule lets the agent submit a production change and a colocated test addition in a single tool call when convenient (using a non-test-only tool), without forcing it. Splitting into a production edit followed by one or more `edit_test_only_change` calls is also valid; in that case, `test_files` on the production edit lists the planned test-file paths, and each test-file change is its own `edit_test_only_change` call.
-
-### Path safety
-
-All paths — both `target_file` and any `change.file` — are resolved with `realpath` after symlink resolution. A path is valid only if its resolved absolute path is inside the resolved repository root. Symlinks that resolve outside the repository root are rejected.
-
-The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees for protected paths; protection is enforced through the server's path checks and the bash hook on a best-effort basis.
-
-### Multi-kind changes
-
-A change that spans multiple edit kinds should be split into multiple tool calls where possible. If splitting is unsafe or impractical, choose the highest-risk applicable tool and mention the secondary aspects in `rationale`.
-
-Specific tools take precedence over generic tools when both could apply:
-
-- `edit_permission_logic` over `edit_boolean_condition` or `edit_boundary_condition`
+- `edit_permission_logic` over `edit_boolean_condition` / `edit_boundary_condition`
 - `edit_retry_timeout` over generic `edit_boundary_condition`
 - `edit_external_side_effect` over generic `edit_error_handling` for failure-side-effect interactions
 - `edit_data_migration` over generic `edit_db_schema` when existing data is being modified
 - `edit_policy_change` over any ordinary code tool when the change touches `meta-edit` configuration, hooks, or tool descriptions
 
-### What the server does, in order
-
-1. Validate arguments (rationale, test_files cardinality, payload bound, NUL-byte rejection)
-2. Resolve and check all paths (`target_file`, `test_files`, every `change.file`)
-3. Verify changes scope (target_file ∪ test_files; modify-only tool's stricter rule)
-4. Apply phase 1 (preflight): re-realpath each target, read disk, compare to `old_content`. Stop and reject without writing if any check fails.
-5. Apply phase 2 (sibling temp writes): write each `new_content` to a randomly-named sibling file in the same directory as the target.
-6. Apply phase 3 (rename commits): rename each temp into place atomically.
-7. Append an entry to `.meta-edit/state/edits.jsonl`
-8. Return result
-
-The server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point is that tool descriptions, not server logic, do the work.
+A change that spans multiple kinds and cannot be safely split should choose the highest-risk applicable tool and mention secondary aspects in `rationale`.
 
 ---
 
