@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of nineteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -90,7 +90,7 @@ Article 7 forbids in MVP. Under the non-adversarial assumption, these
 are honest classification mistakes, not deception, and the cure is
 description-tuning (not detection).
 
-### Article 4 — Surface: nineteen tools (17 + 2)
+### Article 4 — Surface: twenty tools (17 + 3)
 
 **Seventeen SQLite-derived tools.** Each is one element of a bug-class
 classification grounded in SQLite's testing strategy
@@ -355,7 +355,7 @@ That is the entire system.
 
 ---
 
-## 3. The nineteen tools: common schema
+## 3. The twenty tools: common schema
 
 A typed_edit MCP call is a **declaration of intent**. The server validates the request, reads disk to compute `before_sha256` itself, issues a single-use token bound to one or more `(file, before_sha256)` tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
 
@@ -399,7 +399,8 @@ The MCP server enforces:
 
 - `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
 - `rationale` is non-empty after trim.
-- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only`.
+- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only` / `edit_create_planning_artifact`.
+- `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via subsequent `edit_test_only_change` calls. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - For modify-only tools, `target_file` MUST exist on disk; the server reads it and binds `before_sha256 := sha256(disk_content_utf8)`.
 - For `edit_create_file`, `target_file` MUST NOT exist on disk; the server binds `before_sha256 := sha256("")`. Each entry in `additional_files` is treated as a create the same way.
 - `additional_files` is accepted only for the 2 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
@@ -434,7 +435,7 @@ A change that spans multiple kinds and cannot be safely split should choose the 
 
 ---
 
-## 4. The nineteen tool descriptions
+## 4. The twenty tool descriptions
 
 These descriptions are the product. Everything else is plumbing.
 
@@ -1151,6 +1152,26 @@ This tool MUST NOT be used when:
   (use edit_dependency_config or edit_policy_change)
 - The "documentation" change actually changes API contracts
   documented in code (use edit_api_contract)
+- The patch updates README / docs to claim functionality that has not
+  yet shipped — describing future or aspirational behavior misleads
+  every future reader (including AI agents). Land the implementation
+  in the same change set or wait
+- The patch updates a CHANGELOG entry for a release that this commit
+  does not actually cut (CHANGELOG must reflect what merged, not what
+  is queued)
+- The patch contains a code example (fenced block, inline snippet)
+  that does not compile or run as written; broken examples mislead
+  readers more than no example
+- The patch is a planning artifact (issue file, ADR, design doc,
+  post-mortem) — use edit_create_planning_artifact for the
+  planning-stage tone
+- The patch updates a `.md` test fixture loaded by tests at runtime
+  (use edit_test_only_change since the fixture's content is part of
+  the test contract)
+- The patch batches unrelated documentation changes across multiple
+  files in one declaration; each independent doc surface gets its own
+  edit_docs_only call so the rationale and audit trail stay tied to
+  the actual reason
 
 Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
@@ -1203,6 +1224,21 @@ This tool MUST NOT be used when:
   reflect the original file's deletion
 - The file is a binary payload; native Edit / Write's string-based
   parameters cannot carry non-UTF-8 bytes
+- The new file is a planning artifact (issue file, ADR, design doc,
+  post-mortem, dogfood report) — use edit_create_planning_artifact so
+  the audit log records the planning-stage tone instead of a
+  production-code create with placeholder test_files
+- The new file's content is a near-duplicate of an existing file (a
+  copy or near-copy is a refactor or a move, not a create — use
+  edit_refactor_only on the source if the duplication is intentional)
+- The new file is a re-export shim that simply re-emits another
+  module's exports (the underlying module is the change locus; use
+  edit_refactor_only on it instead)
+- The new file is auto-generated build output; generated files belong
+  in .gitignore, not in a typed_edit-recorded create
+- The new file's purpose is to satisfy a test obligation declared by
+  another edit_* call (use edit_test_only_change so the audit log
+  threads the test commitment to its consumer)
 
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
@@ -1211,6 +1247,67 @@ Creation has a different precondition profile (no current state to check)
 and a strong post-condition (the file did not exist; now it does), and
 the audit log records it explicitly so reviewers see new-file additions
 distinct from in-place edits.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
+```
+
+### `edit_create_planning_artifact`
+
+```
+Create or modify a planning artifact: an issue file, an
+architecture decision record (ADR), a design document, a post-mortem,
+a dogfood report, or any other document whose purpose is to record a
+decision, observation, or plan rather than to be loaded by code.
+
+Use this tool when:
+- Filing an issue or bug report under `issues/`
+- Writing or revising an architecture decision record (ADR)
+- Drafting a design document, RFC, or proposal
+- Recording a post-mortem or incident report
+- Capturing a dogfood observation, audit finding, or hypothesis
+- Updating any markdown document whose audience is humans / future-AI
+  reviewers, not the runtime
+
+Required tests: NONE. test_files must be empty.
+
+The artifact IS the deliverable. There is no production behavior the
+artifact is supposed to verify, and there is no test that can stand in
+for "the document captures the decision correctly". Reviewers verify by
+reading.
+
+Like edit_docs_only and edit_create_file, this tool is one of the
+workflow tools (Article 6 / §3) and accepts `additional_files` for
+multi-file batches (e.g. filing two related issues at once, or adding
+an ADR and updating a cross-reference index together; cap 32).
+
+This tool MUST NOT be used when:
+- The patch modifies any executable production code, including library
+  scripts run during build / CI
+- The patch modifies any test code (use edit_test_only_change)
+- The patch modifies build, CI, or meta-edit configuration files
+  (use edit_dependency_config or edit_policy_change)
+- The "planning artifact" is actually executable documentation that
+  loads or generates code (use edit_dependency_config or
+  edit_create_file as appropriate)
+- The change is renaming or moving a planning artifact across paths;
+  the modify/create shape cannot represent rename atomically
+
+Distinction from edit_docs_only: edit_docs_only is for documentation
+that ships with production code (README, inline comments, JSDoc/
+docstrings, CHANGELOG). edit_create_planning_artifact is for
+planning-stage documents that record decisions rather than ship as
+user-facing reference material. When the line is unclear, prefer
+edit_docs_only — production reference docs have a stricter contract.
+
+Rationale: planning artifacts (issues, ADRs, design docs) have no test
+obligation, but they also have a different review tone than production
+docs — reviewers care about decision quality, not about API drift or
+example correctness. Without an explicit planning-artifact tool, agents
+were forced to use edit_docs_only (production-docs framing) or
+edit_create_file with placeholder `test_files`, both of which
+distorted the audit log.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1422,7 +1519,7 @@ meta-edit/
   src/
     tools/
       common.ts             shared types, validation, token issuance
-      descriptions.ts       the nineteen descriptions, verbatim from §4
+      descriptions.ts       the twenty descriptions, verbatim from §4
       registry.ts           MCP tool registration
     server.ts               MCP stdio server entry
     cli.ts                  CLI entry
@@ -1441,7 +1538,7 @@ meta-edit/
 
 ### Descriptions-verbatim rule
 
-`src/tools/descriptions.ts` contains the nineteen descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
+`src/tools/descriptions.ts` contains the twenty descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
 
 Tool handlers share common logic via helpers, but each tool is registered separately under the MCP server with its own description. Per Article 4, tool selection is the cognitive intervention; the surface is not collapsed into a generic `kind`-parameterized handler.
 

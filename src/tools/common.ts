@@ -51,10 +51,13 @@ export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 export const MAX_ADDITIONAL_FILES = 32;
 
 // SQLite-derived tools (the 17): MUST omit `additional_files`.
-// Workflow tools (the 2: edit_docs_only, edit_create_file): MAY include it.
+// Workflow tools (the 3: edit_docs_only, edit_create_file,
+// edit_create_planning_artifact): MAY include it. (v0.2.4 added the
+// third workflow tool — issue 1104.)
 export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
   "edit_docs_only",
   "edit_create_file",
+  "edit_create_planning_artifact",
 ];
 
 export const EditToolRequestSchema = z
