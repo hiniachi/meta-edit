@@ -1,6 +1,23 @@
+// Case C / v0.2 typed_edit common schema. Per docs/SPEC.md §3:
+//
+//   A typed_edit MCP call is a *declaration of intent*. The server validates
+//   the request, issues a single-use token bound to one or more sha256
+//   tuples, and returns. It does not write. Native Edit / Write / MultiEdit
+//   performs the write under hook validation.
+//
+// This module owns:
+//   - the zod schema for EditToolRequest,
+//   - the EditToolResult shape returned by the issuer,
+//   - validateRequest(...): path-safety, sha256 format, cardinality, and the
+//     before_sha256 ↔ disk content invariant.
+//
+// Apply-time mechanics (sibling-temp, parent-fsync, TOCTOU walks) belonged to
+// v0.1.x and are intentionally removed: native Edit / Write owns those per
+// Article 5 (binding principles) and Article 7 (out of scope).
+
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as Diff from "diff";
 import { z } from "zod";
 import {
   TOOLS_REQUIRING_TEST_FILES,
@@ -15,52 +32,74 @@ import { realpathOfDeepestExisting } from "../utils/realpath.js";
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
-// A single content-pair change. The server reads disk content and
-// asserts byte-for-byte equality with `old_content` before any write,
-// then atomically replaces the file with `new_content`. Modify-only:
-// the file must already exist; creation, deletion, and rename are not
-// representable in this shape.
-export const ChangeSchema = z.object({
-  file: z.string().min(1),
-  old_content: z.string(),
-  new_content: z.string(),
-});
-export type Change = z.infer<typeof ChangeSchema>;
+// SHA-256 hex digest: exactly 64 lowercase hex characters. The grants store
+// validates the same shape; we re-validate at the request boundary so a
+// malformed digest never reaches the issuer.
+export const HEX64_RE = /^[0-9a-f]{64}$/;
 
-// Defensive cap on the number of `change` entries. Combined with
-// `MAX_CHANGE_BYTES`, this bounds the total work the server has to do
-// per request — both for validation (per-change `checkPathSafety`,
-// NUL scan) and for the synthesized-diff computation that populates
-// `patch_size_bytes`. Chosen well above any realistic agent edit
-// (typical: 1-5 changes per call).
-export const MAX_CHANGES_PER_REQUEST = 100;
+const Sha256HexSchema = z
+  .string()
+  .regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
 
-export const EditToolRequestSchema = z.object({
-  target_file: z.string().min(1),
-  rationale: z.string(),
-  risk_level: RiskLevelSchema,
-  test_files: z.array(z.string()),
-  changes: z
-    .array(ChangeSchema)
-    .min(1)
-    .max(MAX_CHANGES_PER_REQUEST),
-});
+const AdditionalFileSchema = z
+  .object({
+    file: z.string().min(1),
+    before_sha256: Sha256HexSchema,
+    after_sha256: Sha256HexSchema,
+  })
+  .strict();
+export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
+
+// Operational hygiene cap on additional_files cardinality. Per SPEC §3 this
+// is "≤ 32 (operational hygiene; not a constitutional value)" — large enough
+// to cover sweeping docs renames and small scaffolds, small enough that an
+// honest workflow tool cannot accidentally swamp the audit log with one call.
+export const MAX_ADDITIONAL_FILES = 32;
+
+// SQLite-derived tools (the 17): MUST omit `additional_files`.
+// Workflow tools (the 2: edit_docs_only, edit_create_file): MAY include it.
+export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
+  "edit_docs_only",
+  "edit_create_file",
+];
+
+export const EditToolRequestSchema = z
+  .object({
+    target_file: z.string().min(1),
+    rationale: z.string(),
+    risk_level: RiskLevelSchema,
+    test_files: z.array(z.string()),
+    before_sha256: Sha256HexSchema,
+    after_sha256: Sha256HexSchema,
+    additional_files: z
+      .array(AdditionalFileSchema)
+      .max(MAX_ADDITIONAL_FILES)
+      .optional(),
+  })
+  .strict();
 
 export type EditToolRequest = z.infer<typeof EditToolRequestSchema>;
 
 export type EditToolResult = {
-  applied: boolean;
+  /**
+   * Token id when the declaration succeeded. Empty string on rejection — the
+   * caller MUST inspect `warnings` (and `audit_error`) to determine outcome.
+   * The MCP-layer wrapper in registry.ts elides empty tokens before
+   * returning to the agent so a rejected call never carries a usable token.
+   */
+  token: string;
+  /** ISO-8601 expiry (issued_at + GRANT_TTL_MS). Empty string on rejection. */
+  expires_at: string;
+  /** edit_id is always present so audit reconciles even on rejection. */
   edit_id: string;
   warnings: string[];
-  // Issue 029 (a7-04) + Round-4: set IFF an edit-log append threw, on EITHER
-  // the validation-rejection path OR the post-apply path. Distinct from
-  // `warnings` so callers/monitoring can react to audit-trail gaps without
-  // string-matching the routine validation-warning channel.
-  //
-  // The field's only contract is "an audit-log write failed for this
-  // request". Callers MUST inspect `applied` separately to determine apply
-  // outcome — `audit_error` says nothing about whether bytes hit disk, only
-  // that the audit trail is incomplete for this edit_id.
+  /**
+   * Set IFF an edit-log append threw. Distinct from `warnings` so callers can
+   * react to audit-trail gaps without string-matching the routine warning
+   * channel. The field's only contract is "an audit-log write failed for
+   * this request" — callers MUST check the edit log directly for ground
+   * truth.
+   */
   audit_error?: string;
 };
 
@@ -68,31 +107,43 @@ export type ValidationContext = {
   repoRoot: string;
 };
 
+// A single file binding distilled from the request after path safety,
+// sha256 format, and disk-content checks. The issuer hands these directly
+// to grants.issue().
+export type ValidatedBinding = {
+  /**
+   * Repository-relative canonical path (post-realpath, normalized). This is
+   * also what the IssuedEntry's `binding[i].file` field carries — so the
+   * deny-raw-edit hook (Task C) can match a native Edit/Write canonical
+   * against the same form.
+   */
+  canonical: string;
+  before_sha256: string;
+  after_sha256: string;
+};
+
 export type ValidationFailure = {
   ok: false;
   warnings: string[];
 };
 
-export type ContentChange = {
-  canonical: string;
-  oldContent: string;
-  newContent: string;
-};
-
 export type ValidationSuccess = {
   ok: true;
-  touchedFiles: string[];
-  changes: ContentChange[];
+  /** target_file binding (always first). */
+  primaryBinding: ValidatedBinding;
+  /** additional_files bindings (workflow tools only; empty otherwise). */
+  additionalBindings: ValidatedBinding[];
 };
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
 
-// Defensive bound on the total request payload size: the sum across
-// all `change.old_content` and `change.new_content` of
-// `Buffer.byteLength(s, "utf8")`. Same 1 MiB ceiling the prior
-// `MAX_PATCH_BYTES` enforced on the unified-diff string, just measured
-// on the new shape.
-export const MAX_CHANGE_BYTES = 1_048_576;
+/** Lowercase-hex sha256 of a UTF-8 string. */
+export function sha256Hex(content: string): string {
+  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/** sha256("") — used as the before_sha256 sentinel for edit_create_file. */
+export const SHA256_EMPTY = sha256Hex("");
 
 export function validateRequest(
   toolName: ToolName,
@@ -101,10 +152,12 @@ export function validateRequest(
 ): ValidationResult {
   const warnings: string[] = [];
 
+  // ---- 1. Rationale ----------------------------------------------------
   if (request.rationale.trim().length === 0) {
     warnings.push("rationale must be non-empty");
   }
 
+  // ---- 2. test_files cardinality (per §4 obligations) ------------------
   if (toolName === "edit_test_only_change") {
     if (request.test_files.length > 0) {
       warnings.push("test_files must be empty for edit_test_only_change");
@@ -115,353 +168,116 @@ export function validateRequest(
     }
   }
 
-  const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
-  if (!targetCheck.ok) {
-    warnings.push(`target_file: ${targetCheck.error}`);
+  // ---- 3. additional_files acceptance gate -----------------------------
+  // The 17 SQLite-derived tools MUST omit `additional_files`. The 2 workflow
+  // tools (edit_docs_only, edit_create_file) MAY include it (cardinality
+  // already capped by zod via .max(MAX_ADDITIONAL_FILES) above).
+  if (
+    request.additional_files !== undefined &&
+    !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
+  ) {
+    warnings.push(
+      `${toolName} does not accept additional_files; this field is reserved for ` +
+        `the 2 workflow tools (edit_docs_only, edit_create_file). Submit each ` +
+        `file as its own typed_edit call.`,
+    );
   }
 
-  const testFileCanonicals: string[] = [];
+  // ---- 4. test_files path-safety (forward declaration only — no binding) -
+  // Per Article 6 / SPEC §6: test_files is a forward declaration recorded in
+  // the audit log; it does NOT authorize writes. We still validate path
+  // safety so a malformed entry surfaces at declaration time.
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
     if (!c.ok) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
-    } else {
-      testFileCanonicals.push(c.canonical);
     }
   }
 
-  if (request.changes.length === 0) {
-    warnings.push("changes must contain at least one entry");
-    return { ok: false, warnings };
-  }
-  if (request.changes.length > MAX_CHANGES_PER_REQUEST) {
-    warnings.push(
-      `changes contains ${request.changes.length} entries; exceeds the ${MAX_CHANGES_PER_REQUEST}-entry limit`,
-    );
-    return { ok: false, warnings };
-  }
-
-  let totalBytes = 0;
-  for (const c of request.changes) {
-    totalBytes +=
-      Buffer.byteLength(c.old_content, "utf8") +
-      Buffer.byteLength(c.new_content, "utf8");
-  }
-  if (totalBytes > MAX_CHANGE_BYTES) {
-    warnings.push(
-      `changes total payload is ${totalBytes} bytes; exceeds the ${MAX_CHANGE_BYTES}-byte limit`,
-    );
-    return { ok: false, warnings };
-  }
-
+  // ---- 5. target_file path-safety + binding shape ----------------------
   const isCreate = toolName === "edit_create_file";
-  const touched: string[] = [];
-  const changes: ContentChange[] = [];
-  // Track (file + error) pairs already surfaced from a change.file
-  // failure so two changes with the identical input path AND failure
-  // reason emit the warning at most once. Combined with the
-  // target_file-vs-change.file dedup below, this collapses arbitrary
-  // N-way duplicates into a single user-actionable message.
-  const seenChangeFileWarning = new Set<string>();
-  for (const c of request.changes) {
-    if (c.old_content.includes("\0")) {
-      warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
-      continue;
+  const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
+  let primaryBinding: ValidatedBinding | null = null;
+  if (!targetCheck.ok) {
+    warnings.push(`target_file: ${targetCheck.error}`);
+  } else {
+    const beforeCheck = verifyBeforeSha256(
+      targetCheck.canonical,
+      request.before_sha256,
+      ctx.repoRoot,
+      isCreate,
+      "target_file",
+    );
+    if (!beforeCheck.ok) {
+      warnings.push(beforeCheck.error);
+    } else {
+      primaryBinding = {
+        canonical: targetCheck.canonical,
+        before_sha256: request.before_sha256,
+        after_sha256: request.after_sha256,
+      };
     }
-    if (c.new_content.includes("\0")) {
-      warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
-      continue;
+  }
+
+  // ---- 6. additional_files path-safety + binding shape ----------------
+  const additionalBindings: ValidatedBinding[] = [];
+  if (
+    request.additional_files !== undefined &&
+    TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
+  ) {
+    const seenCanonicals = new Set<string>();
+    if (primaryBinding !== null) {
+      seenCanonicals.add(primaryBinding.canonical);
     }
-    if (isCreate) {
-      // edit_create_file precondition: the file does not yet exist on
-      // disk, so old_content carries no information and MUST be the
-      // empty string. A non-empty old_content here means the agent is
-      // treating this as a modify and chose the wrong tool.
-      if (c.old_content !== "") {
+    for (const af of request.additional_files) {
+      const safe = checkPathSafety(af.file, ctx.repoRoot);
+      if (!safe.ok) {
+        warnings.push(`additional_files entry "${af.file}": ${safe.error}`);
+        continue;
+      }
+      if (seenCanonicals.has(safe.canonical)) {
         warnings.push(
-          `change for "${c.file}" has non-empty old_content; for edit_create_file old_content must be empty (the file does not yet exist on disk)`,
+          `additional_files contains duplicate file "${safe.canonical}"; ` +
+            `each binding must be unique within a single declaration.`,
         );
         continue;
       }
-      // The modify-mode no-op rejection (old===new) does NOT apply to
-      // create. old==="" and new==="" is a valid empty-file creation:
-      // the file goes from non-existent to existent, which is observable
-      // on disk and worth recording in the audit trail.
-    } else {
-      // Reject no-op changes (old_content === new_content). Pre-PR-D the
-      // jsdiff parser rejected zero-hunk patches; the content-pair flow
-      // would otherwise accept them and still stage+rename the file,
-      // bumping mtime / inode and triggering downstream watchers /
-      // rebuilds for a semantically empty edit. Codex GitHub bot review
-      // on PR #29 (P2) caught this regression.
-      if (c.old_content === c.new_content) {
-        warnings.push(
-          `change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`,
-        );
-        continue;
-      }
-    }
-    const safe = checkPathSafety(c.file, ctx.repoRoot);
-    if (!safe.ok) {
-      // Dedupe with the target_file-level failure for the same path: when
-      // target_file === change.file (the common single-file edit shape)
-      // and both failed for the identical reason, the agent reading two
-      // near-identical warnings tries to fix two things when there is
-      // one. Prefer the target_file form because it is the field the
-      // agent declared first; the change.file form is its echo. See
-      // dogfood-004.
-      if (
-        !targetCheck.ok &&
-        c.file === request.target_file &&
-        safe.error === targetCheck.error
-      ) {
-        continue;
-      }
-      // PR #42 self-review (Bug 1): also dedupe across change.file
-      // entries themselves. If two changes share the same input path
-      // string AND fail with the same reason, the second warning
-      // carries no additional information and just adds noise.
-      const dedupKey = `${c.file}\0${safe.error}`;
-      if (seenChangeFileWarning.has(dedupKey)) {
-        continue;
-      }
-      seenChangeFileWarning.add(dedupKey);
-      warnings.push(`change.file "${c.file}": ${safe.error}`);
-      continue;
-    }
-    touched.push(safe.canonical);
-    changes.push({
-      canonical: safe.canonical,
-      oldContent: c.old_content,
-      newContent: c.new_content,
-    });
-  }
-
-  const allowed = new Set<string>();
-  if (targetCheck.ok) {
-    allowed.add(targetCheck.canonical);
-  }
-  if (toolName !== "edit_test_only_change") {
-    for (const c of testFileCanonicals) {
-      allowed.add(c);
-    }
-  }
-
-  for (const t of touched) {
-    if (!allowed.has(t)) {
-      const allowedList = [...allowed].join(", ");
-      warnings.push(
-        `change modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`,
+      seenCanonicals.add(safe.canonical);
+      // For edit_create_file, ALL bindings are create entries: before_sha256
+      // MUST be sha256("") and the file MUST NOT exist. For edit_docs_only,
+      // each entry is a modify (the file MUST exist and before_sha256 MUST
+      // match disk).
+      const beforeCheck = verifyBeforeSha256(
+        safe.canonical,
+        af.before_sha256,
+        ctx.repoRoot,
+        isCreate,
+        `additional_files entry "${af.file}"`,
       );
+      if (!beforeCheck.ok) {
+        warnings.push(beforeCheck.error);
+        continue;
+      }
+      additionalBindings.push({
+        canonical: safe.canonical,
+        before_sha256: af.before_sha256,
+        after_sha256: af.after_sha256,
+      });
     }
   }
 
-  // Reject duplicate canonicals. Earlier validateRequest rejected
-  // multi-section patches that targeted the same file; the same
-  // protection applies here. Two changes pointing at the same
-  // canonical path mean the second silently wins and the first's
-  // intent is lost — clearer to fail and have the caller submit
-  // separate edit_* calls.
-  const seenCanonical = new Set<string>();
-  for (const t of touched) {
-    if (seenCanonical.has(t)) {
-      warnings.push(
-        `changes contain multiple entries targeting "${t}". Submit each as its own edit_* call so changes are not silently dropped.`,
-      );
-    } else {
-      seenCanonical.add(t);
-    }
-  }
-
-  if (warnings.length > 0) {
+  if (warnings.length > 0 || primaryBinding === null) {
     return { ok: false, warnings };
   }
-  return { ok: true, touchedFiles: touched, changes };
+  return { ok: true, primaryBinding, additionalBindings };
 }
 
-export type ToolHandler = (
-  toolName: ToolName,
-  args: EditToolRequest,
-) => Promise<EditToolResult>;
+// ---------------------------------------------------------------------
+// Path safety (carried over from v0.1.x with the apply-time TOCTOU notes
+// dropped — apply happens in native Edit now, the hook re-checks).
+// ---------------------------------------------------------------------
 
-export function makeStubHandler(ctx: ValidationContext): ToolHandler {
-  return async (toolName, args) => {
-    const result = validateRequest(toolName, args, ctx);
-    if (!result.ok) {
-      return {
-        applied: false,
-        edit_id: "edit_00000000_0000",
-        warnings: result.warnings,
-      };
-    }
-    return {
-      applied: false,
-      edit_id: "edit_00000000_0000",
-      warnings: [
-        `${toolName}: validation passed; patch application is implemented in Phase 3`,
-      ],
-    };
-  };
-}
-
-export type EditLogLike = {
-  nextEditId(now?: Date): string;
-  append(entry: import("../state/edit-log.js").EditLogEntry): void;
-};
-
-export type ApplyChangesFn = (
-  repoRoot: string,
-  changes: ContentChange[],
-) => import("./apply.js").ApplyResult;
-
-export type ApplyingHandlerDependencies = {
-  ctx: ValidationContext;
-  log: EditLogLike;
-  applyChanges: ApplyChangesFn;
-  applyCreates: ApplyChangesFn;
-  now?: () => Date;
-};
-
-export function makeApplyingHandler(
-  deps: ApplyingHandlerDependencies,
-): ToolHandler {
-  const { ctx, log, applyChanges, applyCreates } = deps;
-  const now = deps.now ?? (() => new Date());
-
-  return async (toolName, args) => {
-    const ts = now();
-    const editId = log.nextEditId(ts);
-    const baseEntry = {
-      edit_id: editId,
-      timestamp: isoTimestampForHandler(ts),
-      tool_name: toolName,
-      target_file: args.target_file,
-      rationale: args.rationale,
-      risk_level: args.risk_level,
-      test_files: args.test_files,
-    } as const;
-
-    const validation = validateRequest(toolName, args, ctx);
-    if (!validation.ok) {
-      // Synthesizing the unified diff before validation would let a
-      // malicious or buggy client force unbounded `createTwoFilesPatch`
-      // work on a request that was about to be rejected. We log
-      // `patch_size_bytes: 0` on validation failure — there is no
-      // applied diff to measure.
-      //
-      // Round-4 (defect 2): the rejection-record audit-append CAN fail
-      // (e.g. `.meta-edit/state` write-restricted) and previously the
-      // error was silently discarded — callers had NO signal that the
-      // audit trail was incomplete for the rejected request, which is
-      // a security hole. Surface the failure as `audit_error` so the
-      // audit-failure channel is honest about every request the server
-      // processes, regardless of apply outcome. Callers inspect
-      // `applied` separately to determine whether bytes hit disk;
-      // `audit_error` only signals "the audit trail is incomplete".
-      const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
-        ...baseEntry,
-        patch_size_bytes: 0,
-        applied: false,
-        warnings: validation.warnings,
-      });
-      return {
-        applied: false,
-        edit_id: editId,
-        warnings: finalWarnings,
-        ...(audit_error !== undefined ? { audit_error } : {}),
-      };
-    }
-
-    // Validation passed — total payload is bounded by MAX_CHANGE_BYTES
-    // and the changes count is bounded by MAX_CHANGES_PER_REQUEST. Now
-    // it's safe to synthesize the forensic diff for `patch_size_bytes`.
-    let synthesized = "";
-    for (const c of args.changes) {
-      synthesized += Diff.createTwoFilesPatch(
-        c.file,
-        c.file,
-        c.old_content,
-        c.new_content,
-        "old",
-        "new",
-      );
-    }
-    const patchSize = Buffer.byteLength(synthesized, "utf8");
-
-    // Dispatch to the create-vs-modify apply path on tool name. The two
-    // share their pre-write canonicalization and protected-path checks
-    // but differ on whether the leaf must already exist (modify) or must
-    // not exist (create with O_CREAT|O_EXCL|O_NOFOLLOW).
-    const applyFn =
-      toolName === "edit_create_file" ? applyCreates : applyChanges;
-    const result = applyFn(ctx.repoRoot, validation.changes);
-    // The new content is already on disk if result.applied. We MUST NOT
-    // throw out of the handler here even if log.append fails: the
-    // client would see the call as failed and likely retry, causing
-    // duplicate edits. appendLogSafely surfaces the log failure on a
-    // structured `audit_error` field — distinct from the `warnings`
-    // channel that carries routine validation notices.
-    //
-    // Round-4 (defect 1): `audit_error` propagates regardless of
-    // `result.applied`. applyChanges can return `applied: false` for
-    // recoverable causes (e.g. stale old_content / snippet-shaped
-    // old_content; see the length-aware mismatch branch in apply.ts) —
-    // the attempt is still audited, and a log-write failure here still
-    // leaves the audit trail incomplete. Callers inspect `applied`
-    // separately to determine whether bytes hit disk; `audit_error`
-    // means only "the audit trail is incomplete for this edit_id".
-    const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
-      ...baseEntry,
-      patch_size_bytes: patchSize,
-      applied: result.applied,
-      warnings: result.warnings,
-    });
-    return {
-      applied: result.applied,
-      edit_id: editId,
-      warnings: finalWarnings,
-      ...(audit_error !== undefined ? { audit_error } : {}),
-    };
-  };
-}
-
-function appendLogSafely(
-  log: EditLogLike,
-  entry: import("../state/edit-log.js").EditLogEntry,
-): { warnings: string[]; audit_error?: string } {
-  try {
-    log.append(entry);
-    return { warnings: entry.warnings };
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException | undefined)?.code;
-    const msg = (e as Error | undefined)?.message ?? String(e);
-    // Issue 029 (a7-04): keep `warnings` reserved for validation/apply
-    // notices and report log-append failure on a structured `audit_error`
-    // field. Mixing the two destroys audit integrity — a caller cannot
-    // distinguish "applied + clean log" from "applied + missing log".
-    return {
-      warnings: entry.warnings,
-      audit_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`,
-    };
-  }
-}
-
-function isoTimestampForHandler(d: Date): string {
-  // Inlined to avoid a circular import between common.ts and edit-log.ts.
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const offMin = -d.getTimezoneOffset();
-  const sign = offMin >= 0 ? "+" : "-";
-  const offAbs = Math.abs(offMin);
-  const offH = pad(Math.floor(offAbs / 60));
-  const offM = pad(offAbs % 60);
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
-    `${sign}${offH}:${offM}`
-  );
-}
-
-function checkPathSafety(
+export function checkPathSafety(
   p: string,
   repoRoot: string,
 ): { ok: true; canonical: string } | { ok: false; error: string } {
@@ -471,13 +287,6 @@ function checkPathSafety(
       error: `path "${p}" is absolute; must be repository-relative`,
     };
   }
-  // Reject `..` traversal segments. `path.resolve` (used downstream) would
-  // silently collapse `a/../b` to `b`, producing a canonical that no
-  // longer reflects what the caller asked for. Subsequent stale-content
-  // check then quotes the rebased path, leaving the caller wondering
-  // why the wrong file was touched. See dogfood-003. Pure cosmetic
-  // normalizations (leading `./`, doubled slashes, backslashes) remain
-  // accepted because they collapse to the same on-disk file regardless.
   if (containsParentTraversal(p)) {
     return {
       ok: false,
@@ -489,8 +298,6 @@ function checkPathSafety(
   try {
     norm = normalizeRepoRelative(p);
   } catch (err) {
-    // normalizeRepoRelative throws on NUL bytes (a4-02) — surface as a
-    // structured error rather than an unhandled exception.
     return {
       ok: false,
       error: `path "${p}" is invalid: ${(err as Error).message}`,
@@ -512,11 +319,6 @@ function checkPathSafety(
   const realResolved = realpathOfDeepestExisting(lexicalResolved);
 
   if (realResolved === null) {
-    // realpath threw a non-ENOENT/ENOTDIR error (EACCES, EPERM, ELOOP, ...).
-    // We cannot tell whether the filesystem target is inside the repo and
-    // outside protected paths, so we fail closed rather than fall back to
-    // the lexical form (which would silently accept symlinks to unreadable
-    // out-of-repo locations).
     return {
       ok: false,
       error: `path "${p}" could not be canonicalized via realpath; failing closed`,
@@ -533,21 +335,6 @@ function checkPathSafety(
     };
   }
 
-  // NOTE: when the leaf does not exist on disk, realpathOfDeepestExisting
-  // re-attaches the missing tail lexically. That means a TOCTOU race exists
-  // between this validation and the eventual patch application — a symlink
-  // could appear on the missing path and redirect into a protected dir.
-  //
-  // Phase 3 (the patch applier) MUST, immediately before opening the file
-  // for write:
-  //   1. Re-run realpath on the full resolved target,
-  //   2. Compare the resulting canonical path against the canonical repo
-  //      root captured here (`realRoot`) — and reject if it is not equal
-  //      to that root or a descendant of it,
-  //   3. Re-run isProtectedPath on the freshly canonicalized form and
-  //      reject if it now matches a protected prefix.
-  // Failing any of these checks means a symlink appeared during the race
-  // window; the apply must abort with a fail-closed error.
   const canonical = normalizeRepoRelative(path.relative(realRoot, realResolved));
   if (canonical.length === 0) {
     return { ok: false, error: `path "${p}" resolves to the repository root` };
@@ -569,13 +356,123 @@ function realpathOrSelf(p: string): string {
   }
 }
 
-// Return true iff any path segment of `p` is exactly `..`. Splits on
-// both forward and backslashes so Windows-style spellings are covered.
-// Only `..` segments count: a name like `..foo` or `foo..` is a
-// legitimate filename and is left alone.
 function containsParentTraversal(p: string): boolean {
   for (const seg of p.split(/[\\/]/)) {
     if (seg === "..") return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------
+// before_sha256 ↔ disk reconciliation
+// ---------------------------------------------------------------------
+
+/**
+ * Verify the declared before_sha256 against disk:
+ *   - For edit_create_file: the file MUST NOT exist AND before_sha256 MUST
+ *     equal sha256("").
+ *   - For modify-only tools: the file MUST exist AND before_sha256 MUST
+ *     equal sha256(disk_content_utf8).
+ *
+ * Per Article 3 (non-adversarial threat model): we hash UTF-8 content. A
+ * binary file or non-UTF-8 file is not in the threat model — the agent
+ * either picks it up via the same encoding or the hashes diverge.
+ */
+function verifyBeforeSha256(
+  canonical: string,
+  declaredBefore: string,
+  repoRoot: string,
+  isCreate: boolean,
+  fieldLabel: string,
+): { ok: true } | { ok: false; error: string } {
+  const absolute = path.join(repoRoot, canonical);
+
+  // Try to read disk content. ENOENT distinguishes create vs modify.
+  let onDisk: string | null = null;
+  try {
+    onDisk = fs.readFileSync(absolute, "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      // File does not exist on disk.
+      if (!isCreate) {
+        return {
+          ok: false,
+          error:
+            `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`,
+        };
+      }
+      if (declaredBefore !== SHA256_EMPTY) {
+        return {
+          ok: false,
+          error:
+            `${fieldLabel} "${canonical}": before_sha256 must equal sha256("") for edit_create_file because the file does not yet exist on disk`,
+        };
+      }
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error:
+        `${fieldLabel} "${canonical}": failed to read disk content for sha256 verification (${code ?? "ERR"})`,
+    };
+  }
+
+  // File exists on disk.
+  if (isCreate) {
+    return {
+      ok: false,
+      error:
+        `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`,
+    };
+  }
+  const actual = sha256Hex(onDisk);
+  if (actual !== declaredBefore) {
+    return {
+      ok: false,
+      error:
+        `${fieldLabel} "${canonical}": before_sha256 mismatch — declared ${shortHash(declaredBefore)} ` +
+        `but disk content hashes to ${shortHash(actual)}. Re-read the file and recompute the digest before retrying.`,
+    };
+  }
+  return { ok: true };
+}
+
+function shortHash(h: string): string {
+  return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
+}
+
+// ---------------------------------------------------------------------
+// Handler / issuer wiring (used by registry.ts).
+// ---------------------------------------------------------------------
+
+export type ToolHandler = (
+  toolName: ToolName,
+  args: EditToolRequest,
+) => Promise<EditToolResult>;
+
+/**
+ * Stub handler that runs validation and returns a result with no token.
+ * Useful for tests that don't want to wire a grants store or edit log.
+ */
+export function makeStubHandler(ctx: ValidationContext): ToolHandler {
+  return async (toolName, args) => {
+    const result = validateRequest(toolName, args, ctx);
+    if (!result.ok) {
+      return {
+        token: "",
+        expires_at: "",
+        edit_id: "edit_00000000_0000",
+        warnings: result.warnings,
+      };
+    }
+    return {
+      token: "",
+      expires_at: "",
+      edit_id: "edit_00000000_0000",
+      warnings: [
+        `${toolName}: validation passed; stub handler does not issue tokens`,
+      ],
+    };
+  };
 }

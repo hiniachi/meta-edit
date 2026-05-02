@@ -16594,6 +16594,16 @@ If you are unsure whether your change qualifies as refactor-only, choose a
 more specific tool. False precision is safer than false generality. Misusing
 this tool is the largest source of regression bugs in AI-generated code.
 
+Fallback obligation:
+If, after applying this tool, you discover that your patch did
+contain any of the change kinds listed above (comparison change,
+boolean change, guard clause, error-handling change, etc.), you
+owe the user a follow-up explanation in your next message: name
+what slipped in, and say why the typed surface didn't catch it
+before you applied. This is a personal debt that posts to the
+user, not a detection bypass — acknowledging the slip is what
+keeps the typed surface honest.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17040,6 +17050,13 @@ document it explicitly — do not silently absorb it.
 For security-related dependency upgrades, the rationale must say so
 explicitly.
 
+Fallback obligation:
+Before applying this tool, summarize the change in user-facing
+terms: which package, what version delta, runtime vs dev, expected
+impact on the build or development loop. Surprise dependency
+updates are how contributors lose a day to a broken local
+environment; the user has standing to intercept before it lands.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17075,6 +17092,14 @@ rationale.
 If your change loosens a restriction without a strong justification, do
 not use this tool. Reconsider whether the restriction was correct in the
 first place.
+
+Fallback obligation:
+Before applying this tool, ask the user a clarifying question
+about the intended scope of the policy change, even when the
+change feels obvious. A single confirmation message is the cost
+of the safer path. Loosening restrictions, modifying hook
+behavior, and editing tool descriptions all carry implications
+the user has the standing to weigh; do not assume.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17114,8 +17139,10 @@ General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_create_file: `Create a new file at a path that does not yet exist on disk.
-The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
-to overwrite an existing file or follow a symlink at the leaf.
+At declaration time, the server verifies the target does not yet exist;
+the binding fails if any path already exists on disk. The actual create
+is performed by native Edit / Write under the deny-raw-edit hook's
+binding-validation gate (see §5).
 
 Use this tool when:
 - Adding a new source module, helper, or class file
@@ -17130,10 +17157,12 @@ Required tests (you MUST cover):
 2. If the new file is itself a test file, it must contain at least one
    explicit assertion. The mere existence of a test file is not a test.
 
-test_files must be non-empty (you must declare which test covers the new
-code). For each entry in \`changes\`, \`old_content\` MUST be the empty
-string — the file does not yet exist. \`new_content\` is the full content
-to write.
+test_files must be non-empty (you must declare which test covers the
+new code). The \`target_file\` MUST NOT exist on disk at declaration
+time; \`before_sha256\` MUST be \`sha256("")\`. \`after_sha256\` is the
+sha256 of the intended file content. For multi-file scaffolding, list
+additional creates in \`additional_files\` (this tool is one of the two
+workflow-required tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -17143,8 +17172,8 @@ This tool MUST NOT be used when:
 - The change is a rename or move (delete-and-add); the modify/create
   shape cannot represent rename atomically and the audit log would not
   reflect the original file's deletion
-- The file is a binary payload; the string-based content shape will
-  corrupt non-UTF-8 data
+- The file is a binary payload; native Edit / Write's string-based
+  parameters cannot carry non-UTF-8 bytes
 
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
@@ -17160,917 +17189,9 @@ General principles (apply to every edit):
 };
 
 // src/tools/common.ts
+import * as crypto from "node:crypto";
 import * as fs3 from "node:fs";
 import * as path3 from "node:path";
-
-// node_modules/diff/libesm/diff/base.js
-class Diff {
-  diff(oldStr, newStr, options = {}) {
-    let callback;
-    if (typeof options === "function") {
-      callback = options;
-      options = {};
-    } else if ("callback" in options) {
-      callback = options.callback;
-    }
-    const oldString = this.castInput(oldStr, options);
-    const newString = this.castInput(newStr, options);
-    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
-    const newTokens = this.removeEmpty(this.tokenize(newString, options));
-    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
-  }
-  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
-    var _a;
-    const done = (value) => {
-      value = this.postProcess(value, options);
-      if (callback) {
-        setTimeout(function() {
-          callback(value);
-        }, 0);
-        return;
-      } else {
-        return value;
-      }
-    };
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let editLength = 1;
-    let maxEditLength = newLen + oldLen;
-    if (options.maxEditLength != null) {
-      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
-    }
-    const maxExecutionTime = (_a = options.timeout) !== null && _a !== undefined ? _a : Infinity;
-    const abortAfterTimestamp = Date.now() + maxExecutionTime;
-    const bestPath = [{ oldPos: -1, lastComponent: undefined }];
-    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
-    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
-    }
-    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
-    const execEditLength = () => {
-      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength);diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
-        let basePath;
-        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
-        if (removePath) {
-          bestPath[diagonalPath - 1] = undefined;
-        }
-        let canAdd = false;
-        if (addPath) {
-          const addPathNewPos = addPath.oldPos - diagonalPath;
-          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
-        }
-        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
-        if (!canAdd && !canRemove) {
-          bestPath[diagonalPath] = undefined;
-          continue;
-        }
-        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
-          basePath = this.addToPath(addPath, true, false, 0, options);
-        } else {
-          basePath = this.addToPath(removePath, false, true, 1, options);
-        }
-        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
-        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
-        } else {
-          bestPath[diagonalPath] = basePath;
-          if (basePath.oldPos + 1 >= oldLen) {
-            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
-          }
-          if (newPos + 1 >= newLen) {
-            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
-          }
-        }
-      }
-      editLength++;
-    };
-    if (callback) {
-      (function exec() {
-        setTimeout(function() {
-          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
-            return callback(undefined);
-          }
-          if (!execEditLength()) {
-            exec();
-          }
-        }, 0);
-      })();
-    } else {
-      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
-        const ret = execEditLength();
-        if (ret) {
-          return ret;
-        }
-      }
-    }
-  }
-  addToPath(path, added, removed, oldPosInc, options) {
-    const last = path.lastComponent;
-    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
-      return {
-        oldPos: path.oldPos + oldPosInc,
-        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
-      };
-    } else {
-      return {
-        oldPos: path.oldPos + oldPosInc,
-        lastComponent: { count: 1, added, removed, previousComponent: last }
-      };
-    }
-  }
-  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
-    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
-      newPos++;
-      oldPos++;
-      commonCount++;
-      if (options.oneChangePerToken) {
-        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
-      }
-    }
-    if (commonCount && !options.oneChangePerToken) {
-      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
-    }
-    basePath.oldPos = oldPos;
-    return newPos;
-  }
-  equals(left, right, options) {
-    if (options.comparator) {
-      return options.comparator(left, right);
-    } else {
-      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
-    }
-  }
-  removeEmpty(array3) {
-    const ret = [];
-    for (let i = 0;i < array3.length; i++) {
-      if (array3[i]) {
-        ret.push(array3[i]);
-      }
-    }
-    return ret;
-  }
-  castInput(value, options) {
-    return value;
-  }
-  tokenize(value, options) {
-    return Array.from(value);
-  }
-  join(chars) {
-    return chars.join("");
-  }
-  postProcess(changeObjects, options) {
-    return changeObjects;
-  }
-  get useLongestToken() {
-    return false;
-  }
-  buildValues(lastComponent, newTokens, oldTokens) {
-    const components = [];
-    let nextComponent;
-    while (lastComponent) {
-      components.push(lastComponent);
-      nextComponent = lastComponent.previousComponent;
-      delete lastComponent.previousComponent;
-      lastComponent = nextComponent;
-    }
-    components.reverse();
-    const componentLen = components.length;
-    let componentPos = 0, newPos = 0, oldPos = 0;
-    for (;componentPos < componentLen; componentPos++) {
-      const component = components[componentPos];
-      if (!component.removed) {
-        if (!component.added && this.useLongestToken) {
-          let value = newTokens.slice(newPos, newPos + component.count);
-          value = value.map(function(value2, i) {
-            const oldValue = oldTokens[oldPos + i];
-            return oldValue.length > value2.length ? oldValue : value2;
-          });
-          component.value = this.join(value);
-        } else {
-          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
-        }
-        newPos += component.count;
-        if (!component.added) {
-          oldPos += component.count;
-        }
-      } else {
-        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
-        oldPos += component.count;
-      }
-    }
-    return components;
-  }
-}
-
-// node_modules/diff/libesm/diff/character.js
-class CharacterDiff extends Diff {
-}
-var characterDiff = new CharacterDiff;
-
-// node_modules/diff/libesm/util/string.js
-function longestCommonPrefix(str1, str2) {
-  let i;
-  for (i = 0;i < str1.length && i < str2.length; i++) {
-    if (str1[i] != str2[i]) {
-      return str1.slice(0, i);
-    }
-  }
-  return str1.slice(0, i);
-}
-function longestCommonSuffix(str1, str2) {
-  let i;
-  if (!str1 || !str2 || str1[str1.length - 1] != str2[str2.length - 1]) {
-    return "";
-  }
-  for (i = 0;i < str1.length && i < str2.length; i++) {
-    if (str1[str1.length - (i + 1)] != str2[str2.length - (i + 1)]) {
-      return str1.slice(-i);
-    }
-  }
-  return str1.slice(-i);
-}
-function replacePrefix(string4, oldPrefix, newPrefix) {
-  if (string4.slice(0, oldPrefix.length) != oldPrefix) {
-    throw Error(`string ${JSON.stringify(string4)} doesn't start with prefix ${JSON.stringify(oldPrefix)}; this is a bug`);
-  }
-  return newPrefix + string4.slice(oldPrefix.length);
-}
-function replaceSuffix(string4, oldSuffix, newSuffix) {
-  if (!oldSuffix) {
-    return string4 + newSuffix;
-  }
-  if (string4.slice(-oldSuffix.length) != oldSuffix) {
-    throw Error(`string ${JSON.stringify(string4)} doesn't end with suffix ${JSON.stringify(oldSuffix)}; this is a bug`);
-  }
-  return string4.slice(0, -oldSuffix.length) + newSuffix;
-}
-function removePrefix(string4, oldPrefix) {
-  return replacePrefix(string4, oldPrefix, "");
-}
-function removeSuffix(string4, oldSuffix) {
-  return replaceSuffix(string4, oldSuffix, "");
-}
-function maximumOverlap(string1, string22) {
-  return string22.slice(0, overlapCount(string1, string22));
-}
-function overlapCount(a, b) {
-  let startA = 0;
-  if (a.length > b.length) {
-    startA = a.length - b.length;
-  }
-  let endB = b.length;
-  if (a.length < b.length) {
-    endB = a.length;
-  }
-  const map2 = Array(endB);
-  let k = 0;
-  map2[0] = 0;
-  for (let j = 1;j < endB; j++) {
-    if (b[j] == b[k]) {
-      map2[j] = map2[k];
-    } else {
-      map2[j] = k;
-    }
-    while (k > 0 && b[j] != b[k]) {
-      k = map2[k];
-    }
-    if (b[j] == b[k]) {
-      k++;
-    }
-  }
-  k = 0;
-  for (let i = startA;i < a.length; i++) {
-    while (k > 0 && a[i] != b[k]) {
-      k = map2[k];
-    }
-    if (a[i] == b[k]) {
-      k++;
-    }
-  }
-  return k;
-}
-function segment(string4, segmenter) {
-  const parts = [];
-  for (const segmentObj of Array.from(segmenter.segment(string4))) {
-    const segment2 = segmentObj.segment;
-    if (parts.length && /\s/.test(parts[parts.length - 1]) && /\s/.test(segment2)) {
-      parts[parts.length - 1] += segment2;
-    } else {
-      parts.push(segment2);
-    }
-  }
-  return parts;
-}
-function trailingWs(string4, segmenter) {
-  if (segmenter) {
-    return leadingAndTrailingWs(string4, segmenter)[1];
-  }
-  let i;
-  for (i = string4.length - 1;i >= 0; i--) {
-    if (!string4[i].match(/\s/)) {
-      break;
-    }
-  }
-  return string4.substring(i + 1);
-}
-function leadingWs(string4, segmenter) {
-  if (segmenter) {
-    return leadingAndTrailingWs(string4, segmenter)[0];
-  }
-  const match = string4.match(/^\s*/);
-  return match ? match[0] : "";
-}
-function leadingAndTrailingWs(string4, segmenter) {
-  if (!segmenter) {
-    return [leadingWs(string4), trailingWs(string4)];
-  }
-  if (segmenter.resolvedOptions().granularity != "word") {
-    throw new Error('The segmenter passed must have a granularity of "word"');
-  }
-  const segments = segment(string4, segmenter);
-  const firstSeg = segments[0];
-  const lastSeg = segments[segments.length - 1];
-  const head = /\s/.test(firstSeg) ? firstSeg : "";
-  const tail = /\s/.test(lastSeg) ? lastSeg : "";
-  return [head, tail];
-}
-
-// node_modules/diff/libesm/diff/word.js
-var extendedWordChars = "a-zA-Z0-9_\\u{AD}\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2C6}\\u{2C8}-\\u{2D7}\\u{2DE}-\\u{2FF}\\u{1E00}-\\u{1EFF}";
-var tokenizeIncludingWhitespace = new RegExp(`[${extendedWordChars}]+|\\s+|[^${extendedWordChars}]`, "ug");
-
-class WordDiff extends Diff {
-  equals(left, right, options) {
-    if (options.ignoreCase) {
-      left = left.toLowerCase();
-      right = right.toLowerCase();
-    }
-    return left.trim() === right.trim();
-  }
-  tokenize(value, options = {}) {
-    let parts;
-    if (options.intlSegmenter) {
-      const segmenter = options.intlSegmenter;
-      if (segmenter.resolvedOptions().granularity != "word") {
-        throw new Error('The segmenter passed must have a granularity of "word"');
-      }
-      parts = segment(value, segmenter);
-    } else {
-      parts = value.match(tokenizeIncludingWhitespace) || [];
-    }
-    const tokens = [];
-    let prevPart = null;
-    parts.forEach((part) => {
-      if (/\s/.test(part)) {
-        if (prevPart == null) {
-          tokens.push(part);
-        } else {
-          tokens.push(tokens.pop() + part);
-        }
-      } else if (prevPart != null && /\s/.test(prevPart)) {
-        if (tokens[tokens.length - 1] == prevPart) {
-          tokens.push(tokens.pop() + part);
-        } else {
-          tokens.push(prevPart + part);
-        }
-      } else {
-        tokens.push(part);
-      }
-      prevPart = part;
-    });
-    return tokens;
-  }
-  join(tokens) {
-    return tokens.map((token, i) => {
-      if (i == 0) {
-        return token;
-      } else {
-        return token.replace(/^\s+/, "");
-      }
-    }).join("");
-  }
-  postProcess(changes, options) {
-    if (!changes || options.oneChangePerToken) {
-      return changes;
-    }
-    let lastKeep = null;
-    let insertion = null;
-    let deletion = null;
-    changes.forEach((change) => {
-      if (change.added) {
-        insertion = change;
-      } else if (change.removed) {
-        deletion = change;
-      } else {
-        if (insertion || deletion) {
-          dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, change, options.intlSegmenter);
-        }
-        lastKeep = change;
-        insertion = null;
-        deletion = null;
-      }
-    });
-    if (insertion || deletion) {
-      dedupeWhitespaceInChangeObjects(lastKeep, deletion, insertion, null, options.intlSegmenter);
-    }
-    return changes;
-  }
-}
-var wordDiff = new WordDiff;
-function dedupeWhitespaceInChangeObjects(startKeep, deletion, insertion, endKeep, segmenter) {
-  if (deletion && insertion) {
-    const [oldWsPrefix, oldWsSuffix] = leadingAndTrailingWs(deletion.value, segmenter);
-    const [newWsPrefix, newWsSuffix] = leadingAndTrailingWs(insertion.value, segmenter);
-    if (startKeep) {
-      const commonWsPrefix = longestCommonPrefix(oldWsPrefix, newWsPrefix);
-      startKeep.value = replaceSuffix(startKeep.value, newWsPrefix, commonWsPrefix);
-      deletion.value = removePrefix(deletion.value, commonWsPrefix);
-      insertion.value = removePrefix(insertion.value, commonWsPrefix);
-    }
-    if (endKeep) {
-      const commonWsSuffix = longestCommonSuffix(oldWsSuffix, newWsSuffix);
-      endKeep.value = replacePrefix(endKeep.value, newWsSuffix, commonWsSuffix);
-      deletion.value = removeSuffix(deletion.value, commonWsSuffix);
-      insertion.value = removeSuffix(insertion.value, commonWsSuffix);
-    }
-  } else if (insertion) {
-    if (startKeep) {
-      const ws = leadingWs(insertion.value, segmenter);
-      insertion.value = insertion.value.substring(ws.length);
-    }
-    if (endKeep) {
-      const ws = leadingWs(endKeep.value, segmenter);
-      endKeep.value = endKeep.value.substring(ws.length);
-    }
-  } else if (startKeep && endKeep) {
-    const newWsFull = leadingWs(endKeep.value, segmenter), [delWsStart, delWsEnd] = leadingAndTrailingWs(deletion.value, segmenter);
-    const newWsStart = longestCommonPrefix(newWsFull, delWsStart);
-    deletion.value = removePrefix(deletion.value, newWsStart);
-    const newWsEnd = longestCommonSuffix(removePrefix(newWsFull, newWsStart), delWsEnd);
-    deletion.value = removeSuffix(deletion.value, newWsEnd);
-    endKeep.value = replacePrefix(endKeep.value, newWsFull, newWsEnd);
-    startKeep.value = replaceSuffix(startKeep.value, newWsFull, newWsFull.slice(0, newWsFull.length - newWsEnd.length));
-  } else if (endKeep) {
-    const endKeepWsPrefix = leadingWs(endKeep.value, segmenter);
-    const deletionWsSuffix = trailingWs(deletion.value, segmenter);
-    const overlap = maximumOverlap(deletionWsSuffix, endKeepWsPrefix);
-    deletion.value = removeSuffix(deletion.value, overlap);
-  } else if (startKeep) {
-    const startKeepWsSuffix = trailingWs(startKeep.value, segmenter);
-    const deletionWsPrefix = leadingWs(deletion.value, segmenter);
-    const overlap = maximumOverlap(startKeepWsSuffix, deletionWsPrefix);
-    deletion.value = removePrefix(deletion.value, overlap);
-  }
-}
-
-class WordsWithSpaceDiff extends Diff {
-  tokenize(value) {
-    const regex = new RegExp(`(\\r?\\n)|[${extendedWordChars}]+|[^\\S\\n\\r]+|[^${extendedWordChars}]`, "ug");
-    return value.match(regex) || [];
-  }
-}
-var wordsWithSpaceDiff = new WordsWithSpaceDiff;
-
-// node_modules/diff/libesm/diff/line.js
-class LineDiff extends Diff {
-  constructor() {
-    super(...arguments);
-    this.tokenize = tokenize;
-  }
-  equals(left, right, options) {
-    if (options.ignoreWhitespace) {
-      if (!options.newlineIsToken || !left.includes(`
-`)) {
-        left = left.trim();
-      }
-      if (!options.newlineIsToken || !right.includes(`
-`)) {
-        right = right.trim();
-      }
-    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
-      if (left.endsWith(`
-`)) {
-        left = left.slice(0, -1);
-      }
-      if (right.endsWith(`
-`)) {
-        right = right.slice(0, -1);
-      }
-    }
-    return super.equals(left, right, options);
-  }
-}
-var lineDiff = new LineDiff;
-function diffLines(oldStr, newStr, options) {
-  return lineDiff.diff(oldStr, newStr, options);
-}
-function tokenize(value, options) {
-  if (options.stripTrailingCr) {
-    value = value.replace(/\r\n/g, `
-`);
-  }
-  const retLines = [], linesAndNewlines = value.split(/(\n|\r\n)/);
-  if (!linesAndNewlines[linesAndNewlines.length - 1]) {
-    linesAndNewlines.pop();
-  }
-  for (let i = 0;i < linesAndNewlines.length; i++) {
-    const line = linesAndNewlines[i];
-    if (i % 2 && !options.newlineIsToken) {
-      retLines[retLines.length - 1] += line;
-    } else {
-      retLines.push(line);
-    }
-  }
-  return retLines;
-}
-
-// node_modules/diff/libesm/diff/sentence.js
-function isSentenceEndPunct(char) {
-  return char == "." || char == "!" || char == "?";
-}
-
-class SentenceDiff extends Diff {
-  tokenize(value) {
-    var _a;
-    const result = [];
-    let tokenStartI = 0;
-    for (let i = 0;i < value.length; i++) {
-      if (i == value.length - 1) {
-        result.push(value.slice(tokenStartI));
-        break;
-      }
-      if (isSentenceEndPunct(value[i]) && value[i + 1].match(/\s/)) {
-        result.push(value.slice(tokenStartI, i + 1));
-        i = tokenStartI = i + 1;
-        while ((_a = value[i + 1]) === null || _a === undefined ? undefined : _a.match(/\s/)) {
-          i++;
-        }
-        result.push(value.slice(tokenStartI, i + 1));
-        tokenStartI = i + 1;
-      }
-    }
-    return result;
-  }
-}
-var sentenceDiff = new SentenceDiff;
-
-// node_modules/diff/libesm/diff/css.js
-class CssDiff extends Diff {
-  tokenize(value) {
-    return value.split(/([{}:;,]|\s+)/);
-  }
-}
-var cssDiff = new CssDiff;
-
-// node_modules/diff/libesm/diff/json.js
-class JsonDiff extends Diff {
-  constructor() {
-    super(...arguments);
-    this.tokenize = tokenize;
-  }
-  get useLongestToken() {
-    return true;
-  }
-  castInput(value, options) {
-    const { undefinedReplacement, stringifyReplacer = (k, v) => typeof v === "undefined" ? undefinedReplacement : v } = options;
-    return typeof value === "string" ? value : JSON.stringify(canonicalize(value, null, null, stringifyReplacer), null, "  ");
-  }
-  equals(left, right, options) {
-    return super.equals(left.replace(/,([\r\n])/g, "$1"), right.replace(/,([\r\n])/g, "$1"), options);
-  }
-}
-var jsonDiff = new JsonDiff;
-function canonicalize(obj, stack, replacementStack, replacer, key) {
-  stack = stack || [];
-  replacementStack = replacementStack || [];
-  if (replacer) {
-    obj = replacer(key === undefined ? "" : key, obj);
-  }
-  let i;
-  for (i = 0;i < stack.length; i += 1) {
-    if (stack[i] === obj) {
-      return replacementStack[i];
-    }
-  }
-  let canonicalizedObj;
-  if (Object.prototype.toString.call(obj) === "[object Array]") {
-    stack.push(obj);
-    canonicalizedObj = new Array(obj.length);
-    replacementStack.push(canonicalizedObj);
-    for (i = 0;i < obj.length; i += 1) {
-      canonicalizedObj[i] = canonicalize(obj[i], stack, replacementStack, replacer, String(i));
-    }
-    stack.pop();
-    replacementStack.pop();
-    return canonicalizedObj;
-  }
-  if (obj && obj.toJSON) {
-    obj = obj.toJSON();
-  }
-  if (typeof obj === "object" && obj !== null) {
-    stack.push(obj);
-    canonicalizedObj = {};
-    replacementStack.push(canonicalizedObj);
-    const sortedKeys = [];
-    let key2;
-    for (key2 in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key2)) {
-        sortedKeys.push(key2);
-      }
-    }
-    sortedKeys.sort();
-    for (i = 0;i < sortedKeys.length; i += 1) {
-      key2 = sortedKeys[i];
-      canonicalizedObj[key2] = canonicalize(obj[key2], stack, replacementStack, replacer, key2);
-    }
-    stack.pop();
-    replacementStack.pop();
-  } else {
-    canonicalizedObj = obj;
-  }
-  return canonicalizedObj;
-}
-
-// node_modules/diff/libesm/diff/array.js
-class ArrayDiff extends Diff {
-  tokenize(value) {
-    return value.slice();
-  }
-  join(value) {
-    return value;
-  }
-  removeEmpty(value) {
-    return value;
-  }
-}
-var arrayDiff = new ArrayDiff;
-
-// node_modules/diff/libesm/patch/create.js
-function needsQuoting(s) {
-  for (let i = 0;i < s.length; i++) {
-    if (s[i] < " " || s[i] > "~" || s[i] === '"' || s[i] === "\\") {
-      return true;
-    }
-  }
-  return false;
-}
-function quoteFileNameIfNeeded(s) {
-  if (!needsQuoting(s)) {
-    return s;
-  }
-  let result = '"';
-  const bytes = new TextEncoder().encode(s);
-  let i = 0;
-  while (i < bytes.length) {
-    const b = bytes[i];
-    if (b === 7) {
-      result += "\\a";
-    } else if (b === 8) {
-      result += "\\b";
-    } else if (b === 9) {
-      result += "\\t";
-    } else if (b === 10) {
-      result += "\\n";
-    } else if (b === 11) {
-      result += "\\v";
-    } else if (b === 12) {
-      result += "\\f";
-    } else if (b === 13) {
-      result += "\\r";
-    } else if (b === 34) {
-      result += "\\\"";
-    } else if (b === 92) {
-      result += "\\\\";
-    } else if (b >= 32 && b <= 126) {
-      result += String.fromCharCode(b);
-    } else {
-      result += "\\" + b.toString(8).padStart(3, "0");
-    }
-    i++;
-  }
-  result += '"';
-  return result;
-}
-var INCLUDE_HEADERS = {
-  includeIndex: true,
-  includeUnderline: true,
-  includeFileHeaders: true
-};
-function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
-  let optionsObj;
-  if (!options) {
-    optionsObj = {};
-  } else if (typeof options === "function") {
-    optionsObj = { callback: options };
-  } else {
-    optionsObj = options;
-  }
-  if (typeof optionsObj.context === "undefined") {
-    optionsObj.context = 4;
-  }
-  const context = optionsObj.context;
-  if (optionsObj.newlineIsToken) {
-    throw new Error("newlineIsToken may not be used with patch-generation functions, only with diffing functions");
-  }
-  if (!optionsObj.callback) {
-    return diffLinesResultToPatch(diffLines(oldStr, newStr, optionsObj));
-  } else {
-    const { callback } = optionsObj;
-    diffLines(oldStr, newStr, Object.assign(Object.assign({}, optionsObj), { callback: (diff) => {
-      const patch = diffLinesResultToPatch(diff);
-      callback(patch);
-    } }));
-  }
-  function diffLinesResultToPatch(diff) {
-    if (!diff) {
-      return;
-    }
-    diff.push({ value: "", lines: [] });
-    function contextLines(lines) {
-      return lines.map(function(entry) {
-        return " " + entry;
-      });
-    }
-    const hunks = [];
-    let oldRangeStart = 0, newRangeStart = 0, curRange = [], oldLine = 1, newLine = 1;
-    for (let i = 0;i < diff.length; i++) {
-      const current = diff[i], lines = current.lines || splitLines(current.value);
-      current.lines = lines;
-      if (current.added || current.removed) {
-        if (!oldRangeStart) {
-          const prev = diff[i - 1];
-          oldRangeStart = oldLine;
-          newRangeStart = newLine;
-          if (prev) {
-            curRange = context > 0 ? contextLines(prev.lines.slice(-context)) : [];
-            oldRangeStart -= curRange.length;
-            newRangeStart -= curRange.length;
-          }
-        }
-        for (const line of lines) {
-          curRange.push((current.added ? "+" : "-") + line);
-        }
-        if (current.added) {
-          newLine += lines.length;
-        } else {
-          oldLine += lines.length;
-        }
-      } else {
-        if (oldRangeStart) {
-          if (lines.length <= context * 2 && i < diff.length - 2) {
-            for (const line of contextLines(lines)) {
-              curRange.push(line);
-            }
-          } else {
-            const contextSize = Math.min(lines.length, context);
-            for (const line of contextLines(lines.slice(0, contextSize))) {
-              curRange.push(line);
-            }
-            const hunk = {
-              oldStart: oldRangeStart,
-              oldLines: oldLine - oldRangeStart + contextSize,
-              newStart: newRangeStart,
-              newLines: newLine - newRangeStart + contextSize,
-              lines: curRange
-            };
-            hunks.push(hunk);
-            oldRangeStart = 0;
-            newRangeStart = 0;
-            curRange = [];
-          }
-        }
-        oldLine += lines.length;
-        newLine += lines.length;
-      }
-    }
-    for (const hunk of hunks) {
-      for (let i = 0;i < hunk.lines.length; i++) {
-        if (hunk.lines[i].endsWith(`
-`)) {
-          hunk.lines[i] = hunk.lines[i].slice(0, -1);
-        } else {
-          hunk.lines.splice(i + 1, 0, "\\ No newline at end of file");
-          i++;
-        }
-      }
-    }
-    return {
-      oldFileName,
-      newFileName,
-      oldHeader,
-      newHeader,
-      hunks
-    };
-  }
-}
-function formatPatch(patch, headerOptions) {
-  var _a, _b, _c, _d, _e, _f;
-  if (!headerOptions) {
-    headerOptions = INCLUDE_HEADERS;
-  }
-  if (Array.isArray(patch)) {
-    if (patch.length > 1 && !headerOptions.includeFileHeaders && !patch.every((p) => p.isGit)) {
-      throw new Error("Cannot omit file headers on a multi-file patch. " + "(The result would be unparseable; how would a tool trying to apply " + "the patch know which changes are to which file?)");
-    }
-    return patch.map((p) => formatPatch(p, headerOptions)).join(`
-`);
-  }
-  const ret = [];
-  if (patch.isGit) {
-    headerOptions = INCLUDE_HEADERS;
-    if (!patch.oldFileName) {
-      throw new Error("oldFileName must be specified for Git patches");
-    }
-    if (!patch.newFileName) {
-      throw new Error("newFileName must be specified for Git patches");
-    }
-    let gitOldName = patch.oldFileName;
-    let gitNewName = patch.newFileName;
-    if (patch.isCreate && gitOldName === "/dev/null") {
-      gitOldName = gitNewName.replace(/^b\//, "a/");
-    } else if (patch.isDelete && gitNewName === "/dev/null") {
-      gitNewName = gitOldName.replace(/^a\//, "b/");
-    }
-    ret.push("diff --git " + quoteFileNameIfNeeded(gitOldName) + " " + quoteFileNameIfNeeded(gitNewName));
-    if (patch.isDelete) {
-      ret.push("deleted file mode " + ((_a = patch.oldMode) !== null && _a !== undefined ? _a : "100644"));
-    }
-    if (patch.isCreate) {
-      ret.push("new file mode " + ((_b = patch.newMode) !== null && _b !== undefined ? _b : "100644"));
-    }
-    if (patch.oldMode && patch.newMode && !patch.isDelete && !patch.isCreate) {
-      ret.push("old mode " + patch.oldMode);
-      ret.push("new mode " + patch.newMode);
-    }
-    if (patch.isRename) {
-      ret.push("rename from " + quoteFileNameIfNeeded(((_c = patch.oldFileName) !== null && _c !== undefined ? _c : "").replace(/^a\//, "")));
-      ret.push("rename to " + quoteFileNameIfNeeded(((_d = patch.newFileName) !== null && _d !== undefined ? _d : "").replace(/^b\//, "")));
-    }
-    if (patch.isCopy) {
-      ret.push("copy from " + quoteFileNameIfNeeded(((_e = patch.oldFileName) !== null && _e !== undefined ? _e : "").replace(/^a\//, "")));
-      ret.push("copy to " + quoteFileNameIfNeeded(((_f = patch.newFileName) !== null && _f !== undefined ? _f : "").replace(/^b\//, "")));
-    }
-  } else {
-    if (headerOptions.includeIndex && patch.oldFileName == patch.newFileName && patch.oldFileName !== undefined) {
-      ret.push("Index: " + patch.oldFileName);
-    }
-    if (headerOptions.includeUnderline) {
-      ret.push("===================================================================");
-    }
-  }
-  const hasHunks = patch.hunks.length > 0;
-  if (headerOptions.includeFileHeaders && patch.oldFileName !== undefined && patch.newFileName !== undefined && (!patch.isGit || hasHunks)) {
-    ret.push("--- " + quoteFileNameIfNeeded(patch.oldFileName) + (patch.oldHeader ? "\t" + patch.oldHeader : ""));
-    ret.push("+++ " + quoteFileNameIfNeeded(patch.newFileName) + (patch.newHeader ? "\t" + patch.newHeader : ""));
-  }
-  for (let i = 0;i < patch.hunks.length; i++) {
-    const hunk = patch.hunks[i];
-    const oldStart = hunk.oldLines === 0 ? hunk.oldStart - 1 : hunk.oldStart;
-    const newStart = hunk.newLines === 0 ? hunk.newStart - 1 : hunk.newStart;
-    ret.push("@@ -" + oldStart + "," + hunk.oldLines + " +" + newStart + "," + hunk.newLines + " @@");
-    for (const line of hunk.lines) {
-      ret.push(line);
-    }
-  }
-  return ret.join(`
-`) + `
-`;
-}
-function createTwoFilesPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
-  if (typeof options === "function") {
-    options = { callback: options };
-  }
-  if (!(options === null || options === undefined ? undefined : options.callback)) {
-    const patchObj = structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options);
-    if (!patchObj) {
-      return;
-    }
-    return formatPatch(patchObj, options === null || options === undefined ? undefined : options.headerOptions);
-  } else {
-    const { callback } = options;
-    structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, Object.assign(Object.assign({}, options), { callback: (patchObj) => {
-      if (!patchObj) {
-        callback(undefined);
-      } else {
-        callback(formatPatch(patchObj, options.headerOptions));
-      }
-    } }));
-  }
-}
-function splitLines(text) {
-  const hasTrailingNl = text.endsWith(`
-`);
-  const result = text.split(`
-`).map((line) => line + `
-`);
-  if (hasTrailingNl) {
-    result.pop();
-  } else {
-    result.push(result.pop().slice(0, -1));
-  }
-  return result;
-}
 // src/state/protected-paths.ts
 import * as fs2 from "node:fs";
 import * as path2 from "node:path";
@@ -18173,20 +17294,31 @@ function isProtectedPath(p, options = {}) {
 
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
-var ChangeSchema = exports_external.object({
+var HEX64_RE = /^[0-9a-f]{64}$/;
+var Sha256HexSchema = exports_external.string().regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
+var AdditionalFileSchema = exports_external.object({
   file: exports_external.string().min(1),
-  old_content: exports_external.string(),
-  new_content: exports_external.string()
-});
-var MAX_CHANGES_PER_REQUEST = 100;
+  before_sha256: Sha256HexSchema,
+  after_sha256: Sha256HexSchema
+}).strict();
+var MAX_ADDITIONAL_FILES = 32;
+var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
+  "edit_docs_only",
+  "edit_create_file"
+];
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   test_files: exports_external.array(exports_external.string()),
-  changes: exports_external.array(ChangeSchema).min(1).max(MAX_CHANGES_PER_REQUEST)
-});
-var MAX_CHANGE_BYTES = 1048576;
+  before_sha256: Sha256HexSchema,
+  after_sha256: Sha256HexSchema,
+  additional_files: exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES).optional()
+}).strict();
+function sha256Hex(content) {
+  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
+var SHA256_EMPTY = sha256Hex("");
 function validateRequest(toolName, request, ctx) {
   const warnings = [];
   if (request.rationale.trim().length === 0) {
@@ -18201,198 +17333,65 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files must be non-empty for ${toolName}`);
     }
   }
-  const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
-  if (!targetCheck.ok) {
-    warnings.push(`target_file: ${targetCheck.error}`);
+  if (request.additional_files !== undefined && !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
+    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the 2 workflow tools (edit_docs_only, edit_create_file). Submit each ` + `file as its own typed_edit call.`);
   }
-  const testFileCanonicals = [];
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
     if (!c.ok) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
-    } else {
-      testFileCanonicals.push(c.canonical);
     }
-  }
-  if (request.changes.length === 0) {
-    warnings.push("changes must contain at least one entry");
-    return { ok: false, warnings };
-  }
-  if (request.changes.length > MAX_CHANGES_PER_REQUEST) {
-    warnings.push(`changes contains ${request.changes.length} entries; exceeds the ${MAX_CHANGES_PER_REQUEST}-entry limit`);
-    return { ok: false, warnings };
-  }
-  let totalBytes = 0;
-  for (const c of request.changes) {
-    totalBytes += Buffer.byteLength(c.old_content, "utf8") + Buffer.byteLength(c.new_content, "utf8");
-  }
-  if (totalBytes > MAX_CHANGE_BYTES) {
-    warnings.push(`changes total payload is ${totalBytes} bytes; exceeds the ${MAX_CHANGE_BYTES}-byte limit`);
-    return { ok: false, warnings };
   }
   const isCreate = toolName === "edit_create_file";
-  const touched = [];
-  const changes = [];
-  const seenChangeFileWarning = new Set;
-  for (const c of request.changes) {
-    if (c.old_content.includes("\x00")) {
-      warnings.push(`change.old_content for "${c.file}" contains NUL byte; rejected`);
-      continue;
-    }
-    if (c.new_content.includes("\x00")) {
-      warnings.push(`change.new_content for "${c.file}" contains NUL byte; rejected`);
-      continue;
-    }
-    if (isCreate) {
-      if (c.old_content !== "") {
-        warnings.push(`change for "${c.file}" has non-empty old_content; for edit_create_file old_content must be empty (the file does not yet exist on disk)`);
-        continue;
-      }
+  const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
+  let primaryBinding = null;
+  if (!targetCheck.ok) {
+    warnings.push(`target_file: ${targetCheck.error}`);
+  } else {
+    const beforeCheck = verifyBeforeSha256(targetCheck.canonical, request.before_sha256, ctx.repoRoot, isCreate, "target_file");
+    if (!beforeCheck.ok) {
+      warnings.push(beforeCheck.error);
     } else {
-      if (c.old_content === c.new_content) {
-        warnings.push(`change for "${c.file}" has identical old_content and new_content (no-op); reject so audit logs and watchers are not bumped for empty edits`);
+      primaryBinding = {
+        canonical: targetCheck.canonical,
+        before_sha256: request.before_sha256,
+        after_sha256: request.after_sha256
+      };
+    }
+  }
+  const additionalBindings = [];
+  if (request.additional_files !== undefined && TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
+    const seenCanonicals = new Set;
+    if (primaryBinding !== null) {
+      seenCanonicals.add(primaryBinding.canonical);
+    }
+    for (const af of request.additional_files) {
+      const safe = checkPathSafety(af.file, ctx.repoRoot);
+      if (!safe.ok) {
+        warnings.push(`additional_files entry "${af.file}": ${safe.error}`);
         continue;
       }
-    }
-    const safe = checkPathSafety(c.file, ctx.repoRoot);
-    if (!safe.ok) {
-      if (!targetCheck.ok && c.file === request.target_file && safe.error === targetCheck.error) {
+      if (seenCanonicals.has(safe.canonical)) {
+        warnings.push(`additional_files contains duplicate file "${safe.canonical}"; ` + `each binding must be unique within a single declaration.`);
         continue;
       }
-      const dedupKey = `${c.file}\x00${safe.error}`;
-      if (seenChangeFileWarning.has(dedupKey)) {
+      seenCanonicals.add(safe.canonical);
+      const beforeCheck = verifyBeforeSha256(safe.canonical, af.before_sha256, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      if (!beforeCheck.ok) {
+        warnings.push(beforeCheck.error);
         continue;
       }
-      seenChangeFileWarning.add(dedupKey);
-      warnings.push(`change.file "${c.file}": ${safe.error}`);
-      continue;
-    }
-    touched.push(safe.canonical);
-    changes.push({
-      canonical: safe.canonical,
-      oldContent: c.old_content,
-      newContent: c.new_content
-    });
-  }
-  const allowed = new Set;
-  if (targetCheck.ok) {
-    allowed.add(targetCheck.canonical);
-  }
-  if (toolName !== "edit_test_only_change") {
-    for (const c of testFileCanonicals) {
-      allowed.add(c);
+      additionalBindings.push({
+        canonical: safe.canonical,
+        before_sha256: af.before_sha256,
+        after_sha256: af.after_sha256
+      });
     }
   }
-  for (const t of touched) {
-    if (!allowed.has(t)) {
-      const allowedList = [...allowed].join(", ");
-      warnings.push(`change modifies "${t}" which is outside the declared scope (allowed: ${allowedList})`);
-    }
-  }
-  const seenCanonical = new Set;
-  for (const t of touched) {
-    if (seenCanonical.has(t)) {
-      warnings.push(`changes contain multiple entries targeting "${t}". Submit each as its own edit_* call so changes are not silently dropped.`);
-    } else {
-      seenCanonical.add(t);
-    }
-  }
-  if (warnings.length > 0) {
+  if (warnings.length > 0 || primaryBinding === null) {
     return { ok: false, warnings };
   }
-  return { ok: true, touchedFiles: touched, changes };
-}
-function makeStubHandler(ctx) {
-  return async (toolName, args) => {
-    const result = validateRequest(toolName, args, ctx);
-    if (!result.ok) {
-      return {
-        applied: false,
-        edit_id: "edit_00000000_0000",
-        warnings: result.warnings
-      };
-    }
-    return {
-      applied: false,
-      edit_id: "edit_00000000_0000",
-      warnings: [
-        `${toolName}: validation passed; patch application is implemented in Phase 3`
-      ]
-    };
-  };
-}
-function makeApplyingHandler(deps) {
-  const { ctx, log, applyChanges, applyCreates } = deps;
-  const now = deps.now ?? (() => new Date);
-  return async (toolName, args) => {
-    const ts = now();
-    const editId = log.nextEditId(ts);
-    const baseEntry = {
-      edit_id: editId,
-      timestamp: isoTimestampForHandler(ts),
-      tool_name: toolName,
-      target_file: args.target_file,
-      rationale: args.rationale,
-      risk_level: args.risk_level,
-      test_files: args.test_files
-    };
-    const validation = validateRequest(toolName, args, ctx);
-    if (!validation.ok) {
-      const { warnings: finalWarnings2, audit_error: audit_error2 } = appendLogSafely(log, {
-        ...baseEntry,
-        patch_size_bytes: 0,
-        applied: false,
-        warnings: validation.warnings
-      });
-      return {
-        applied: false,
-        edit_id: editId,
-        warnings: finalWarnings2,
-        ...audit_error2 !== undefined ? { audit_error: audit_error2 } : {}
-      };
-    }
-    let synthesized = "";
-    for (const c of args.changes) {
-      synthesized += createTwoFilesPatch(c.file, c.file, c.old_content, c.new_content, "old", "new");
-    }
-    const patchSize = Buffer.byteLength(synthesized, "utf8");
-    const applyFn = toolName === "edit_create_file" ? applyCreates : applyChanges;
-    const result = applyFn(ctx.repoRoot, validation.changes);
-    const { warnings: finalWarnings, audit_error } = appendLogSafely(log, {
-      ...baseEntry,
-      patch_size_bytes: patchSize,
-      applied: result.applied,
-      warnings: result.warnings
-    });
-    return {
-      applied: result.applied,
-      edit_id: editId,
-      warnings: finalWarnings,
-      ...audit_error !== undefined ? { audit_error } : {}
-    };
-  };
-}
-function appendLogSafely(log, entry) {
-  try {
-    log.append(entry);
-    return { warnings: entry.warnings };
-  } catch (e) {
-    const code = e?.code;
-    const msg = e?.message ?? String(e);
-    return {
-      warnings: entry.warnings,
-      audit_error: `failed to append edit log entry "${entry.edit_id}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`
-    };
-  }
-}
-function isoTimestampForHandler(d) {
-  const pad = (n) => String(n).padStart(2, "0");
-  const offMin = -d.getTimezoneOffset();
-  const sign = offMin >= 0 ? "+" : "-";
-  const offAbs = Math.abs(offMin);
-  const offH = pad(Math.floor(offAbs / 60));
-  const offM = pad(offAbs % 60);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` + `${sign}${offH}:${offM}`;
+  return { ok: true, primaryBinding, additionalBindings };
 }
 function checkPathSafety(p, repoRoot) {
   if (path3.isAbsolute(p)) {
@@ -18464,15 +17463,88 @@ function containsParentTraversal(p) {
   }
   return false;
 }
+function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, fieldLabel) {
+  const absolute = path3.join(repoRoot, canonical);
+  let onDisk = null;
+  try {
+    onDisk = fs3.readFileSync(absolute, "utf8");
+  } catch (e) {
+    const code = e?.code;
+    if (code === "ENOENT") {
+      if (!isCreate) {
+        return {
+          ok: false,
+          error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
+        };
+      }
+      if (declaredBefore !== SHA256_EMPTY) {
+        return {
+          ok: false,
+          error: `${fieldLabel} "${canonical}": before_sha256 must equal sha256("") for edit_create_file because the file does not yet exist on disk`
+        };
+      }
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 verification (${code ?? "ERR"})`
+    };
+  }
+  if (isCreate) {
+    return {
+      ok: false,
+      error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
+    };
+  }
+  const actual = sha256Hex(onDisk);
+  if (actual !== declaredBefore) {
+    return {
+      ok: false,
+      error: `${fieldLabel} "${canonical}": before_sha256 mismatch — declared ${shortHash(declaredBefore)} ` + `but disk content hashes to ${shortHash(actual)}. Re-read the file and recompute the digest before retrying.`
+    };
+  }
+  return { ok: true };
+}
+function shortHash(h) {
+  return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
+}
+function makeStubHandler(ctx) {
+  return async (toolName, args) => {
+    const result = validateRequest(toolName, args, ctx);
+    if (!result.ok) {
+      return {
+        token: "",
+        expires_at: "",
+        edit_id: "edit_00000000_0000",
+        warnings: result.warnings
+      };
+    }
+    return {
+      token: "",
+      expires_at: "",
+      edit_id: "edit_00000000_0000",
+      warnings: [
+        `${toolName}: validation passed; stub handler does not issue tokens`
+      ]
+    };
+  };
+}
 
 // src/tools/registry.ts
-var inputSchema = {
+var sqliteToolInputSchema = {
   type: "object",
-  required: ["target_file", "rationale", "risk_level", "test_files", "changes"],
+  required: [
+    "target_file",
+    "rationale",
+    "risk_level",
+    "test_files",
+    "before_sha256",
+    "after_sha256"
+  ],
   properties: {
     target_file: {
       type: "string",
-      description: "Repository-relative path to the primary file being edited. When changes touch multiple files, this is the principal file the edit is about."
+      description: "Repository-relative path to the file being edited. The MCP server validates path safety, that the path is inside the repo (post-realpath), and that it is not in a protected directory. The native Edit/Write call that follows must target this same file."
     },
     rationale: {
       type: "string",
@@ -18486,28 +17558,54 @@ var inputSchema = {
     test_files: {
       type: "array",
       items: { type: "string" },
-      description: "Paths of test files relevant to this edit. Required (non-empty) for all tools except edit_refactor_only, edit_test_only_change, and edit_docs_only. Must be empty for edit_test_only_change."
+      description: "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. Test edits are made via separate edit_test_only_change calls. Required (non-empty) for SQLite-derived production tools; must be empty for edit_test_only_change."
     },
-    changes: {
+    before_sha256: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      description: 'Lowercase hex sha256 (64 chars) of the current disk content of target_file. The MCP server reads disk and refuses if the digest does not match. For edit_create_file, pass sha256("") and the file MUST NOT yet exist.'
+    },
+    after_sha256: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      description: "Lowercase hex sha256 (64 chars) of the content the agent declares it will write. The deny-raw-edit hook compares this to the bytes the native Edit/Write call would land before allowing the write."
+    }
+  },
+  additionalProperties: false
+};
+var workflowToolInputSchema = {
+  type: "object",
+  required: [
+    "target_file",
+    "rationale",
+    "risk_level",
+    "test_files",
+    "before_sha256",
+    "after_sha256"
+  ],
+  properties: {
+    ...sqliteToolInputSchema.properties,
+    additional_files: {
       type: "array",
-      minItems: 1,
-      maxItems: 100,
-      description: "One or more content-pair changes. For modify-only tools the server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. For edit_create_file the server opens each path with O_CREAT|O_EXCL|O_NOFOLLOW, refuses if anything already exists at the path or follows a symlink at the leaf, and writes new_content; old_content MUST be the empty string. The shape does not represent delete or rename.",
+      maxItems: MAX_ADDITIONAL_FILES,
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry carries its own (file, before_sha256, after_sha256) tuple; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
-        required: ["file", "old_content", "new_content"],
+        required: ["file", "before_sha256", "after_sha256"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path of the file. For modify-only tools the file must already exist on disk; for edit_create_file the file must NOT exist on disk."
+            description: "Repository-relative path. Same path-safety rules as target_file."
           },
-          old_content: {
+          before_sha256: {
             type: "string",
-            description: "For modify-only tools: exact current content of the file (the server compares byte-for-byte at apply time and rejects the call if disk content differs). For edit_create_file: MUST be the empty string (the file does not yet exist)."
+            pattern: "^[0-9a-f]{64}$",
+            description: 'sha256 of the current disk content. For edit_create_file entries, sha256("").'
           },
-          new_content: {
+          after_sha256: {
             type: "string",
-            description: "New content to write to the file. For modify-only tools, atomically replaces the existing file on success; for edit_create_file, the new file is created with this content."
+            pattern: "^[0-9a-f]{64}$",
+            description: "sha256 of the content to be written."
           }
         },
         additionalProperties: false
@@ -18516,6 +17614,9 @@ var inputSchema = {
   },
   additionalProperties: false
 };
+function inputSchemaForTool(toolName) {
+  return TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName) ? workflowToolInputSchema : sqliteToolInputSchema;
+}
 function registerTools(server, options) {
   const handler = options.handler ?? makeStubHandler(options.context);
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -18523,7 +17624,7 @@ function registerTools(server, options) {
       tools: TOOL_NAMES.map((name) => ({
         name,
         description: TOOL_DESCRIPTIONS[name],
-        inputSchema
+        inputSchema: inputSchemaForTool(name)
       }))
     };
   });
@@ -18554,369 +17655,45 @@ function registerTools(server, options) {
   });
 }
 
-// src/tools/apply.ts
-import * as crypto from "node:crypto";
+// src/state/edit-log.ts
 import * as fs4 from "node:fs";
 import * as path4 from "node:path";
-var PLATFORM_O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
-function applyChanges(repoRoot, changes, options = {}) {
-  const warnings = [];
-  const O_NOFOLLOW = options.oNofollow !== undefined ? options.oNofollow : PLATFORM_O_NOFOLLOW;
-  if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
-    return {
-      applied: false,
-      warnings: [
-        "this platform does not expose O_NOFOLLOW; meta-edit refuses to write without symlink-leaf protection"
-      ]
-    };
-  }
-  let realRoot;
-  try {
-    realRoot = fs4.realpathSync(path4.resolve(repoRoot));
-  } catch {
-    return {
-      applied: false,
-      warnings: [`repository root could not be canonicalized: ${repoRoot}`]
-    };
-  }
-  const staged = [];
-  const seenCanonical = new Set;
-  for (const ch of changes) {
-    if (seenCanonical.has(ch.canonical)) {
-      warnings.push(`internal error: applyChanges received duplicate canonical "${ch.canonical}" — validateRequest should have rejected this. No write performed.`);
-      return { applied: false, warnings };
-    }
-    seenCanonical.add(ch.canonical);
-    const lexicalAbs = path4.join(realRoot, ch.canonical);
-    let realAbs;
-    try {
-      realAbs = fs4.realpathSync(lexicalAbs);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`apply-time canonicalization failed for "${ch.canonical}" (${code ?? "ERR"}); refusing to write`);
-      return { applied: false, warnings };
-    }
-    if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path4.sep)) {
-      warnings.push(`apply-time canonical for "${ch.canonical}" escapes the repository root; refusing`);
-      return { applied: false, warnings };
-    }
-    const reCanonical = normalizeRepoRelative(path4.relative(realRoot, realAbs));
-    if (reCanonical !== ch.canonical) {
-      warnings.push(`apply-time canonical "${reCanonical}" differs from validated canonical "${ch.canonical}"; refusing`);
-      return { applied: false, warnings };
-    }
-    if (isProtectedPath(reCanonical)) {
-      warnings.push(`apply-time canonical for "${ch.canonical}" lands in a protected directory; refusing`);
-      return { applied: false, warnings };
-    }
-    const lexicalParent = path4.dirname(realAbs);
-    let realParent;
-    try {
-      realParent = fs4.realpathSync(lexicalParent);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`apply-time parent canonicalization failed for "${ch.canonical}" (${code ?? "ERR"}); refusing`);
-      return { applied: false, warnings };
-    }
-    if (realParent !== realRoot && !realParent.startsWith(realRoot + path4.sep)) {
-      warnings.push(`apply-time parent for "${ch.canonical}" escapes the repository root; refusing`);
-      return { applied: false, warnings };
-    }
-    let originalMode = null;
-    try {
-      originalMode = fs4.statSync(realAbs).mode & 4095;
-    } catch (e) {
-      const code = e?.code;
-      originalMode = null;
-      warnings.push(`could not stat "${ch.canonical}" before write (${code ?? "ERR"}); replacement will be created with mode 0o600`);
-    }
-    let original;
-    try {
-      original = fs4.readFileSync(realAbs, "utf8");
-    } catch (e) {
-      const code = e?.code;
-      if (code === "ENOENT") {
-        warnings.push(`change.file "${ch.canonical}" does not exist; modify-only requires the file already exist`);
-      } else {
-        warnings.push(`failed to read "${ch.canonical}" for change application: ${code ?? "ERR"}`);
-      }
-      return { applied: false, warnings };
-    }
-    if (original !== ch.oldContent) {
-      const diskBytes = Buffer.byteLength(original, "utf8");
-      const oldBytes = Buffer.byteLength(ch.oldContent, "utf8");
-      const delta = oldBytes - diskBytes;
-      if (delta !== 0) {
-        if (Math.abs(delta) <= 2) {
-          const direction = delta > 0 ? "longer" : "shorter";
-          warnings.push(`old_content for "${ch.canonical}" is ${Math.abs(delta)} byte(s) ` + `${direction} than the file on disk (${oldBytes} vs ${diskBytes} bytes); ` + `likely a trailing-newline or leading-whitespace mismatch. ` + `Re-read the file with the same encoding and pass its complete byte-for-byte contents.`);
-        } else {
-          warnings.push(`old_content for "${ch.canonical}" is ${oldBytes} bytes but the file on disk is ${diskBytes} bytes; ` + `old_content must be the EXACT current full file content, not a snippet. ` + `Re-read the file and pass its complete contents.`);
-        }
-      } else {
-        warnings.push(`stale old_content for "${ch.canonical}": same length as disk (${diskBytes} bytes) but bytes differ; ` + `the file changed since old_content was captured, or old_content used a different encoding/transcoding. ` + `Re-read the file and retry.`);
-      }
-      return { applied: false, warnings };
-    }
-    staged.push({
-      canonical: ch.canonical,
-      absolute: realAbs,
-      parent: realParent,
-      output: ch.newContent,
-      mode: originalMode
-    });
-  }
-  const parentDriftCheck = (parent, op) => {
-    let nowReal;
-    try {
-      nowReal = fs4.realpathSync(parent);
-    } catch (e) {
-      const code = e?.code;
-      return { ok: false, reason: `parent realpath threw ${code ?? "ERR"} before ${op}` };
-    }
-    if (nowReal !== parent) {
-      return {
-        ok: false,
-        reason: `parent canonical drifted from "${parent}" to "${nowReal}" before ${op}`
-      };
-    }
-    return { ok: true };
-  };
-  const pending = [];
-  const cleanupAllPending = () => {
-    for (const p of pending) {
-      cleanupTemp(p.tempPath);
-    }
-  };
-  for (const w of staged) {
-    const tempName = path4.basename(w.absolute) + "." + crypto.randomBytes(8).toString("hex") + ".metaedit-tmp";
-    const tempPath = path4.join(w.parent, tempName);
-    const driftBeforeOpen = parentDriftCheck(w.parent, "temp open");
-    if (!driftBeforeOpen.ok) {
-      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeOpen.reason}`);
-      cleanupAllPending();
-      return { applied: false, warnings };
-    }
-    let fd = null;
-    try {
-      fd = fs4.openSync(tempPath, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_EXCL | O_NOFOLLOW, 384);
-      fs4.writeFileSync(fd, w.output, { encoding: "utf8" });
-      fs4.fsyncSync(fd);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`failed to stage temp file for "${w.canonical}": ${code ?? "ERR"}`);
-      cleanupTemp(tempPath);
-      cleanupAllPending();
-      return { applied: false, warnings };
-    } finally {
-      if (fd !== null) {
-        try {
-          fs4.closeSync(fd);
-        } catch {}
-      }
-    }
-    if (w.mode !== null) {
-      try {
-        fs4.chmodSync(tempPath, w.mode);
-      } catch (e) {
-        const code = e?.code;
-        warnings.push(`failed to restore original mode 0o${w.mode.toString(8)} on "${w.canonical}" (${code ?? "ERR"}); new content will land at 0o600`);
-      }
-    }
-    pending.push({ w, tempPath });
-  }
-  const touchedAbsolutePaths = [];
-  for (let idx = 0;idx < pending.length; idx++) {
-    const { w, tempPath } = pending[idx];
-    const driftBeforeRename = parentDriftCheck(w.parent, "rename");
-    if (!driftBeforeRename.ok) {
-      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": ${driftBeforeRename.reason}`);
-      for (let j = idx;j < pending.length; j++) {
-        cleanupTemp(pending[j].tempPath);
-      }
-      if (touchedAbsolutePaths.length > 0) {
-        warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
-      }
-      return { applied: false, warnings };
-    }
-    try {
-      fs4.renameSync(tempPath, w.absolute);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`failed to atomically rename temp into "${w.canonical}": ${code ?? "ERR"}`);
-      cleanupTemp(tempPath);
-      for (let j = idx + 1;j < pending.length; j++) {
-        cleanupTemp(pending[j].tempPath);
-      }
-      if (touchedAbsolutePaths.length > 0) {
-        warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already renamed before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
-      }
-      return { applied: false, warnings };
-    }
-    try {
-      const dirFd = fs4.openSync(w.parent, fs4.constants.O_RDONLY);
-      try {
-        fs4.fsyncSync(dirFd);
-      } finally {
-        fs4.closeSync(dirFd);
-      }
-    } catch {}
-    touchedAbsolutePaths.push(w.absolute);
-  }
-  return { applied: true, warnings, touchedAbsolutePaths };
-}
-function cleanupTemp(p) {
-  try {
-    fs4.unlinkSync(p);
-  } catch {}
-}
-function applyCreates(repoRoot, changes, options = {}) {
-  const warnings = [];
-  const O_NOFOLLOW = options.oNofollow !== undefined ? options.oNofollow : PLATFORM_O_NOFOLLOW;
-  if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
-    return {
-      applied: false,
-      warnings: [
-        "this platform does not expose O_NOFOLLOW; meta-edit refuses to write without symlink-leaf protection"
-      ]
-    };
-  }
-  let realRoot;
-  try {
-    realRoot = fs4.realpathSync(path4.resolve(repoRoot));
-  } catch {
-    return {
-      applied: false,
-      warnings: [`repository root could not be canonicalized: ${repoRoot}`]
-    };
-  }
-  const staged = [];
-  const seenCanonical = new Set;
-  for (const ch of changes) {
-    if (seenCanonical.has(ch.canonical)) {
-      warnings.push(`internal error: applyCreates received duplicate canonical "${ch.canonical}" — validateRequest should have rejected this. No write performed.`);
-      return { applied: false, warnings };
-    }
-    seenCanonical.add(ch.canonical);
-    const lexicalAbs = path4.join(realRoot, ch.canonical);
-    if (isProtectedPath(ch.canonical)) {
-      warnings.push(`apply-time canonical for "${ch.canonical}" lands in a protected directory; refusing`);
-      return { applied: false, warnings };
-    }
-    const lexicalParent = path4.dirname(lexicalAbs);
-    let realParent;
-    try {
-      realParent = fs4.realpathSync(lexicalParent);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`parent directory for "${ch.canonical}" cannot be resolved (${code ?? "ERR"}); applyCreates does not implicitly mkdir, so the parent must exist before creation`);
-      return { applied: false, warnings };
-    }
-    if (realParent !== realRoot && !realParent.startsWith(realRoot + path4.sep)) {
-      warnings.push(`apply-time parent for "${ch.canonical}" escapes the repository root; refusing`);
-      return { applied: false, warnings };
-    }
-    const reCanonicalParent = normalizeRepoRelative(path4.relative(realRoot, realParent));
-    if (reCanonicalParent.length > 0 && isProtectedPath(reCanonicalParent)) {
-      warnings.push(`apply-time parent for "${ch.canonical}" lands in a protected directory; refusing`);
-      return { applied: false, warnings };
-    }
-    const absolute = path4.join(realParent, path4.basename(ch.canonical));
-    let preexists = false;
-    try {
-      fs4.lstatSync(absolute);
-      preexists = true;
-    } catch (e) {
-      const code = e?.code;
-      if (code !== "ENOENT") {
-        warnings.push(`apply-time preflight lstat for "${ch.canonical}" failed (${code ?? "ERR"}); refusing`);
-        return { applied: false, warnings };
-      }
-    }
-    if (preexists) {
-      warnings.push(`change.file "${ch.canonical}" already exists on disk; edit_create_file refuses to overwrite (use a modify-only edit_* tool instead)`);
-      return { applied: false, warnings };
-    }
-    staged.push({
-      canonical: ch.canonical,
-      absolute,
-      parent: realParent,
-      lexicalParent,
-      output: ch.newContent
-    });
-  }
-  const touchedAbsolutePaths = [];
-  const partialWriteWarning = () => {
-    if (touchedAbsolutePaths.length > 0) {
-      warnings.push(`partial write: ${touchedAbsolutePaths.length} file(s) were already created before this failure and remain on disk: ${touchedAbsolutePaths.join(", ")}. meta-edit does not roll back; recover via VCS history or a follow-up edit_* call.`);
-    }
-  };
-  for (const w of staged) {
-    let nowParent;
-    try {
-      nowParent = fs4.realpathSync(w.lexicalParent);
-    } catch (e) {
-      const code = e?.code;
-      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": parent realpath threw ${code ?? "ERR"} before open`);
-      partialWriteWarning();
-      return { applied: false, warnings };
-    }
-    if (nowParent !== w.parent) {
-      warnings.push(`parent directory TOCTOU detected for "${w.canonical}": parent canonical drifted from "${w.parent}" to "${nowParent}" before open`);
-      partialWriteWarning();
-      return { applied: false, warnings };
-    }
-    let fd = null;
-    try {
-      fd = fs4.openSync(w.absolute, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_EXCL | O_NOFOLLOW, 420);
-      fs4.writeFileSync(fd, w.output, { encoding: "utf8" });
-      fs4.fsyncSync(fd);
-    } catch (e) {
-      const code = e?.code;
-      if (fd !== null && code !== "EEXIST" && code !== "ELOOP") {
-        try {
-          fs4.unlinkSync(w.absolute);
-        } catch {}
-      }
-      const reason = code === "EEXIST" ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)` : code === "ELOOP" ? `change.file "${w.canonical}" resolves through a symlink at the leaf; O_NOFOLLOW refused` : `failed to create "${w.canonical}": ${code ?? "ERR"}`;
-      warnings.push(reason);
-      partialWriteWarning();
-      return { applied: false, warnings };
-    } finally {
-      if (fd !== null) {
-        try {
-          fs4.closeSync(fd);
-        } catch {}
-      }
-    }
-    try {
-      const dirFd = fs4.openSync(w.parent, fs4.constants.O_RDONLY);
-      try {
-        fs4.fsyncSync(dirFd);
-      } finally {
-        fs4.closeSync(dirFd);
-      }
-    } catch {}
-    touchedAbsolutePaths.push(w.absolute);
-  }
-  return { applied: true, warnings, touchedAbsolutePaths };
-}
-
-// src/state/edit-log.ts
-import * as fs5 from "node:fs";
-import * as path5 from "node:path";
-var EditLogEntrySchema = exports_external.object({
+var BindingEntrySchema = exports_external.object({
+  file: exports_external.string(),
+  before_sha256: exports_external.string(),
+  after_sha256: exports_external.string()
+});
+var IssuedEntrySchema = exports_external.object({
   edit_id: exports_external.string(),
-  timestamp: exports_external.string(),
-  tool_name: exports_external.string(),
+  ts: exports_external.string(),
+  phase: exports_external.literal("issued"),
+  kind: exports_external.string(),
   target_file: exports_external.string(),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   test_files: exports_external.array(exports_external.string()),
-  patch_size_bytes: exports_external.number(),
-  applied: exports_external.boolean(),
-  warnings: exports_external.array(exports_external.string())
+  binding: exports_external.array(BindingEntrySchema).min(1),
+  token: exports_external.string()
 });
+var ConsumedEntrySchema = exports_external.object({
+  edit_id: exports_external.string(),
+  ts: exports_external.string(),
+  phase: exports_external.literal("consumed"),
+  consuming_tool: exports_external.string()
+});
+var RejectedEntrySchema = exports_external.object({
+  edit_id: exports_external.string(),
+  ts: exports_external.string(),
+  phase: exports_external.literal("rejected"),
+  kind: exports_external.string(),
+  target_file: exports_external.string(),
+  audit_error: exports_external.string().min(1)
+});
+var EditLogEntrySchema = exports_external.discriminatedUnion("phase", [
+  IssuedEntrySchema,
+  ConsumedEntrySchema,
+  RejectedEntrySchema
+]);
 var EDIT_ID_RE = /^edit_(\d{8})_(\d{4,})$/;
 
 class EditLog {
@@ -18925,8 +17702,8 @@ class EditLog {
   todayKey = null;
   todayCounter = 0;
   constructor(repoRoot) {
-    this.statePath = path5.join(repoRoot, ".meta-edit", "state");
-    this.logPath = path5.join(this.statePath, "edits.jsonl");
+    this.statePath = path4.join(repoRoot, ".meta-edit", "state");
+    this.logPath = path4.join(this.statePath, "edits.jsonl");
   }
   get filePath() {
     return this.logPath;
@@ -18948,24 +17725,40 @@ class EditLog {
       return `edit_${key}_${nnnn}`;
     });
   }
+  appendIssued(entry) {
+    const validated = IssuedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+  appendConsumed(entry) {
+    const validated = ConsumedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+  appendRejected(entry) {
+    const validated = RejectedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
   append(entry) {
+    const validated = EditLogEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+  appendRaw(entry) {
     this.ensureStateDir();
     ensureNoSymlinkOnPath(this.statePath);
     const line = JSON.stringify(entry) + `
 `;
-    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection");
     }
     this.withFileLock(() => {
       let fd = null;
       try {
-        fd = fs5.openSync(this.logPath, fs5.constants.O_WRONLY | fs5.constants.O_APPEND | fs5.constants.O_CREAT | O_NOFOLLOW, 384);
-        fs5.writeSync(fd, line, null, "utf8");
+        fd = fs4.openSync(this.logPath, fs4.constants.O_WRONLY | fs4.constants.O_APPEND | fs4.constants.O_CREAT | O_NOFOLLOW, 384);
+        fs4.writeSync(fd, line, null, "utf8");
       } finally {
         if (fd !== null) {
           try {
-            fs5.closeSync(fd);
+            fs4.closeSync(fd);
           } catch {}
         }
       }
@@ -18973,18 +17766,18 @@ class EditLog {
   }
   ensureStateDir() {
     ensureNoSymlinkOnPath(this.statePath);
-    fs5.mkdirSync(this.statePath, { recursive: true, mode: 448 });
+    fs4.mkdirSync(this.statePath, { recursive: true, mode: 448 });
     if (process.platform !== "win32") {
-      fs5.chmodSync(this.statePath, 448);
+      fs4.chmodSync(this.statePath, 448);
     }
   }
   withFileLock(fn) {
-    const lockPath = path5.join(this.statePath, ".lock");
+    const lockPath = path4.join(this.statePath, ".lock");
     const start = Date.now();
     const TIMEOUT_MS = 30000;
     while (true) {
       try {
-        fs5.mkdirSync(lockPath);
+        fs4.mkdirSync(lockPath);
         break;
       } catch (e) {
         const code = e.code;
@@ -19001,15 +17794,15 @@ class EditLog {
       return fn();
     } finally {
       try {
-        fs5.rmdirSync(lockPath);
+        fs4.rmdirSync(lockPath);
       } catch {}
     }
   }
   readCounterFile(key) {
-    const counterPath = path5.join(this.statePath, "counter.json");
+    const counterPath = path4.join(this.statePath, "counter.json");
     let text;
     try {
-      text = fs5.readFileSync(counterPath, "utf8");
+      text = fs4.readFileSync(counterPath, "utf8");
     } catch (e) {
       const code = e.code;
       if (code === "ENOENT")
@@ -19031,10 +17824,10 @@ class EditLog {
     return 0;
   }
   writeCounterFile(key, value) {
-    const counterPath = path5.join(this.statePath, "counter.json");
+    const counterPath = path4.join(this.statePath, "counter.json");
     const payload = JSON.stringify({ [key]: value });
     try {
-      const lst = fs5.lstatSync(counterPath);
+      const lst = fs4.lstatSync(counterPath);
       if (lst.isSymbolicLink()) {
         throw new Error(`refusing to use edit-log path: "${counterPath}" is a symlink. The audit-log counter must not be redirected through a symlink.`);
       }
@@ -19043,18 +17836,18 @@ class EditLog {
       if (code !== "ENOENT")
         throw e;
     }
-    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to write the audit-log counter without symlink-leaf protection");
     }
     let fd = null;
     try {
-      fd = fs5.openSync(counterPath, fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_TRUNC | O_NOFOLLOW, 384);
-      fs5.writeSync(fd, payload, null, "utf8");
+      fd = fs4.openSync(counterPath, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_TRUNC | O_NOFOLLOW, 384);
+      fs4.writeSync(fd, payload, null, "utf8");
     } finally {
       if (fd !== null) {
         try {
-          fs5.closeSync(fd);
+          fs4.closeSync(fd);
         } catch {}
       }
     }
@@ -19062,7 +17855,7 @@ class EditLog {
   readAll() {
     let text;
     try {
-      text = fs5.readFileSync(this.logPath, "utf8");
+      text = fs4.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return [];
@@ -19090,7 +17883,7 @@ class EditLog {
   scanMaxCounterForKey(key) {
     let text;
     try {
-      text = fs5.readFileSync(this.logPath, "utf8");
+      text = fs4.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return 0;
@@ -19122,14 +17915,14 @@ class EditLog {
   }
 }
 function ensureNoSymlinkOnPath(maybeRelativeDir) {
-  const absDir = path5.resolve(maybeRelativeDir);
-  const segments = absDir.split(path5.sep).filter((s) => s.length > 0);
-  let cur = path5.sep;
+  const absDir = path4.resolve(maybeRelativeDir);
+  const segments = absDir.split(path4.sep).filter((s) => s.length > 0);
+  let cur = path4.sep;
   for (const seg of segments) {
-    cur = path5.join(cur, seg);
+    cur = path4.join(cur, seg);
     let stat;
     try {
-      stat = fs5.lstatSync(cur);
+      stat = fs4.lstatSync(cur);
     } catch (e) {
       const code = e?.code;
       if (code === "ENOENT")
@@ -19147,10 +17940,425 @@ function formatDayKey(d) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
+function isoTimestamp(d = new Date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const offAbs = Math.abs(offMin);
+  const offH = pad(Math.floor(offAbs / 60));
+  const offM = pad(offAbs % 60);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` + `${sign}${offH}:${offM}`;
+}
+
+// src/tools/apply.ts
+function makeIssuingHandler(deps) {
+  const { ctx, log, grants } = deps;
+  const now = deps.now ?? (() => new Date);
+  return async (toolName, args) => {
+    return issueOnce(toolName, args, ctx, log, grants, now());
+  };
+}
+async function issueOnce(toolName, args, ctx, log, grants, ts) {
+  const editId = log.nextEditId(ts);
+  const tsIso = isoTimestamp(ts);
+  const validation = validateRequest(toolName, args, ctx);
+  if (!validation.ok) {
+    const auditMessage = validation.warnings.length === 0 ? `${toolName}: validation rejected (no warnings)` : validation.warnings.join("; ");
+    const rejected = {
+      edit_id: editId,
+      ts: tsIso,
+      phase: "rejected",
+      kind: toolName,
+      target_file: args.target_file,
+      audit_error: auditMessage
+    };
+    const auditError2 = appendRejectedSafely(log, rejected);
+    return {
+      token: "",
+      expires_at: "",
+      edit_id: editId,
+      warnings: validation.warnings,
+      ...auditError2 !== undefined ? { audit_error: auditError2 } : {}
+    };
+  }
+  const bindings = [
+    validation.primaryBinding,
+    ...validation.additionalBindings
+  ];
+  let grant;
+  try {
+    grant = await grants.issue({
+      edit_id: editId,
+      binding: bindings.map((b) => ({
+        file: b.canonical,
+        before_sha256: b.before_sha256,
+        after_sha256: b.after_sha256
+      }))
+    });
+  } catch (e) {
+    const reason = e?.message ?? String(e);
+    const rejected = {
+      edit_id: editId,
+      ts: tsIso,
+      phase: "rejected",
+      kind: toolName,
+      target_file: args.target_file,
+      audit_error: `grants.issue failed: ${reason}`
+    };
+    const auditError2 = appendRejectedSafely(log, rejected);
+    return {
+      token: "",
+      expires_at: "",
+      edit_id: editId,
+      warnings: [`grants.issue failed: ${reason}`],
+      ...auditError2 !== undefined ? { audit_error: auditError2 } : { audit_error: `grants.issue failed: ${reason}` }
+    };
+  }
+  const issued = {
+    edit_id: editId,
+    ts: tsIso,
+    phase: "issued",
+    kind: toolName,
+    target_file: args.target_file,
+    rationale: args.rationale,
+    risk_level: args.risk_level,
+    test_files: args.test_files,
+    binding: bindings.map((b) => ({
+      file: b.canonical,
+      before_sha256: b.before_sha256,
+      after_sha256: b.after_sha256
+    })),
+    token: grant.token_id
+  };
+  const auditError = appendIssuedSafely(log, issued);
+  return {
+    token: grant.token_id,
+    expires_at: grant.expires_at,
+    edit_id: editId,
+    warnings: [],
+    ...auditError !== undefined ? { audit_error: auditError } : {}
+  };
+}
+function appendIssuedSafely(log, entry) {
+  try {
+    log.appendIssued(entry);
+    return;
+  } catch (e) {
+    return formatAuditError(entry.edit_id, e);
+  }
+}
+function appendRejectedSafely(log, entry) {
+  try {
+    log.appendRejected(entry);
+    return;
+  } catch (e) {
+    return formatAuditError(entry.edit_id, e);
+  }
+}
+function formatAuditError(editId, e) {
+  const code = e?.code;
+  const msg = e?.message ?? String(e);
+  return `failed to append edit log entry "${editId}" (${code ?? "ERR"}: ${msg}); the call result is reported but the audit record may be missing or incomplete`;
+}
+
+// src/state/grants.ts
+import * as crypto2 from "node:crypto";
+import * as fs5 from "node:fs/promises";
+import * as path5 from "node:path";
+var GRANT_TTL_MS = 30000;
+var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
+function formatDayKey2(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+function generateTokenId(now = new Date) {
+  const key = formatDayKey2(now);
+  const rand = crypto2.randomBytes(5).toString("hex");
+  return `met_${key}_${rand}`;
+}
+var HEX64_RE2 = /^[0-9a-f]{64}$/;
+function isGrant(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const v = value;
+  if (typeof v.token_id !== "string" || !TOKEN_ID_RE.test(v.token_id)) {
+    return false;
+  }
+  if (typeof v.edit_id !== "string")
+    return false;
+  if (typeof v.issued_at !== "string")
+    return false;
+  if (typeof v.expires_at !== "string")
+    return false;
+  if (!Array.isArray(v.binding) || v.binding.length === 0)
+    return false;
+  for (const b of v.binding) {
+    if (typeof b !== "object" || b === null)
+      return false;
+    const bb = b;
+    if (typeof bb.file !== "string" || bb.file.length === 0)
+      return false;
+    if (typeof bb.before_sha256 !== "string" || !HEX64_RE2.test(bb.before_sha256)) {
+      return false;
+    }
+    if (typeof bb.after_sha256 !== "string" || !HEX64_RE2.test(bb.after_sha256)) {
+      return false;
+    }
+  }
+  if (!Array.isArray(v.consumed_files))
+    return false;
+  for (const c of v.consumed_files) {
+    if (typeof c !== "string")
+      return false;
+  }
+  return true;
+}
+var SHARED_MUTEX_TAILS = new Map;
+async function withSharedLock(key, fn) {
+  const prev = SHARED_MUTEX_TAILS.get(key) ?? Promise.resolve();
+  let release;
+  const next = new Promise((resolve5) => {
+    release = resolve5;
+  });
+  const myTurn = prev.then(() => {
+    return;
+  }, () => {
+    return;
+  });
+  const myTail = prev.then(() => next, () => next);
+  SHARED_MUTEX_TAILS.set(key, myTail);
+  try {
+    await myTurn;
+    return await fn();
+  } finally {
+    release();
+    if (SHARED_MUTEX_TAILS.get(key) === myTail) {
+      SHARED_MUTEX_TAILS.delete(key);
+    }
+  }
+}
+
+class GrantsStoreImpl {
+  grantsDir;
+  constructor(repoRoot) {
+    this.grantsDir = path5.join(repoRoot, ".meta-edit", "state", "grants");
+  }
+  mutexKey(token_id) {
+    return path5.resolve(this.grantPath(token_id));
+  }
+  async ensureDir() {
+    await fs5.mkdir(this.grantsDir, { recursive: true, mode: 448 });
+  }
+  grantPath(token_id) {
+    return path5.join(this.grantsDir, `${token_id}.json`);
+  }
+  async issue(args) {
+    if (args.binding.length === 0) {
+      throw new Error("grants.issue: binding must contain at least one entry");
+    }
+    const seenFiles = new Set;
+    for (const b of args.binding) {
+      if (typeof b.file !== "string" || b.file.length === 0) {
+        throw new Error("grants.issue: binding[].file must be a non-empty string");
+      }
+      if (seenFiles.has(b.file)) {
+        throw new Error(`grants.issue: duplicate binding file "${b.file}" — each grant must bind each file at most once`);
+      }
+      seenFiles.add(b.file);
+      if (!HEX64_RE2.test(b.before_sha256)) {
+        throw new Error(`grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`);
+      }
+      if (!HEX64_RE2.test(b.after_sha256)) {
+        throw new Error(`grants.issue: binding[].after_sha256 must be 64 lowercase hex chars (file=${b.file})`);
+      }
+    }
+    await this.ensureDir();
+    const now = new Date;
+    const issuedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + GRANT_TTL_MS).toISOString();
+    const MAX_RETRIES = 8;
+    let lastErr = null;
+    for (let attempt = 0;attempt < MAX_RETRIES; attempt++) {
+      const token_id = generateTokenId(now);
+      const grant = {
+        token_id,
+        edit_id: args.edit_id,
+        issued_at: issuedAt,
+        expires_at: expiresAt,
+        binding: args.binding,
+        consumed_files: []
+      };
+      const filePath = this.grantPath(token_id);
+      try {
+        await fs5.writeFile(filePath, JSON.stringify(grant), {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 384
+        });
+        return grant;
+      } catch (e) {
+        const code = e.code;
+        if (code === "EEXIST") {
+          lastErr = e;
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new Error(`grants.issue: exhausted token id retries (last error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)})`);
+  }
+  async lookup(token_id) {
+    if (typeof token_id !== "string" || !TOKEN_ID_RE.test(token_id)) {
+      return null;
+    }
+    const filePath = this.grantPath(token_id);
+    let text;
+    try {
+      text = await fs5.readFile(filePath, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return null;
+      throw e;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    if (!isGrant(parsed))
+      return null;
+    if (Date.parse(parsed.expires_at) <= Date.now()) {
+      return null;
+    }
+    return parsed;
+  }
+  async consume(token_id, file_path) {
+    if (typeof token_id !== "string" || !TOKEN_ID_RE.test(token_id)) {
+      return { consumed: false, fully_consumed: false, error: "invalid token id" };
+    }
+    return withSharedLock(this.mutexKey(token_id), () => this.consumeLocked(token_id, file_path));
+  }
+  async consumeLocked(token_id, file_path) {
+    const filePath = this.grantPath(token_id);
+    let text;
+    try {
+      text = await fs5.readFile(filePath, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT") {
+        return {
+          consumed: false,
+          fully_consumed: false,
+          error: "token not found"
+        };
+      }
+      throw e;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return {
+        consumed: false,
+        fully_consumed: false,
+        error: "grant file is corrupt"
+      };
+    }
+    if (!isGrant(parsed)) {
+      return {
+        consumed: false,
+        fully_consumed: false,
+        error: "grant file is malformed"
+      };
+    }
+    if (Date.parse(parsed.expires_at) <= Date.now()) {
+      return { consumed: false, fully_consumed: false, error: "token expired" };
+    }
+    const matchIdx = parsed.binding.findIndex((b) => b.file === file_path);
+    if (matchIdx === -1) {
+      return {
+        consumed: false,
+        fully_consumed: false,
+        error: "file_path not bound by this token"
+      };
+    }
+    if (parsed.consumed_files.includes(file_path)) {
+      return {
+        consumed: false,
+        fully_consumed: false,
+        error: "binding already consumed"
+      };
+    }
+    parsed.consumed_files = [...parsed.consumed_files, file_path];
+    const fullyConsumed = parsed.consumed_files.length === parsed.binding.length;
+    if (fullyConsumed) {
+      try {
+        await fs5.unlink(filePath);
+      } catch (e) {
+        if (e.code !== "ENOENT")
+          throw e;
+      }
+    } else {
+      await fs5.writeFile(filePath, JSON.stringify(parsed), {
+        encoding: "utf8",
+        mode: 384
+      });
+    }
+    return { consumed: true, fully_consumed: fullyConsumed };
+  }
+  async reapExpired() {
+    let names;
+    try {
+      names = await fs5.readdir(this.grantsDir);
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return 0;
+      throw e;
+    }
+    let removed = 0;
+    const now = Date.now();
+    for (const name of names) {
+      if (!name.endsWith(".json"))
+        continue;
+      const filePath = path5.join(this.grantsDir, name);
+      let text;
+      try {
+        text = await fs5.readFile(filePath, "utf8");
+      } catch (e) {
+        if (e.code === "ENOENT")
+          continue;
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      if (!isGrant(parsed))
+        continue;
+      if (Date.parse(parsed.expires_at) > now)
+        continue;
+      try {
+        await fs5.unlink(filePath);
+        removed++;
+      } catch (e) {
+        if (e.code === "ENOENT")
+          continue;
+      }
+    }
+    return removed;
+  }
+}
+function createGrantsStore(repoRoot) {
+  return new GrantsStoreImpl(repoRoot);
+}
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.5",
+  version: "0.2.0",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19219,11 +18427,11 @@ function createServer(options = {}) {
   assertIsRepo(repoRoot);
   const context = { repoRoot };
   const log = new EditLog(repoRoot);
-  const handler = makeApplyingHandler({
+  const grants = createGrantsStore(repoRoot);
+  const handler = makeIssuingHandler({
     ctx: context,
     log,
-    applyChanges,
-    applyCreates
+    grants
   });
   const server = new Server({
     name: "meta-edit",
@@ -19256,4 +18464,4 @@ export {
   createServer
 };
 
-//# debugId=3F93E77ABD48965C64756E2164756E21
+//# debugId=224038402674BB9664756E2164756E21

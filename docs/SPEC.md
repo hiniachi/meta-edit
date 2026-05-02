@@ -1143,8 +1143,10 @@ General principles (apply to every edit):
 
 ```
 Create a new file at a path that does not yet exist on disk.
-The server opens the target with O_CREAT | O_EXCL | O_NOFOLLOW and refuses
-to overwrite an existing file or follow a symlink at the leaf.
+At declaration time, the server verifies the target does not yet exist;
+the binding fails if any path already exists on disk. The actual create
+is performed by native Edit / Write under the deny-raw-edit hook's
+binding-validation gate (see §5).
 
 Use this tool when:
 - Adding a new source module, helper, or class file
@@ -1174,8 +1176,8 @@ This tool MUST NOT be used when:
 - The change is a rename or move (delete-and-add); the modify/create
   shape cannot represent rename atomically and the audit log would not
   reflect the original file's deletion
-- The file is a binary payload; the string-based content shape will
-  corrupt non-UTF-8 data
+- The file is a binary payload; native Edit / Write's string-based
+  parameters cannot carry non-UTF-8 bytes
 
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
@@ -1242,7 +1244,7 @@ The pre-condition check is **staleness detection**, not a TOCTOU defense: it cat
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
-After the native write completes, a PostToolUse path appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6).
+When the hook authorizes the native write (i.e. just before returning `allow`), it appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6). The record captures hook authorization, not write completion — the actual write success is git's job to verify, and under Article 3's friendly-AI threat model, write failures after hook approval are rare and recoverable.
 
 Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through this hook — see issue 1108) are an acknowledged hook-scope gap. Closing that gap is a future hook expansion (PostToolUse monitoring, MCP-write allowlist), not part of this hook.
 
@@ -1282,7 +1284,7 @@ Each declaration produces two records:
  "token":"met_20260502_a3f9b2..."}
 ```
 
-2. **Consumed** — written when the token is consumed by the deny-raw-edit hook (see §5).
+2. **Consumed** — written when the deny-raw-edit hook authorizes a native write (PreToolUse, before the write executes). "Consumed" denotes hook authorization; write success is not part of the audit log (see §5).
 
 ```json
 {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00",

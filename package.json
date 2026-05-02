@@ -1,6 +1,6 @@
 {
   "name": "@hiniachi/meta-edit",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   "license": "MIT",
   "author": "nia <nia@yukinofurumachi.com>",

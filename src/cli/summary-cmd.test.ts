@@ -3,20 +3,52 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSummary, parseSummaryArgs, runSummaryCommand } from "./summary-cmd.js";
-import type { EditLogEntry } from "../state/edit-log.js";
+import type {
+  EditLogEntry,
+  IssuedEntry,
+  ConsumedEntry,
+  RejectedEntry,
+} from "../state/edit-log.js";
 
-function entry(overrides: Partial<EditLogEntry> = {}): EditLogEntry {
+const HEX64_A = "a".repeat(64);
+const HEX64_B = "b".repeat(64);
+
+function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
   return {
     edit_id: "edit_20260430_0001",
-    timestamp: "2026-04-30T10:00:00+09:00",
-    tool_name: "edit_boundary_condition",
+    ts: "2026-04-30T10:00:00+09:00",
+    phase: "issued",
+    kind: "edit_boundary_condition",
     target_file: "src/foo.ts",
     rationale: "test",
     risk_level: "medium",
     test_files: ["tests/foo.test.ts"],
-    patch_size_bytes: 42,
-    applied: true,
-    warnings: [],
+    binding: [
+      { file: "src/foo.ts", before_sha256: HEX64_A, after_sha256: HEX64_B },
+    ],
+    token: "met_20260430_0123456789",
+    ...overrides,
+  };
+}
+
+function consumed(overrides: Partial<ConsumedEntry> = {}): ConsumedEntry {
+  return {
+    edit_id: "edit_20260430_0001",
+    ts: "2026-04-30T10:00:11+09:00",
+    phase: "consumed",
+    consuming_tool: "Edit",
+    ...overrides,
+  };
+}
+
+function rejected(overrides: Partial<RejectedEntry> = {}): RejectedEntry {
+  return {
+    edit_id: "edit_20260430_0099",
+    ts: "2026-04-30T10:01:00+09:00",
+    phase: "rejected",
+    kind: "edit_boundary_condition",
+    target_file: "src/foo.ts",
+    audit_error: "validation failed",
     ...overrides,
   };
 }
@@ -24,37 +56,40 @@ function entry(overrides: Partial<EditLogEntry> = {}): EditLogEntry {
 describe("formatSummary", () => {
   it("renders zero edits", () => {
     const text = formatSummary([], undefined);
-    expect(text).toContain("Total edits: 0");
-    expect(text).toContain("Applied successfully: 0");
-    expect(text).toContain("Validation failures:  0");
+    expect(text).toContain("Total declarations: 0");
+    expect(text).toContain("Authorized (hook approved write): 0");
+    expect(text).toContain("Rejected (validation failure): 0");
     expect(text).toContain("(no edits yet)");
     // edit_policy_change is always shown even with zero count.
     expect(text).toContain("edit_policy_change");
   });
 
-  it("counts applied vs failed", () => {
-    const text = formatSummary(
-      [
-        entry({ applied: true }),
-        entry({ applied: true }),
-        entry({ applied: false }),
-      ],
-      undefined,
-    );
-    expect(text).toContain("Total edits: 3");
-    expect(text).toContain("Applied successfully: 2");
-    expect(text).toContain("Validation failures:  1");
+  it("counts issued+consumed (applied), issued-only (abandoned), and rejected", () => {
+    // 2 fully applied (issued + consumed pair), 1 abandoned (issued only),
+    // 1 rejected.
+    const entries: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0001" }),
+      consumed({ edit_id: "edit_20260430_0001" }),
+      issued({ edit_id: "edit_20260430_0002" }),
+      consumed({ edit_id: "edit_20260430_0002" }),
+      issued({ edit_id: "edit_20260430_0003" }), // abandoned
+      rejected({ edit_id: "edit_20260430_0099" }),
+    ];
+    const text = formatSummary(entries, undefined);
+    // 3 issued + 1 rejected = 4 declarations.
+    expect(text).toContain("Total declarations: 4");
+    expect(text).toContain("Authorized (hook approved write): 2");
+    expect(text).toContain("Abandoned (issued, never authorized): 1");
+    expect(text).toContain("Rejected (validation failure): 1");
   });
 
-  it("aggregates by tool, risk, and target_file", () => {
-    const text = formatSummary(
-      [
-        entry({ tool_name: "edit_boundary_condition", risk_level: "low", target_file: "src/a.ts" }),
-        entry({ tool_name: "edit_boundary_condition", risk_level: "low", target_file: "src/a.ts" }),
-        entry({ tool_name: "edit_permission_logic", risk_level: "critical", target_file: "src/b.ts" }),
-      ],
-      undefined,
-    );
+  it("aggregates by tool, risk, and target_file (issued only)", () => {
+    const entries: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0001", kind: "edit_boundary_condition", risk_level: "low", target_file: "src/a.ts" }),
+      issued({ edit_id: "edit_20260430_0002", kind: "edit_boundary_condition", risk_level: "low", target_file: "src/a.ts" }),
+      issued({ edit_id: "edit_20260430_0003", kind: "edit_permission_logic", risk_level: "critical", target_file: "src/b.ts" }),
+    ];
+    const text = formatSummary(entries, undefined);
     expect(text).toContain("edit_boundary_condition");
     expect(text).toContain("edit_permission_logic");
     expect(text).toMatch(/low\s+2/);
@@ -130,18 +165,14 @@ describe("ANSI escape injection - runSummaryCommand", () => {
     const repoRoot = tmpRepoForSummary();
     try {
       const logPath = path.join(repoRoot, ".meta-edit", "state", "edits.jsonl");
-      const e: EditLogEntry = {
+      const e: IssuedEntry = issued({
         edit_id: "edit_20260501_0003",
-        timestamp: "2026-05-01T12:00:00+09:00",
-        tool_name: "edit_boundary_condition",
+        ts: "2026-05-01T12:00:00+09:00",
         target_file: "\x1b[2Jsrc/evil.ts",
         rationale: "\x1b[31mFAKE_ERROR\x1b[0m",
         risk_level: "high",
         test_files: ["tests/evil.test.ts"],
-        patch_size_bytes: 99,
-        applied: true,
-        warnings: [],
-      };
+      });
       fs.appendFileSync(logPath, JSON.stringify(e) + "\n");
       const chunks: string[] = [];
       const out = {

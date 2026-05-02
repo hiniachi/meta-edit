@@ -3,39 +3,89 @@ import * as path from "node:path";
 import { z } from "zod";
 import { RiskLevelSchema } from "../tools/common.js";
 
-// Append-only JSON Lines log of every edit_* call attempted against this
-// repository. Per docs/SPEC.md §6:
-//   .meta-edit/state/edits.jsonl
-//   {"edit_id":"edit_YYYYMMDD_NNNN", ...}
+// Append-only JSON Lines log of every typed_edit declaration and its
+// downstream consumption. Per docs/SPEC.md §6 (Case C, v0.2):
 //
-// edit_id is monotonic within a calendar day. On first use we scan the
-// existing log to find today's largest NNNN and start the in-process
-// counter from there + 1. Sequential calls increment in memory; the file
-// itself is read once per day boundary, not per call.
+//   .meta-edit/state/edits.jsonl
+//
+// Records carry a `phase` discriminator with three values:
+//
+//   1. "issued"   -- written by the typed_edit MCP handler when a grant
+//                   is successfully issued. Carries the full declaration
+//                   payload (kind, target_file, rationale, risk_level,
+//                   test_files, binding, token).
+//   2. "consumed" -- written by the deny-raw-edit hook (PreToolUse) once
+//                   a token's binding has been authorized for a native
+//                   Edit/Write/MultiEdit call. The record is appended
+//                   BEFORE the native write executes; the audit log
+//                   captures hook authorization, not write success
+//                   (write success is git's job). Carries
+//                   (edit_id, ts, consuming_tool).
+//   3. "rejected" -- written by the typed_edit MCP handler on validation
+//                   failure. Carries (edit_id, ts, kind, target_file,
+//                   audit_error).
+//
+// Audit consumers reconcile by edit_id: an "issued" record without a
+// matching "consumed" sibling is evidence of an abandoned/expired grant.
 
-// Per OBSERVED-FAILURES.md "Phase 5 (CLI) residual gaps" entry that was
-// resolved in v0.1.2: the schema is validated at read time so a hand-
-// edited or older `edits.jsonl` line cannot crash `meta-edit summary`
-// or `meta-edit log` via a missing / non-string field.
-export const EditLogEntrySchema = z.object({
+// ---------------------------------------------------------------------
+// Schema (zod) -- matches SPEC §6 verbatim. Forward-compat: each variant
+// does NOT call .strict() so a future record can carry extra fields
+// without breaking older readers.
+// ---------------------------------------------------------------------
+
+const BindingEntrySchema = z.object({
+  file: z.string(),
+  before_sha256: z.string(),
+  after_sha256: z.string(),
+});
+export type BindingEntry = z.infer<typeof BindingEntrySchema>;
+
+export const IssuedEntrySchema = z.object({
   edit_id: z.string(),
-  timestamp: z.string(),
-  tool_name: z.string(),
+  ts: z.string(),
+  phase: z.literal("issued"),
+  kind: z.string(),
   target_file: z.string(),
   rationale: z.string(),
   risk_level: RiskLevelSchema,
   test_files: z.array(z.string()),
-  patch_size_bytes: z.number(),
-  applied: z.boolean(),
-  warnings: z.array(z.string()),
+  binding: z.array(BindingEntrySchema).min(1),
+  token: z.string(),
 });
+export type IssuedEntry = z.infer<typeof IssuedEntrySchema>;
 
+export const ConsumedEntrySchema = z.object({
+  edit_id: z.string(),
+  ts: z.string(),
+  phase: z.literal("consumed"),
+  consuming_tool: z.string(),
+});
+export type ConsumedEntry = z.infer<typeof ConsumedEntrySchema>;
+
+export const RejectedEntrySchema = z.object({
+  edit_id: z.string(),
+  ts: z.string(),
+  phase: z.literal("rejected"),
+  kind: z.string(),
+  target_file: z.string(),
+  // SPEC §6: rejected records carry a non-empty audit_error so audit
+  // consumers always have an actionable reason. (Codex review: LOW,
+  // in-scope under Article 3.)
+  audit_error: z.string().min(1),
+});
+export type RejectedEntry = z.infer<typeof RejectedEntrySchema>;
+
+export const EditLogEntrySchema = z.discriminatedUnion("phase", [
+  IssuedEntrySchema,
+  ConsumedEntrySchema,
+  RejectedEntrySchema,
+]);
 export type EditLogEntry = z.infer<typeof EditLogEntrySchema>;
 
 // 4-digit minimum padding, but the counter is allowed to grow past 9999
-// in a single day (e.g. `edit_20260430_10000`). The regex matches 4 or
-// more digits so recovery works correctly across days that exceeded the
-// padding width.
+// in a single day. The regex matches 4+ digits so recovery works
+// correctly across days that exceeded the padding width.
 const EDIT_ID_RE = /^edit_(\d{8})_(\d{4,})$/;
 
 export class EditLog {
@@ -53,21 +103,10 @@ export class EditLog {
     return this.logPath;
   }
 
+  // ---------------------------------------------------------------
+  // Edit ID allocation (unchanged from v0.1.x -- see issue a6-03)
+  // ---------------------------------------------------------------
   nextEditId(now: Date = new Date()): string {
-    // Issue a6-03 (codex round 1): two EditLog instances on the same
-    // on-disk log previously collided on edit_id when both scanned the
-    // log BEFORE either had appended. Re-scanning on every call (the
-    // round-0 fix) closes the alternating-call case but loses the
-    // read/read/write/write race because both scans return the same
-    // max counter.
-    //
-    // Round-1 fix: bind id allocation to a cross-process mutex
-    // (mkdir-based file lock at <state>/.lock) AND persist the
-    // allocated counter to a sidecar file (<state>/counter.json) so
-    // a second instance entering the lock immediately observes the
-    // bumped value, even if no append has happened yet. The lock is
-    // held only across the read-counter / bump / write-counter steps;
-    // append takes its own short lock.
     const key = formatDayKey(now);
     if (this.todayKey !== key) {
       this.todayKey = key;
@@ -85,18 +124,44 @@ export class EditLog {
     });
   }
 
+  // ---------------------------------------------------------------
+  // Phase-specific append helpers. Each writes a single JSONL line
+  // atomically using the shared O_NOFOLLOW + cross-process lock path.
+  // ---------------------------------------------------------------
+
+  appendIssued(entry: IssuedEntry): void {
+    const validated = IssuedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+
+  appendConsumed(entry: ConsumedEntry): void {
+    const validated = ConsumedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+
+  appendRejected(entry: RejectedEntry): void {
+    const validated = RejectedEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+
+  /**
+   * Generic append. Discriminator-validated so callers cannot accidentally
+   * write a record that won't round-trip through readAll().
+   */
   append(entry: EditLogEntry): void {
+    const validated = EditLogEntrySchema.parse(entry);
+    this.appendRaw(validated);
+  }
+
+  private appendRaw(entry: EditLogEntry): void {
     // Refuse to write through any symlink in the edit-log path. The log
-    // is the audit record; if `.meta-edit/state` (or `edits.jsonl`
-    // itself) has been replaced with a symlink that points outside the
-    // repo, an attacker can either silently exfiltrate edit metadata or
-    // make the tool overwrite an unrelated file. We guard each ancestor
+    // is the audit record; if .meta-edit/state (or edits.jsonl itself)
+    // has been replaced with a symlink that points outside the repo, an
+    // attacker can either silently exfiltrate edit metadata or make the
+    // tool overwrite an unrelated file. We guard each ancestor
     // explicitly with lstat (symlink-aware) before mkdir, and use
     // O_NOFOLLOW on the final open so the leaf swap is also caught.
     this.ensureStateDir();
-    // Re-check: mkdirSync of an intermediate that was created during
-    // this call may have followed a parent symlink we didn't see. Walk
-    // again from the top and reject if any segment is now a symlink.
     ensureNoSymlinkOnPath(this.statePath);
 
     const line = JSON.stringify(entry) + "\n";
@@ -106,9 +171,6 @@ export class EditLog {
         "this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection",
       );
     }
-    // Issue a6-03 (codex round 1): hold the same cross-process lock
-    // around the actual write so concurrent appends serialize cleanly,
-    // matching the lock used during id allocation.
     this.withFileLock(() => {
       let fd: number | null = null;
       try {
@@ -136,36 +198,13 @@ export class EditLog {
 
   private ensureStateDir(): void {
     ensureNoSymlinkOnPath(this.statePath);
-    // Issue a6-04: the audit-log directory must not be world-readable.
-    // mkdirSync without an explicit mode uses 0o777 & ~umask (typically
-    // 0o755). Pass mode: 0o700 so newly created ancestors are restricted
-    // to the owner. Then chmodSync explicitly to defend against:
-    //   1. umask narrowing the requested mode further than intended, and
-    //   2. existing wide-mode .meta-edit/state directories created by
-    //      a pre-fix version of the tool (we narrow on every append).
     fs.mkdirSync(this.statePath, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") {
-      // a6-04 (codex round 1): chmod failure on the state directory
-      // must propagate. Swallowing it silently loses the 0o700 audit-
-      // log guarantee on shared systems. The previous code masked all
-      // chmod errors, including real EPERM/EROFS conditions.
-      //
-      // Issue 025 only requires state/ to be 0700; do NOT chmod the
-      // parent .meta-edit/ directory — that's outside this issue's
-      // scope and can override permissions the user set deliberately
-      // on the wider meta-edit working directory.
       fs.chmodSync(this.statePath, 0o700);
     }
   }
 
   private withFileLock<T>(fn: () => T): T {
-    // Cross-process advisory lock via mkdir: POSIX-portable, atomic
-    // (mkdir is atomic on EXT4/APFS/most local filesystems). EEXIST
-    // means another process holds the lock; we busy-spin with a short
-    // sleep until it's released. Stale-lock recovery is handled by the
-    // try/finally rmdir (process death is the only way to leak it; in
-    // that case the user manually removes <state>/.lock — acceptable
-    // for the MVP per SPEC §11).
     const lockPath = path.join(this.statePath, ".lock");
     const start = Date.now();
     const TIMEOUT_MS = 30_000;
@@ -183,8 +222,6 @@ export class EditLog {
               `if no other meta-edit process is running, remove this directory manually.`,
           );
         }
-        // Brief busy-wait. Math.random() jitter avoids lockstep retries
-        // when many waiters are queued.
         const until = Date.now() + 2 + Math.floor(Math.random() * 3);
         while (Date.now() < until) {
           /* spin */
@@ -197,16 +234,12 @@ export class EditLog {
       try {
         fs.rmdirSync(lockPath);
       } catch {
-        /* ignore — lock dir was removed by something else */
+        /* ignore */
       }
     }
   }
 
   private readCounterFile(key: string): number {
-    // Sidecar counter file: <state>/counter.json — { "<YYYYMMDD>": N }.
-    // Used as an atomic reservation marker so two `nextEditId` calls
-    // entering the lock back-to-back observe the bumped counter even
-    // if no `append` has happened yet between them.
     const counterPath = path.join(this.statePath, "counter.json");
     let text: string;
     try {
@@ -214,9 +247,6 @@ export class EditLog {
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return 0;
-      // a6-03 fail-closed (codex round 1): any non-ENOENT error reading
-      // the counter file is treated as fatal; a corrupt counter file
-      // could otherwise cause silent id reuse.
       throw e;
     }
     let parsed: unknown;
@@ -240,20 +270,8 @@ export class EditLog {
 
   private writeCounterFile(key: string, value: number): void {
     const counterPath = path.join(this.statePath, "counter.json");
-    // Keep only the current day's counter — old days are recoverable
-    // from the log itself if needed and pruning keeps the file tiny.
     const payload = JSON.stringify({ [key]: value });
 
-    // Codex review #35 follow-up: writeFileSync follows symlinks at the
-    // leaf, so a symlink dropped at counter.json by a malicious sibling
-    // process would silently turn nextEditId into an arbitrary-file
-    // write. Defend the sidecar with the same posture used for
-    // edits.jsonl:
-    //   1. lstat-guard the leaf — if it exists AND is a symlink, throw.
-    //   2. Open with O_NOFOLLOW so the kernel-side check catches a TOCTOU
-    //      racer that swapped a regular file for a symlink between (1)
-    //      and the open. ELOOP from O_NOFOLLOW manifests as an ENOENT-
-    //      adjacent error; we let it propagate.
     try {
       const lst = fs.lstatSync(counterPath);
       if (lst.isSymbolicLink()) {
@@ -264,8 +282,6 @@ export class EditLog {
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") throw e;
-      // ENOENT → leaf doesn't exist yet; O_CREAT below will produce a
-      // fresh regular file. Fall through.
     }
 
     const O_NOFOLLOW = fs.constants.O_NOFOLLOW;
@@ -298,15 +314,6 @@ export class EditLog {
   }
 
   readAll(): EditLogEntry[] {
-    // Issue 2026-05-02-1002: previously this method did existsSync +
-    // readFileSync, leaving a TOCTOU window where ENOENT from
-    // readFileSync after a true-returning existsSync would propagate as
-    // an uncaught error and crash `meta-edit log` / `meta-edit summary`.
-    // Drop existsSync and catch ENOENT directly; this matches the
-    // pattern already used by scanMaxCounterForKey below. Non-ENOENT
-    // errors (EACCES, EIO, EISDIR, …) still propagate so a corrupt or
-    // unreadable log surfaces as an error rather than a silent empty
-    // read.
     let text: string;
     try {
       text = fs.readFileSync(this.logPath, "utf8");
@@ -322,18 +329,12 @@ export class EditLog {
       try {
         parsed = JSON.parse(trimmed);
       } catch {
-        // JSON-malformed lines are silently skipped (existing
-        // behavior — never crash the reader).
         continue;
       }
       const validated = EditLogEntrySchema.safeParse(parsed);
       if (validated.success) {
         out.push(validated.data);
       }
-      // Schema-malformed lines are silently skipped: every downstream
-      // consumer (`meta-edit summary` / `meta-edit log`) assumes well-
-      // typed entries, and crashing on a stray bad line would lose all
-      // forensic value of the surrounding good lines.
     }
     return out;
   }
@@ -343,10 +344,6 @@ export class EditLog {
     try {
       text = fs.readFileSync(this.logPath, "utf8");
     } catch (e) {
-      // a6-03 fail-closed (codex round 1): only ENOENT (the log file
-      // simply doesn't exist yet) is a benign zero-counter case. Any
-      // other error (EACCES, EIO, EISDIR, …) is treated as fatal so a
-      // corrupt or unreadable log cannot silently cause id reuse.
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
       throw e;
     }
@@ -380,18 +377,6 @@ export class EditLog {
 }
 
 function ensureNoSymlinkOnPath(maybeRelativeDir: string): void {
-  // Walk from the topmost segment of the path down to the leaf and
-  // reject if any existing component is a symlink. Non-existent
-  // components are fine — they'll be created normally by mkdirSync.
-  //
-  // CRITICAL: resolve to an absolute path first. The caller passed
-  // path.join(repoRoot, ".meta-edit", "state"), which can be relative
-  // when repoRoot is relative. Splitting a relative path on path.sep
-  // and re-joining from path.sep would walk `/repo/...` instead of
-  // `<cwd>/repo/...`, missing a symlinked .meta-edit at the relative
-  // location. path.resolve is purely lexical — it concatenates cwd +
-  // segments and normalizes `..`, never calling lstat/realpath — so it
-  // is safe to use here without re-introducing symlink-following.
   const absDir = path.resolve(maybeRelativeDir);
   const segments = absDir.split(path.sep).filter((s) => s.length > 0);
   let cur: string = path.sep;
@@ -402,7 +387,7 @@ function ensureNoSymlinkOnPath(maybeRelativeDir: string): void {
       stat = fs.lstatSync(cur);
     } catch (e) {
       const code = (e as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "ENOENT") return; // remaining ancestors don't exist; safe to create
+      if (code === "ENOENT") return;
       throw e;
     }
     if (stat.isSymbolicLink()) {
@@ -422,8 +407,6 @@ function formatDayKey(d: Date): string {
 
 export function isoTimestamp(d: Date = new Date()): string {
   // ISO 8601 with timezone offset (per SPEC §6 example).
-  // Date#toISOString returns Zulu; we render local offset for parity with
-  // the spec sample. If offset is 0, render "+00:00".
   const pad = (n: number) => String(n).padStart(2, "0");
   const offMin = -d.getTimezoneOffset();
   const sign = offMin >= 0 ? "+" : "-";

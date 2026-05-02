@@ -6,19 +6,32 @@ import {
 import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from "./descriptions.js";
 import {
   EditToolRequestSchema,
+  MAX_ADDITIONAL_FILES,
+  TOOLS_ACCEPTING_ADDITIONAL_FILES,
   makeStubHandler,
   type ToolHandler,
   type ValidationContext,
 } from "./common.js";
 
-const inputSchema = {
+// JSON schema for the 17 SQLite-derived tools: target_file + the 4 binding
+// fields, NO `additional_files`. The MCP layer rejects unknown properties
+// outright (additionalProperties: false) so a 17-tool call carrying the
+// field never reaches the issuer.
+const sqliteToolInputSchema = {
   type: "object",
-  required: ["target_file", "rationale", "risk_level", "test_files", "changes"],
+  required: [
+    "target_file",
+    "rationale",
+    "risk_level",
+    "test_files",
+    "before_sha256",
+    "after_sha256",
+  ],
   properties: {
     target_file: {
       type: "string",
       description:
-        "Repository-relative path to the primary file being edited. When changes touch multiple files, this is the principal file the edit is about.",
+        "Repository-relative path to the file being edited. The MCP server validates path safety, that the path is inside the repo (post-realpath), and that it is not in a protected directory. The native Edit/Write call that follows must target this same file.",
     },
     rationale: {
       type: "string",
@@ -33,32 +46,64 @@ const inputSchema = {
       type: "array",
       items: { type: "string" },
       description:
-        "Paths of test files relevant to this edit. Required (non-empty) for all tools except edit_refactor_only, edit_test_only_change, and edit_docs_only. Must be empty for edit_test_only_change.",
+        "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. Test edits are made via separate edit_test_only_change calls. Required (non-empty) for SQLite-derived production tools; must be empty for edit_test_only_change.",
     },
-    changes: {
-      type: "array",
-      minItems: 1,
-      maxItems: 100,
+    before_sha256: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
       description:
-        "One or more content-pair changes. For modify-only tools the server reads each file from disk, asserts byte-for-byte equality with old_content (precondition), then atomically writes new_content. For edit_create_file the server opens each path with O_CREAT|O_EXCL|O_NOFOLLOW, refuses if anything already exists at the path or follows a symlink at the leaf, and writes new_content; old_content MUST be the empty string. The shape does not represent delete or rename.",
+        "Lowercase hex sha256 (64 chars) of the current disk content of target_file. The MCP server reads disk and refuses if the digest does not match. For edit_create_file, pass sha256(\"\") and the file MUST NOT yet exist.",
+    },
+    after_sha256: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      description:
+        "Lowercase hex sha256 (64 chars) of the content the agent declares it will write. The deny-raw-edit hook compares this to the bytes the native Edit/Write call would land before allowing the write.",
+    },
+  },
+  additionalProperties: false,
+} as const;
+
+// JSON schema for the 2 workflow tools (edit_docs_only, edit_create_file):
+// adds the optional `additional_files` array (≤ MAX_ADDITIONAL_FILES).
+const workflowToolInputSchema = {
+  type: "object",
+  required: [
+    "target_file",
+    "rationale",
+    "risk_level",
+    "test_files",
+    "before_sha256",
+    "after_sha256",
+  ],
+  properties: {
+    ...sqliteToolInputSchema.properties,
+    additional_files: {
+      type: "array",
+      maxItems: MAX_ADDITIONAL_FILES,
+      description:
+        "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry carries its own (file, before_sha256, after_sha256) tuple; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " +
+        String(MAX_ADDITIONAL_FILES) +
+        ".",
       items: {
         type: "object",
-        required: ["file", "old_content", "new_content"],
+        required: ["file", "before_sha256", "after_sha256"],
         properties: {
           file: {
             type: "string",
             description:
-              "Repository-relative path of the file. For modify-only tools the file must already exist on disk; for edit_create_file the file must NOT exist on disk.",
+              "Repository-relative path. Same path-safety rules as target_file.",
           },
-          old_content: {
+          before_sha256: {
             type: "string",
+            pattern: "^[0-9a-f]{64}$",
             description:
-              "For modify-only tools: exact current content of the file (the server compares byte-for-byte at apply time and rejects the call if disk content differs). For edit_create_file: MUST be the empty string (the file does not yet exist).",
+              "sha256 of the current disk content. For edit_create_file entries, sha256(\"\").",
           },
-          new_content: {
+          after_sha256: {
             type: "string",
-            description:
-              "New content to write to the file. For modify-only tools, atomically replaces the existing file on success; for edit_create_file, the new file is created with this content.",
+            pattern: "^[0-9a-f]{64}$",
+            description: "sha256 of the content to be written.",
           },
         },
         additionalProperties: false,
@@ -67,6 +112,12 @@ const inputSchema = {
   },
   additionalProperties: false,
 } as const;
+
+function inputSchemaForTool(toolName: ToolName): typeof sqliteToolInputSchema | typeof workflowToolInputSchema {
+  return TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
+    ? workflowToolInputSchema
+    : sqliteToolInputSchema;
+}
 
 export type RegisterToolsOptions = {
   context: ValidationContext;
@@ -81,7 +132,7 @@ export function registerTools(server: Server, options: RegisterToolsOptions): vo
       tools: TOOL_NAMES.map((name) => ({
         name,
         description: TOOL_DESCRIPTIONS[name],
-        inputSchema,
+        inputSchema: inputSchemaForTool(name),
       })),
     };
   });

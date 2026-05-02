@@ -29,13 +29,17 @@ describe("nineteen tools", () => {
   it("registers edit_create_file with a verbatim creation description", () => {
     expect(TOOL_NAMES).toContain("edit_create_file");
     // Description must mention the explicit non-existent precondition and the
-    // O_CREAT|O_EXCL|O_NOFOLLOW open contract — these are the load-bearing
+    // Case C declaration-time invariant (target_file must not exist; binding
+    // fails if any path already exists). These are the load-bearing
     // properties that distinguish creation from modify.
     expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
       "Create a new file",
     );
     expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
-      "O_CREAT | O_EXCL | O_NOFOLLOW",
+      "the binding fails if any path already exists on disk",
+    );
+    expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
+      'before_sha256` MUST be `sha256("")',
     );
   });
 

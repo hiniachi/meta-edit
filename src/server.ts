@@ -3,12 +3,10 @@ import * as path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools/registry.js";
-import {
-  makeApplyingHandler,
-  type ValidationContext,
-} from "./tools/common.js";
-import { applyChanges, applyCreates } from "./tools/apply.js";
+import { type ValidationContext } from "./tools/common.js";
+import { makeIssuingHandler } from "./tools/apply.js";
 import { EditLog } from "./state/edit-log.js";
+import { createGrantsStore } from "./state/grants.js";
 import { VERSION } from "./version.js";
 
 export type CreateServerOptions = {
@@ -40,11 +38,11 @@ export function createServer(options: CreateServerOptions = {}): Server {
   assertIsRepo(repoRoot);
   const context: ValidationContext = { repoRoot };
   const log = new EditLog(repoRoot);
-  const handler = makeApplyingHandler({
+  const grants = createGrantsStore(repoRoot);
+  const handler = makeIssuingHandler({
     ctx: context,
     log,
-    applyChanges,
-    applyCreates,
+    grants,
   });
 
   const server = new Server(

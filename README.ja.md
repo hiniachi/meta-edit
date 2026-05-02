@@ -15,9 +15,9 @@
 
 ツール定義は薄れません。AI がこれから呼び出すツールのスキーマと説明文は、呼び出しのたびに必ず読み込まれます。`meta-edit` は単一の `Edit` プリミティブを 19 種類のカテゴリ別ツールに分け、それぞれの説明文に「いつ使うか」「いつ使ってはいけないか」「どのテストを伴うべきか」「どこで止めてユーザーに尋ねるか」を埋め込みます。「境界値テストを書いてね」と AI が思い出してくれることに賭ける必要はもうありません。
 
-このプロジェクトの賭けは **「ツール表面の形こそが AI の編集挙動を変える」** という命題です。検出でも事後検証でもなく、ツール設計だけで挙動を変える。発想の源は [SQLite のテスト戦略](https://sqlite.org/testing.html)（境界値、MC/DC 条件カバレッジ、異常系テスト、変更ごとのチェックリスト）で、C ライブラリの品質保証の流儀をアプリケーションの編集カテゴリへ翻訳した形になります。仕様の全文は [`docs/SPEC.md`](./docs/SPEC.md)、v0.2 のバックログは [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照してください。
+このプロジェクトの賭けは **「ツール表面の形こそが AI の編集挙動を変える」** という命題です。検出でも事後検証でもなく、ツール設計だけで挙動を変える。発想の源は [SQLite のテスト戦略](https://sqlite.org/testing.html)（境界値、MC/DC 条件カバレッジ、異常系テスト、変更ごとのチェックリスト）で、C ライブラリの品質保証の流儀をアプリケーションの編集カテゴリへ翻訳した形になります。仕様の全文は [`docs/SPEC.md`](./docs/SPEC.md)（Part I 憲法 + Part II 派生仕様）、v0.2 以降の検出バックログは [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) を参照してください。
 
-ステータス：`0.1.4` プレリリース版。このリポジトリ自身が単一プラグインの Claude Code マーケットプレイスとして配布され、npm パッケージ `@hiniachi/meta-edit` の形でも提供されます（npm 公開はまだです）。
+ステータス：`0.2.0` プレリリース版。v0.2 ではメカニズムを **宣言 + トークン束縛** へ刷新しました（`SPEC.md` Article 5 参照）：MCP サーバは宣言を検証して短命トークンを発行するだけで、実際の書き込みは Claude Code 標準の `Edit` / `Write` が `deny-raw-edit` フックの束縛検証ゲートを通って行います。このリポジトリ自身が単一プラグインの Claude Code マーケットプレイスとして配布され、npm パッケージ `@hiniachi/meta-edit` の形でも提供されます（npm 公開はまだです）。
 
 ## 19 種類のツール
 
@@ -131,13 +131,21 @@ meta-edit install-hooks --scope user
 
 ## 編集ログ
 
-すべての `edit_*` 呼び出しは — 成功したか、バリデーションで拒否されたか、適用時に失敗したかに関わらず — `.meta-edit/state/edits.jsonl` に 1 行ずつ追記されます。スキーマは [`SPEC.md` §6](./docs/SPEC.md) を参照してください。
+各 typed_edit 呼び出しは `.meta-edit/state/edits.jsonl` に最大 2 行を追記します。スキーマは [`SPEC.md` §6](./docs/SPEC.md) を参照してください。
 
-```json
-{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
-```
+1. **`issued`** — MCP サーバが宣言を受理してトークンを発行した時点で書き込みます：
 
-パッチ本体は記録**しません**。必要になったときは VCS の履歴が真の出所です。
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   ```
+
+2. **`consumed`** — `deny-raw-edit` フックが対応する標準 Edit / Write の書き込みを認可した時点で書き込みます（PreToolUse、書き込み実行前）：
+
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   ```
+
+バリデーション失敗は `phase: "rejected"` 1 行で記録され、`audit_error` を非空で持ちます。パッチ本体は記録**しません** — 必要なら VCS 履歴が真の出所です。`issued` だけあって `consumed` のない記録は、宣言が放棄/期限切れになった証拠です。
 
 ## CI 連携
 
@@ -152,7 +160,7 @@ meta-edit install-hooks --scope user
 ご支援は次の用途に使われます。
 
 - 観測された AI の失敗パターンに基づく新しい `edit_*` カテゴリの追加
-- v0.2 で予定している軽量 diff 分類器の実装（[`SPEC.md` Article 2](./docs/SPEC.md) 参照）
+- 記述だけでは不十分と判明した場合のバックストップとして、軽量 diff 分類器を将来的に実装（[`SPEC.md` Article 2](./docs/SPEC.md) 参照）
 - Claude Code Plugin との統合強化
 
 ## ライセンス
