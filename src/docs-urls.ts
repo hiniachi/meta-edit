@@ -15,9 +15,9 @@ const BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 // Top-level spec entry point. Used by `meta-edit --help`.
 export const SPEC_URL = `${BASE}/docs/SPEC.md`;
 
-// Section 4: the twenty tool descriptions. Used by deny-raw-edit so
+// Section 4: the eighteen tool descriptions. Used by deny-raw-edit so
 // the agent knows where to look up which edit_* tool fits its change.
-export const SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-twenty-tool-descriptions`;
+export const SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-eighteen-tool-descriptions`;
 
 // Section 5.2: bash-write-bypass hook contract, including the formatter
 // / codegen allowlist. Used by deny-bash-write-bypass so the agent

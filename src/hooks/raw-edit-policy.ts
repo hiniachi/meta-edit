@@ -197,6 +197,59 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     return { decision: "allow" };
   }
 
+  // 2a. v0.3.1: free empty-Write creates. Empty file creation has no
+  // logic to gate, so it does NOT need a typed_edit declaration. The
+  // bypass concern that motivated splitting create-vs-content is
+  // structurally resolved here: empty creates land freely, and the
+  // actual content fill goes through a typed declaration of the
+  // appropriate kind (the now-empty file is just modify-mode input).
+  //
+  // Auto-mkdir parent dirs at the same time (issue K dogfood report:
+  // "src does not exist; create it before declaring" was friction
+  // without protective value — no agent ever wanted to land an empty
+  // file in a missing parent dir).
+  //
+  // Edit / MultiEdit aren't covered: their semantics require an
+  // existing file to match against, so an "empty create" via Edit is
+  // ill-formed. NotebookEdit similarly assumes an existing notebook.
+  if (lcName === "write" && toolInput.content === "") {
+    const absPath = path.isAbsolute(pathRaw)
+      ? pathRaw
+      : path.join(repoRoot, pathRaw);
+    let exists = true;
+    try {
+      await fs.stat(absPath);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        exists = false;
+      }
+      // Other stat errors (EACCES, ELOOP) leave `exists = true` so
+      // the call falls through to the normal grant-lookup gate
+      // (fail-closed for ambiguous filesystem state).
+    }
+    if (!exists) {
+      try {
+        await fs.mkdir(path.dirname(absPath), { recursive: true });
+      } catch {
+        // mkdir failure is non-fatal; let native Write surface the
+        // underlying error. Hook still authorizes; the alternative
+        // (deny on parent-mkdir failure) would deny the agent a clear
+        // path forward.
+      }
+      return {
+        decision: "warn",
+        reason:
+          "empty file create authorized without typed_edit declaration. " +
+          "For the actual content, declare an appropriate edit_<TYPE> next " +
+          "(e.g. edit_state_transition / edit_boundary_condition for source code, " +
+          "edit_docs_only for Markdown / docs, edit_test_only_change for new tests).",
+      };
+    }
+    // File exists — empty Write would truncate it. Fall through to
+    // grant-lookup so the agent must declare what kind of "blank-out"
+    // edit this is (typically edit_refactor_only or edit_docs_only).
+  }
+
   // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).
   // v0.2.0 originally denied NotebookEdit at the policy level because
   // simulate() couldn't replay notebook-shaped cell edits to verify

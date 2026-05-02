@@ -347,7 +347,7 @@ function evaluateSegment(rawSegment, opts = {}) {
   if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
     firstWarn = {
       decision: "warn",
-      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_create_file, edit_refactor_only); this redirect is " + "permitted but is recorded as a bypass-risk and may be " + "tightened to deny in a future version."
+      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_state_transition / edit_refactor_only / edit_docs_only " + "for new content; for new files, native Write with content " + '= "" is hook-authorized first, then declare the typed ' + "edit_* for the content); this redirect is permitted but is " + "recorded as a bypass-risk and may be tightened to deny in a " + "future version."
     };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
@@ -1199,7 +1199,7 @@ function matchesReadOnlyVerbCpBypass(rawSegment) {
     if (isInRepoWriteTarget(target)) {
       return {
         decision: "deny",
-        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (e.g. edit_create_file, ` + `edit_refactor_only) instead of redirecting a read-only verb's ` + `stdout to a repository path. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
+        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (edit_refactor_only, ` + `edit_docs_only, or whichever type fits the change) instead of ` + `redirecting a read-only verb's stdout to a repository path. For ` + `new files, native Write with content = "" is hook-authorized; ` + `then declare a typed_edit for the content. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
       };
     }
   }
@@ -1671,4 +1671,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=CDD1328C36C8C14A64756E2164756E21
+//# debugId=7A768453DBF4884764756E2164756E21

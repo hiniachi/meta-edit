@@ -16554,11 +16554,9 @@ var TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   "edit_policy_change",
-  "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact"
+  "edit_docs_only"
 ];
-var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only" && name !== "edit_create_planning_artifact");
+var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only");
 var TOOL_DESCRIPTIONS = {
   edit_refactor_only: `Refactor production code without changing observable behavior.
 
@@ -16612,6 +16610,9 @@ Use this tool when:
 - Strengthening assertions in existing tests
 - Refactoring test fixtures or helpers
 - Removing flaky or duplicated tests
+- Filling content into a freshly-created (currently empty) test file:
+  empty files are created freely without an MCP declaration (see SPEC §5);
+  the content fill goes through this tool
 
 Required: patch must only modify a single file — the \`target_file\` you
 declare as a test file. test_files must be empty. The server does not
@@ -17048,6 +17049,18 @@ document it explicitly — do not silently absorb it.
 For security-related dependency upgrades, the rationale must say so
 explicitly.
 
+Boundary with edit_policy_change (Cargo.toml / pyproject.toml / package.json
+overlap). Manifests with mixed personalities — package metadata + build
+profile + per-target optimization flags — sometimes straddle the line.
+Use edit_dependency_config when the change is about WHICH packages are
+present at WHICH versions (the dep graph or runtime config). Use
+edit_policy_change when the change is about HOW the build / release
+runs (release profile flags, codegen options, CI behavior, lint rules).
+A Cargo.toml \`[dependencies]\` entry update is dependency_config; a
+\`[profile.release]\` flag flip (e.g. \`opt-level\`, \`lto\`,
+\`wasm-opt = false\`) is policy_change. When a single PR touches both
+sections, split into two declarations.
+
 Fallback obligation:
 Before applying this tool, summarize the change in user-facing
 terms: which package, what version delta, runtime vs dev, expected
@@ -17068,6 +17081,11 @@ Use this tool when:
 - Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
 - Modifying tool descriptions of edit_* tools themselves
 - Modifying argument schemas or hook behavior
+- Modifying build / release profile flags in package manifests
+  (\`[profile.release]\` in Cargo.toml, \`[tool.poetry.build]\` in
+  pyproject.toml, \`scripts\` / \`engines\` mutations in package.json
+  that change how the project builds or releases) — see the boundary
+  note in edit_dependency_config
 
 Required tests (you MUST cover):
 1. Configuration validity: the new configuration must parse and load
@@ -17111,6 +17129,10 @@ Use this tool when:
 - Editing JSDoc / docstrings / Rustdoc that document existing API
 - Editing changelogs, release notes, contribution guides
 - Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
+- Filling content into a freshly-created (currently empty) Markdown file:
+  issues/*.md, ADRs, design docs, post-mortems, dogfood reports.
+  Empty files are created freely without an MCP declaration (see SPEC §5);
+  the content fill goes through this tool.
 
 Required tests: NONE. test_files may be empty.
 
@@ -17137,11 +17159,6 @@ This tool MUST NOT be used when:
 - The patch contains a code example (fenced block, inline snippet)
   that does not compile or run as written; broken examples mislead
   readers more than no example
-- The patch CREATES a new planning artifact (issue file, ADR, design
-  doc, post-mortem) — use edit_create_planning_artifact for the
-  planning-stage tone. Modifying an EXISTING planning artifact may use
-  this tool when the change is a documentation update; new-artifact
-  filing should not
 - The patch updates a Markdown test fixture loaded by tests at runtime
   (use edit_test_only_change since the fixture's content is part of
   the test contract)
@@ -17154,124 +17171,6 @@ Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
 mislead future readers (including future AI agents). Treat
 documentation as a contract with future readers.
-
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_create_file: `Create a new file at a path that does not yet exist on disk.
-At declaration time, the server verifies the target does not yet exist;
-the binding fails if any path already exists on disk. The actual create
-is performed by native Edit / Write under the deny-raw-edit hook's
-binding-validation gate (see §5).
-
-Use this tool when:
-- Adding a new source module, helper, or class file
-- Adding a new test file when fulfilling another tool's test obligations
-- Adding new configuration files, fixtures, or example assets
-- Scaffolding code for which no in-place modify path applies
-
-Required tests (you MUST cover):
-1. The newly-created file must be exercised by at least one test that
-   imports, loads, or otherwise consumes it. Files that are not exercised
-   by any test are dead on arrival.
-2. If the new file is itself a test file, it must contain at least one
-   explicit assertion. The mere existence of a test file is not a test.
-
-test_files must be non-empty (you must declare which test covers the
-new code). The \`target_file\` MUST NOT exist on disk at declaration
-time; the server binds \`before_sha256\` to \`sha256("")\` automatically.
-For multi-file scaffolding, list additional creates in
-\`additional_files\` (this tool is one of the two workflow-required
-tools per Article 6 / §3).
-
-This tool MUST NOT be used when:
-- The target path already exists; modifying an existing file is the job
-  of one of the modify-only edit_* tools
-- The new path lands inside a protected directory (.meta-edit/state/**,
-  .meta-edit/tmp/**)
-- The change is a rename or move (delete-and-add); the modify/create
-  shape cannot represent rename atomically and the audit log would not
-  reflect the original file's deletion
-- The file is a binary payload; native Edit / Write's string-based
-  parameters cannot carry non-UTF-8 bytes
-- The new file is a planning artifact (issue file, ADR, design doc,
-  post-mortem, dogfood report) — use edit_create_planning_artifact so
-  the audit log records the planning-stage tone instead of a
-  production-code create with placeholder test_files
-- The new file's content is a near-duplicate of an existing file (a
-  copy or near-copy is a refactor or a move, not a create — use
-  edit_refactor_only on the source if the duplication is intentional)
-- The new file is a re-export shim that simply re-emits another
-  module's exports (the underlying module is the change locus; use
-  edit_refactor_only on it instead)
-- The new file is auto-generated build output; generated files belong
-  in .gitignore, not in a typed_edit-recorded create
-Rationale: the other modify-only edit_* tools cannot represent file
-creation. Without an explicit creation tool, agents resort to bash
-redirects, undermining the typed-tool surface meta-edit exists to defend.
-Creation has a different precondition profile (no current state to check)
-and a strong post-condition (the file did not exist; now it does), and
-the audit log records it explicitly so reviewers see new-file additions
-distinct from in-place edits.
-
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_create_planning_artifact: `Create a NEW planning artifact: an issue file, an
-architecture decision record (ADR), a design document, a post-mortem,
-a dogfood report, or any other document whose purpose is to record a
-decision, observation, or plan rather than to be loaded by code.
-
-This tool is CREATE-only — the target_file MUST NOT exist on disk at
-declaration time. Modifying an EXISTING planning artifact (revising
-an ADR, updating an issue body, appending a post-mortem section) goes
-through edit_docs_only.
-
-Use this tool when:
-- Filing a new issue or bug report under issues/
-- Writing a new architecture decision record (ADR)
-- Drafting a new design document, RFC, or proposal
-- Recording a new post-mortem or incident report
-- Capturing a new dogfood observation, audit finding, or hypothesis
-
-Required tests: NONE. test_files must be empty.
-
-The artifact IS the deliverable. There is no production behavior the
-artifact is supposed to verify, and there is no test that can stand in
-for "the document captures the decision correctly". Reviewers verify by
-reading.
-
-Like edit_docs_only and edit_create_file, this tool is one of the
-workflow tools (Article 6 / §3) and accepts \`additional_files\` for
-multi-file batches (e.g. filing two related issues at once, or adding
-an ADR and updating a cross-reference index together; cap 32).
-
-This tool MUST NOT be used when:
-- The patch modifies any executable production code, including library
-  scripts run during build / CI
-- The patch modifies any test code (use edit_test_only_change)
-- The patch modifies build, CI, or meta-edit configuration files
-  (use edit_dependency_config or edit_policy_change)
-- The "planning artifact" is actually executable documentation that
-  loads or generates code (use edit_dependency_config or
-  edit_create_file as appropriate)
-- The change is renaming or moving a planning artifact across paths;
-  the modify/create shape cannot represent rename atomically
-
-Distinction from edit_docs_only: edit_docs_only is for documentation
-that ships with production code (README, inline comments, JSDoc/
-docstrings, CHANGELOG). edit_create_planning_artifact is for
-planning-stage documents that record decisions rather than ship as
-user-facing reference material. When the line is unclear, prefer
-edit_docs_only — production reference docs have a stricter contract.
-
-Rationale: planning artifacts (issues, ADRs, design docs) have no test
-obligation, but they also have a different review tone than production
-docs — reviewers care about decision quality, not about API drift or
-example correctness. Without an explicit planning-artifact tool, agents
-were forced to use edit_docs_only (production-docs framing) or
-edit_create_file with placeholder \`test_files\`, both of which
-distorted the audit log.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17403,9 +17302,7 @@ var AdditionalFileSchema = exports_external.object({
 }).strict();
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
-  "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact"
+  "edit_docs_only"
 ];
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
@@ -17445,13 +17342,12 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = toolName === "edit_create_file" || toolName === "edit_create_planning_artifact";
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, isCreate, "target_file");
+    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, "target_file");
     if (!beforeRead.ok) {
       warnings.push(beforeRead.error);
     } else {
@@ -17478,7 +17374,7 @@ function validateRequest(toolName, request, ctx) {
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, `additional_files entry "${af.file}"`);
       if (!beforeRead.ok) {
         warnings.push(beforeRead.error);
         continue;
@@ -17564,7 +17460,7 @@ function containsParentTraversal(p) {
   }
   return false;
 }
-function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
+function computeBeforeSha256(canonical, repoRoot, fieldLabel) {
   const absolute = path4.join(repoRoot, canonical);
   let onDisk = null;
   try {
@@ -17572,45 +17468,14 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
   } catch (e) {
     const code = e?.code;
     if (code === "ENOENT") {
-      if (!isCreate) {
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
-        };
-      }
-      const parent = path4.dirname(absolute);
-      try {
-        const parentStat = fs4.statSync(parent);
-        if (!parentStat.isDirectory()) {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent path "${path4.dirname(canonical)}" exists but is not a directory`
-          };
-        }
-      } catch (parentErr) {
-        const parentCode = parentErr?.code;
-        if (parentCode === "ENOENT") {
-          return {
-            ok: false,
-            error: `${fieldLabel} "${canonical}": parent directory "${path4.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
-          };
-        }
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`
-        };
-      }
-      return { ok: true, before_sha256: SHA256_EMPTY };
+      return {
+        ok: false,
+        error: `${fieldLabel} "${canonical}" does not exist on disk. ` + `v0.3.1 expects you to create the empty file first via a ` + `native Write with content === "" (no MCP declaration needed; ` + `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` + `parent directories), THEN declare the typed_edit for the content fill.`
+      };
     }
     return {
       ok: false,
       error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`
-    };
-  }
-  if (isCreate) {
-    return {
-      ok: false,
-      error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
     };
   }
   return { ok: true, before_sha256: sha256Hex(onDisk) };
@@ -17681,14 +17546,14 @@ var workflowToolInputSchema = {
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
-      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 1 workflow tool (edit_docs_only). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
         required: ["file"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path. Same path-safety rules as target_file. For edit_create_file the file MUST NOT exist on disk; for edit_docs_only it MUST exist."
+            description: "Repository-relative path. Same path-safety rules as target_file. The file MUST exist on disk (edit_docs_only is modify-only). For new files, do an empty-content native Write first (free at the deny-raw-edit hook) and then declare the typed_edit against the now-empty file."
           }
         },
         additionalProperties: false
@@ -18158,7 +18023,7 @@ function formatAuditError(editId, e) {
 import * as crypto3 from "node:crypto";
 import * as fs6 from "node:fs/promises";
 import * as path6 from "node:path";
-var GRANT_TTL_MS = 300000;
+var GRANT_TTL_MS = 600000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
   const y = d.getFullYear();
@@ -18499,7 +18364,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.3.0",
+  version: "0.3.1",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18519,7 +18384,7 @@ var package_default = {
     "LICENSE"
   ],
   scripts: {
-    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts --target node --outdir dist --root src --sourcemap=external",
     test: "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     typecheck: "tsc --noEmit",
@@ -19096,7 +18961,7 @@ function parseHooksArgs(argv) {
 // src/docs-urls.ts
 var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 var SPEC_URL = `${BASE}/docs/SPEC.md`;
-var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-twenty-tool-descriptions`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-eighteen-tool-descriptions`;
 var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/cli/help-cmd.ts
@@ -19169,7 +19034,7 @@ function renderToolHelp(name) {
 
 ${TOOL_DESCRIPTIONS[name]}
 
-See ${SPEC_TOOLS_URL} for all nineteen tool descriptions.
+See ${SPEC_TOOLS_URL} for all eighteen tool descriptions.
 `;
 }
 
@@ -19280,4 +19145,4 @@ export {
   main
 };
 
-//# debugId=7F8248D18835542564756E2164756E21
+//# debugId=8718546687657D4964756E2164756E21

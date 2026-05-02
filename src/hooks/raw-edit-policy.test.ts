@@ -686,9 +686,16 @@ describe("evaluateTokenedEdit — happy path", () => {
     expect(r.decision).toBe("allow");
   });
 
-  it("supports edit_create_file: file does not exist, before is sha256(\"\")", async () => {
+  it("authorizes content fill via sha256(\"\") binding against an empty file (post-v0.3.1 flow)", async () => {
+    // v0.3.1 flow: agent did a free empty Write to create the file
+    // (no MCP), then declared a typed_edit which bound to sha256("")
+    // against the now-empty file. Native Write of the actual content
+    // hits this hook with that grant active.
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
+
+    // Agent's free empty Write step (simulated): file exists, empty.
+    writeFile("src/new.ts", "");
 
     await issueGrant(grants, "edit_20260502_0108", [
       {
@@ -708,6 +715,55 @@ describe("evaluateTokenedEdit — happy path", () => {
       log,
     });
     expect(r.decision).toBe("allow");
+  });
+
+  // v0.3.1 (issue G): empty Write to a non-existent in-repo path is
+  // free at the hook level (no MCP declaration). Auto-mkdirs parent
+  // dirs (issue K). Decision is "warn" with an educational pointer
+  // toward the type-specific tool the agent should call next for the
+  // real content. This is the structural fix for the create-bypass
+  // concern: empty creates have no logic to gate; the typed
+  // intervention runs on the modify of the now-empty file.
+  it("v0.3.1: free empty Write to a non-existent in-repo path → warn-allow + auto-mkdir", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    // Note: NO grant issued — the empty-Write branch fires before
+    // grant lookup.
+    const r = await evaluateTokenedEdit({
+      toolName: "Write",
+      toolInput: {
+        file_path: path.join(tmpRoot, "newdir/nested/file.ts"),
+        content: "",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("warn");
+    expect(r.reason).toMatch(/empty file create/);
+    // Auto-mkdir created the parent dirs.
+    expect(fs.statSync(path.join(tmpRoot, "newdir/nested")).isDirectory()).toBe(true);
+  });
+
+  it("v0.3.1: empty Write to an EXISTING file falls through to grant-lookup (truncate-to-empty needs typed declaration)", async () => {
+    // Negative case for the empty-Write branch: if the file already
+    // exists, we don't authorize a truncate without a typed_edit.
+    // The agent must declare what kind of "blank-out" edit this is.
+    writeFile("src/foo.ts", "x\n");
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    const r = await evaluateTokenedEdit({
+      toolName: "Write",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        content: "",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/no active typed_edit declaration/);
   });
 
   // Codex review v0.2.1, MEDIUM (documented as accepted ambiguity in

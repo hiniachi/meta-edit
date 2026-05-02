@@ -67,16 +67,16 @@ jobs:
           fi
           echo "version sync OK: $pkg"
 
-          # PR #42 self-review: marketplace.json descriptions were missed
-          # by the manual "eighteen" → "nineteen" sweep. Pin tool-count
-          # mentions in the public manifests so a future tool addition
-          # cannot land without updating every consumer-visible string.
-          for f in package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
-            if grep -F "eighteen" "$f" >/dev/null 2>&1; then
-              echo "::error::$f mentions 'eighteen' — refresh tool-count description after adding/removing edit_* tools" >&2
-              exit 1
-            fi
-          done
+          # PR #42 added a hardcoded grep against a stale word, but the
+          # assumption that one specific word is always stale doesn't
+          # generalize. v0.3.1 dropped two workflow tools and the count
+          # went back to 18, so the manifests correctly say "eighteen"
+          # again and the old guard misfired. The drift this guard was
+          # meant to catch is now caught more robustly by
+          # tests/registry.test.ts (TOOL_NAMES.length === N) and the new
+          # Skill-catalog parity test. Manifest descriptions are kept in
+          # sync via human review when TOOL_NAMES drifts.
+
           # marketplace.json is required for /plugin install discovery —
           # confirm its plugin entry name matches plugin.json.name.
           if [ -f .claude-plugin/marketplace.json ]; then

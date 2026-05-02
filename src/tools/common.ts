@@ -51,13 +51,15 @@ export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 export const MAX_ADDITIONAL_FILES = 32;
 
 // SQLite-derived tools (the 17): MUST omit `additional_files`.
-// Workflow tools (the 3: edit_docs_only, edit_create_file,
-// edit_create_planning_artifact): MAY include it. (v0.2.4 added the
-// third workflow tool — issue 1104.)
+// Workflow tool (only 1 remaining post-v0.3.1: edit_docs_only): MAY
+// include it for sweeping documentation updates. v0.3.1 dropped
+// edit_create_file and edit_create_planning_artifact when empty
+// creates became free at the deny-raw-edit hook level (no MCP
+// declaration needed for an empty Write to a non-existent in-repo
+// path). additional_files now functions purely as a doc-batching
+// affordance.
 export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
   "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact",
 ];
 
 export const EditToolRequestSchema = z
@@ -217,14 +219,11 @@ export function validateRequest(
   }
 
   // ---- 5. target_file path-safety + disk read -------------------------
-  // edit_create_planning_artifact is CREATE-only (per its description),
-  // so the same "target MUST NOT exist; before_sha256 = sha256("")"
-  // validation path applies. Codex HIGH review: without this branch
-  // the validator falls through to modify-mode and rejects every
-  // planning-artifact filing on ENOENT.
-  const isCreate =
-    toolName === "edit_create_file" ||
-    toolName === "edit_create_planning_artifact";
+  // v0.3.1: every typed_edit tool runs in modify mode. Empty file
+  // creation is now hook-level (deny-raw-edit allows Write with
+  // content === "" to a non-existent in-repo path); the typed
+  // declaration that follows runs against the now-existing empty file
+  // and binds before_sha256 := sha256(""). No CREATE flag needed.
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding: ValidatedBinding | null = null;
   if (!targetCheck.ok) {
@@ -233,7 +232,6 @@ export function validateRequest(
     const beforeRead = computeBeforeSha256(
       targetCheck.canonical,
       ctx.repoRoot,
-      isCreate,
       "target_file",
     );
     if (!beforeRead.ok) {
@@ -247,6 +245,8 @@ export function validateRequest(
   }
 
   // ---- 6. additional_files path-safety + disk read --------------------
+  // v0.3.1: only edit_docs_only retains additional_files (multi-file
+  // doc sweeps). Each entry is a modify against an existing file.
   const additionalBindings: ValidatedBinding[] = [];
   if (
     request.additional_files !== undefined &&
@@ -270,13 +270,9 @@ export function validateRequest(
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      // For edit_create_file, ALL bindings are create entries: the file MUST
-      // NOT exist; before_sha256 := sha256(""). For edit_docs_only, each
-      // entry is a modify (the file MUST exist).
       const beforeRead = computeBeforeSha256(
         safe.canonical,
         ctx.repoRoot,
-        isCreate,
         `additional_files entry "${af.file}"`,
       );
       if (!beforeRead.ok) {
@@ -411,7 +407,6 @@ function containsParentTraversal(p: string): boolean {
 function computeBeforeSha256(
   canonical: string,
   repoRoot: string,
-  isCreate: boolean,
   fieldLabel: string,
 ):
   | { ok: true; before_sha256: string }
@@ -424,44 +419,23 @@ function computeBeforeSha256(
   } catch (e) {
     const code = (e as NodeJS.ErrnoException | undefined)?.code;
     if (code === "ENOENT") {
-      // File does not exist on disk.
-      if (!isCreate) {
-        return {
-          ok: false,
-          error:
-            `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`,
-        };
-      }
-      // edit_create_file: target must not exist (good) AND parent dir must
-      // exist on disk. Without this check, validation passes but the
-      // eventual native Write fails with ENOENT, leaving an issued+consumed
-      // audit pair without a corresponding file. Per issue 2026-05-02-1101.
-      const parent = path.dirname(absolute);
-      try {
-        const parentStat = fs.statSync(parent);
-        if (!parentStat.isDirectory()) {
-          return {
-            ok: false,
-            error:
-              `${fieldLabel} "${canonical}": parent path "${path.dirname(canonical)}" exists but is not a directory`,
-          };
-        }
-      } catch (parentErr) {
-        const parentCode = (parentErr as NodeJS.ErrnoException | undefined)?.code;
-        if (parentCode === "ENOENT") {
-          return {
-            ok: false,
-            error:
-              `${fieldLabel} "${canonical}": parent directory "${path.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`,
-          };
-        }
-        return {
-          ok: false,
-          error:
-            `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`,
-        };
-      }
-      return { ok: true, before_sha256: SHA256_EMPTY };
+      // v0.3.1: there is no longer a CREATE-mode tool. ENOENT here
+      // means the agent declared a typed_edit against a file that
+      // doesn't yet exist. Expected flow:
+      //   1. Native Write with content === "" creates the empty file
+      //      (free at deny-raw-edit; parent dirs auto-mkdir-ed).
+      //   2. Typed_edit declares against the now-empty file.
+      //   3. Native Edit / Write fills the content under the hook.
+      // If you're hit here, step 1 was skipped or the path is wrong.
+      return {
+        ok: false,
+        error:
+          `${fieldLabel} "${canonical}" does not exist on disk. ` +
+          `v0.3.1 expects you to create the empty file first via a ` +
+          `native Write with content === "" (no MCP declaration needed; ` +
+          `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` +
+          `parent directories), THEN declare the typed_edit for the content fill.`,
+      };
     }
     return {
       ok: false,
@@ -470,14 +444,6 @@ function computeBeforeSha256(
     };
   }
 
-  // File exists on disk.
-  if (isCreate) {
-    return {
-      ok: false,
-      error:
-        `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`,
-    };
-  }
   return { ok: true, before_sha256: sha256Hex(onDisk) };
 }
 

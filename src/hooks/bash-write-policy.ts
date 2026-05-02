@@ -456,9 +456,12 @@ function evaluateSegment(
         "command redirects (`>` / `>>` / `>|`) to a path outside the " +
         "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
         "/sys/). For in-repo writes prefer an edit_* tool (e.g. " +
-        "edit_create_file, edit_refactor_only); this redirect is " +
-        "permitted but is recorded as a bypass-risk and may be " +
-        "tightened to deny in a future version.",
+        "edit_state_transition / edit_refactor_only / edit_docs_only " +
+        "for new content; for new files, native Write with content " +
+        "= \"\" is hook-authorized first, then declare the typed " +
+        "edit_* for the content); this redirect is permitted but is " +
+        "recorded as a bypass-risk and may be tightened to deny in a " +
+        "future version.",
     };
   }
 
@@ -1836,9 +1839,11 @@ function matchesReadOnlyVerbCpBypass(rawSegment: string): HookDecision | null {
         decision: "deny",
         reason:
           `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` +
-          `into a repo file. Use a typed edit_* tool (e.g. edit_create_file, ` +
-          `edit_refactor_only) instead of redirecting a read-only verb's ` +
-          `stdout to a repository path. Out-of-repo redirects (` +
+          `into a repo file. Use a typed edit_* tool (edit_refactor_only, ` +
+          `edit_docs_only, or whichever type fits the change) instead of ` +
+          `redirecting a read-only verb's stdout to a repository path. For ` +
+          `new files, native Write with content = "" is hook-authorized; ` +
+          `then declare a typed_edit for the content. Out-of-repo redirects (` +
           `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`,
       };
     }

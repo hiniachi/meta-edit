@@ -101,6 +101,6 @@ function renderToolHelp(name: ToolName): string {
 
 ${TOOL_DESCRIPTIONS[name]}
 
-See ${SPEC_TOOLS_URL} for all nineteen tool descriptions.
+See ${SPEC_TOOLS_URL} for all eighteen tool descriptions.
 `;
 }

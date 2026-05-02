@@ -21,9 +21,6 @@ const EXPLICIT_EXEMPT: ReadonlySet<ToolName> = new Set([
   "edit_refactor_only",
   "edit_test_only_change",
   "edit_docs_only",
-  // v0.2.4 (issue 1104): the planning-artifact tool also has no test
-  // obligation — the artifact IS the deliverable.
-  "edit_create_planning_artifact",
 ]);
 
 describe("TOOLS_REQUIRING_TEST_FILES coverage", () => {
