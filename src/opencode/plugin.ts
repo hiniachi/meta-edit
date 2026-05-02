@@ -70,6 +70,14 @@ export interface OpencodeToolBeforeInput {
 export interface OpencodeToolBeforeOutput {
   /** Tool arguments as opencode parsed them. Shape is per-tool. */
   args: Record<string, unknown>;
+  /**
+   * Set to `true` by the hook when a tool call must be aborted, in
+   * addition to throwing. Today's opencode runtime aborts on the
+   * thrown exception alone; this field is the documented fallback
+   * shape per the macro plan's R2 mitigation. Setting it preemptively
+   * costs nothing and means the swap-in is grep-discoverable.
+   */
+  aborted?: boolean;
 }
 
 export type OpencodeToolBeforeHook = (
@@ -132,19 +140,43 @@ export function createMetaEditPlugin(
           return;
         }
         const rawInput = mapOpencodeArgsToRawToolInput(canonical, output.args);
-        const decision = await evaluateTokenedEdit({
-          toolName: canonical,
-          toolInput: rawInput,
-          repoRoot,
-          grants,
-          log,
-        });
+        let decision;
+        try {
+          decision = await evaluateTokenedEdit({
+            toolName: canonical,
+            toolInput: rawInput,
+            repoRoot,
+            grants,
+            log,
+          });
+        } catch (e) {
+          // Parity with deny-raw-edit.ts (Claude Code side, line ~121):
+          // unexpected internal failure inside the policy is fail-closed
+          // deny. Without this catch a transient I/O / state error in
+          // the grants store would propagate as an unhandled hook
+          // exception — opencode's documented behaviour for that is
+          // unverified (R2), and the conservative shape is "the hook
+          // explicitly denied" rather than "the hook crashed".
+          throwAbort(
+            `meta-edit opencode plugin errored on ${canonical}: ${(e as Error).message}`,
+            output,
+          );
+        }
         if (decision.decision === "deny") {
           throwAbort(decision.reason ?? "denied by meta-edit", output);
         }
-        // allow / warn fall through (warn is currently unused on the
-        // raw-edit path; if reintroduced, surface via stderr like the
-        // Claude Code side does).
+        if (decision.decision === "warn") {
+          // The empty-Write-create authorization in evaluateTokenedEdit
+          // step 2a returns warn with an actionable reason. Claude Code
+          // surfaces this via replyAllowWithWarning into the agent's
+          // transcript. opencode has no equivalent return channel, so
+          // mirror the signal to stderr — operators tailing the plugin
+          // host see the same nudge to declare a typed edit_<TYPE> for
+          // the content fill.
+          process.stderr.write(
+            `[meta-edit] WARN (${canonical}): ${decision.reason ?? "warned by meta-edit"}\n`,
+          );
+        }
         return;
       }
 
@@ -239,15 +271,12 @@ function pickString(
 /**
  * Throw an abort error in the shape opencode's plugin runtime expects.
  * As of this writing the documented contract is to throw; the function
- * also writes to stderr so a misconfigured runtime that swallows
- * exceptions still produces visible output. (R2 in the macro plan: if
- * a future opencode release changes the abort mechanism, switch to
- * `output.aborted = true` here without touching the call sites.)
+ * also sets `output.aborted = true` defensively so a future opencode
+ * release that switches to inspect-output-then-abort (R2 in the macro
+ * plan) still aborts the call without touching this call site. The
+ * extra property is harmless on the throw-only contract.
  */
 function throwAbort(reason: string, output: OpencodeToolBeforeOutput): never {
-  // Mark aborted defensively in case opencode ever introspects the
-  // output object after a thrown hook (today it does not, per the
-  // plugin docs, but the cost of setting a property is zero).
-  void output;
+  output.aborted = true;
   throw new Error(reason);
 }
