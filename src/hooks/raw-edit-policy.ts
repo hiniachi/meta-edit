@@ -94,7 +94,7 @@ export function evaluateRawEdit(toolName: string): HookDecision {
       decision: "deny",
       reason:
         `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` +
-        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
     };
   }
   return { decision: "allow" };
@@ -193,15 +193,19 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     return { decision: "allow" };
   }
 
-  // 3. NotebookEdit is out of v0.2 scope FOR REPO-INTERNAL WRITES.
-  // The out-of-repo branch above already let agent-state notebooks
-  // through; the deny here applies to anything inside the repo.
-  if (lcName === "notebookedit") {
-    return {
-      decision: "deny",
-      reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`,
-    };
-  }
+  // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).
+  // v0.2.0 originally denied NotebookEdit at the policy level because
+  // simulate() couldn't replay notebook-shaped cell edits to verify
+  // after_sha256. v0.2.1 dropped simulate() / after_sha256 entirely
+  // (Article 3 + Article 4: the friction outweighed the value), which
+  // made the original objection obsolete. With notebook_path extraction
+  // added in v0.2.2 and the out-of-repo branch above in v0.2.3,
+  // NotebookEdit now routes through the same canonicalize → grant
+  // lookup → consume → before_sha256 staleness flow as the other three
+  // raw edits. The staleness check on `before_sha256` remains the
+  // single load-bearing pre-condition; it operates on byte-for-byte
+  // file content, which is well-defined for `.ipynb` JSON regardless
+  // of cell semantics. (No deny here.)
 
   // 4. file_path canonicalization. The grant lookup is keyed on the
   // canonical (post-realpath, repo-relative, normalized) form produced
@@ -228,7 +232,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
       reason:
         `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` +
         `Call a typed edit_* MCP tool first. ` +
-        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
     };
   }
   const { grant, binding: bound } = match;

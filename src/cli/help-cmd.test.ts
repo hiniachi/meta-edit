@@ -30,11 +30,15 @@ describe("renderHelp — general (no tool argument)", () => {
     }
   });
 
-  it("includes the recovery hint pointing at `meta-edit -h <tool_name>`", () => {
+  it("includes the harness-native recovery hint pointing at ToolSearch", () => {
+    // v0.2.4: hint shifted from `meta-edit -h <tool_name>` (human-only)
+    // to ToolSearch (the harness-native way to load deferred MCP tool
+    // schemas into the agent's tool list). The CLI text mentions both,
+    // but the recovery direction is ToolSearch.
     const result = renderHelp();
     if (!result.ok) throw new Error("expected ok=true");
-    expect(result.output).toContain("meta-edit -h <tool_name>");
-    expect(result.output).toContain("missing from your AI agent's context");
+    expect(result.output).toContain("ToolSearch");
+    expect(result.output).toContain("not loaded in your AI agent's tool");
   });
 
   it("includes a one-line summary for each tool (locks A5 catalog format)", () => {
