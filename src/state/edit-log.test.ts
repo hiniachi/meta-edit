@@ -655,3 +655,42 @@ describe("EditLog counter.json symlink defense", () => {
     expect(fs.readFileSync(victimPath, "utf8")).toBe(originalVictim);
   });
 });
+
+describe("EditLog.nextRejectId (issue 0105 — defer counter on rejections)", () => {
+  it("returns reject_<dayKey>_<hex> format", () => {
+    const log = new EditLog(tmpRoot);
+    const id = log.nextRejectId(new Date(2026, 4, 3));
+    expect(id).toMatch(/^reject_20260503_[0-9a-f]{8}$/);
+  });
+
+  it("does NOT advance the daily issued counter", () => {
+    // Allowed transition: validate-fail → reject. Forbidden: rejection
+    // consuming a counter slot. Calling nextRejectId between two
+    // nextEditId calls must keep the issued sequence contiguous.
+    const log = new EditLog(tmpRoot);
+    const d = new Date(2026, 4, 3);
+    expect(log.nextEditId(d)).toBe("edit_20260503_0001");
+    log.nextRejectId(d);
+    log.nextRejectId(d);
+    log.nextRejectId(d);
+    expect(log.nextEditId(d)).toBe("edit_20260503_0002");
+  });
+
+  it("yields different IDs on repeated calls (random suffix)", () => {
+    const log = new EditLog(tmpRoot);
+    const d = new Date(2026, 4, 3);
+    const a = log.nextRejectId(d);
+    const b = log.nextRejectId(d);
+    expect(a).not.toBe(b);
+  });
+
+  it("starts with the `reject_` prefix so audit consumers can filter", () => {
+    // Reconciliation by edit_id should be able to filter `^edit_` to
+    // get only successful issuances; reject IDs must not collide with
+    // that prefix.
+    const log = new EditLog(tmpRoot);
+    const id = log.nextRejectId(new Date(2026, 4, 3));
+    expect(id.startsWith("reject_")).toBe(true);
+    expect(id.startsWith("edit_")).toBe(false);
+  });
+});
