@@ -289,6 +289,19 @@ the experimental signal of the bet is preserved):
   the native Edit tool and to OS file APIs.
 - **Sidecar classifiers, auto-repair loops, agent-feedback loops.**
 - **Heavy hooks** that re-implement what tool descriptions already say.
+- **Typed-surface coverage of arbitrary write-capable MCP tools.** The
+  invariant "writes inside this repo go through `edit_*`" is enforced
+  by hooking the four named raw-edit primitives Anthropic ships:
+  `Edit`, `Write`, `MultiEdit`, `NotebookEdit`. Any other MCP tool that
+  can mutate the filesystem — `ctx_execute` running `fs.writeFileSync`,
+  `apply_patch`-style external tools, future code-execution surfaces —
+  is **explicitly outside MVP scope** (issue 1108). The four mitigation
+  paths considered in 1108 (PostToolUse mtime watcher, MCP-tool
+  whitelist, protocol extension, documentation only) all entail the
+  diff-classification work this article forbids; the v0.2 escape hatch
+  (lightweight classifier) is the only sanctioned route for revisiting
+  this. Until then, the `CLAUDE.md` §9 honor-code prohibition on
+  bypass-via-other-tool is the load-bearing mitigation.
 
 The temptation will recur, especially after observed bypasses. The
 correct response is almost always to refine a description, not to add

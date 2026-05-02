@@ -32,6 +32,7 @@ import {
   normalizeRepoRelative,
 } from "../state/protected-paths.js";
 import { realpathOfDeepestExisting } from "../utils/realpath.js";
+import { repoIsValid } from "./repo-validity.js";
 
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
@@ -156,6 +157,19 @@ export function validateRequest(
   ctx: ValidationContext,
 ): ValidationResult {
   const warnings: string[] = [];
+
+  // ---- 0. Repo-root sentinel (A1 / issue 1530) ------------------------
+  // The MCP server intentionally boots even when the configured root
+  // lacks a `.git` / `.jj` directory, so ListTools can inject the
+  // nineteen tool descriptions into the agent's context. The actual
+  // typed_edit calls, however, must refuse to run against a non-repo
+  // root — silently accepting them would write into an unrelated
+  // directory under `process.cwd()`, defeating the protected-path /
+  // canonicalization guarantees that repo-relative paths assume.
+  const repoCheck = repoIsValid(ctx.repoRoot);
+  if (!repoCheck.ok) {
+    return { ok: false, warnings: [repoCheck.error] };
+  }
 
   // ---- 1. Rationale ----------------------------------------------------
   if (request.rationale.trim().length === 0) {

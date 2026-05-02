@@ -1048,6 +1048,31 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
       const r = evaluateBashCommand("patch --dry-run < changes.diff");
       expect(r.decision).toBe("allow");
     });
+
+    // Issue 0428 — POSIX glued short-option form `-oFILE`. Boundary cases
+    // around `hasOutput`'s separator detection.
+    it("denies patch --dry-run -oFILE (POSIX glued, issue 0428)", () => {
+      const r = evaluateBashCommand(
+        "patch --dry-run -osrc/new.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies patch --check -oFILE (glued, --check variant)", () => {
+      const r = evaluateBashCommand(
+        "patch --check -ofile.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
+
+    it("denies patch --dry-run -o=FILE (= separator, regression guard)", () => {
+      // Boundary "at": `-o=FILE` was already matched by the existing
+      // `=` arm; lock it so the issue-0428 fix didn't regress this path.
+      const r = evaluateBashCommand(
+        "patch --dry-run -o=src/new.ts < changes.diff",
+      );
+      expect(r.decision).toBe("deny");
+    });
   });
 
   describe("Unicode line separators (item 8)", () => {
@@ -1307,6 +1332,197 @@ describe("evaluateBashCommand — a2-01 unicode whitespace tee bypass", () => {
   });
 });
 
+// ----------------------------------------------------------------------
+// Issue 1042-rsync — Unicode whitespace bypass.
+//
+// Pre-fix `rsync` was matched only via the literal substrings
+// `"rsync "` (ASCII space) and `"rsync\t"` (tab). Any non-ASCII
+// whitespace separator (U+00A0 NBSP, U+2009 thin space, U+3000
+// ideographic space, U+000B vertical tab, …) between the verb and its
+// arguments slipped past both, and `rsync` was not in DENY_VERBS, so
+// the command was allowed. The fix migrates `rsync` to DENY_VERBS,
+// where extractCommandVerb's `\S+` tokenizer correctly extracts the
+// verb regardless of separator.
+// ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// Issue 1042-tee — fd-redirect false-deny.
+//
+// matchesDangerousTee tokenizes on whitespace only and treats any
+// non-flag token as a possible repo write target. Pre-fix, fd-redirect
+// tokens like `2>&1`, `2>/dev/null`, `>&2`, etc. were classified as
+// in-repo paths because they don't start with `-` and don't start with
+// `/` (so they failed isInRepoWriteTarget's relative-path fallback).
+// The fix adds isFdRedirectToken to the loop so these are skipped.
+// ----------------------------------------------------------------------
+describe("evaluateBashCommand — 1042-tee fd-redirect false-deny", () => {
+  it("allows tee /tmp/log + 2>&1 (1042: stderr-fd dup is not a write target)", () => {
+    const r = evaluateBashCommand("echo hi | tee /tmp/build.log 2>&1");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows tee /tmp/log + 2>/dev/null (fd-redirect token glued)", () => {
+    const r = evaluateBashCommand("npm test 2>/dev/null | tee /tmp/test.log");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows tee /tmp/log + >&2 form", () => {
+    const r = evaluateBashCommand("echo x >&2 | tee /tmp/foo.log");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("denies tee with real in-repo target alongside 2>&1 (regression guard)", () => {
+    // Negative case: even with fd-redirect tokens skipped, a genuine
+    // in-repo write target must still trip the deny.
+    const r = evaluateBashCommand("echo x | tee src/foo.ts 2>&1");
+    expect(r.decision).toBe("deny");
+  });
+});
+
+// ----------------------------------------------------------------------
+// Issue 1100 — read-only-verb cp-bypass.
+//
+// Pre-fix `cat <file> > <in-repo target>` slipped past DENY_SUBSTRINGS
+// (which only matched the adjacent `"cat >"` substring) and past
+// DENY_VERBS (cat / head / grep / ... are read-only by default and
+// stay out of the deny-verb set). The functional effect was a `cp`
+// without an `edits.jsonl` entry, breaking the typed-surface invariant.
+// Fix: structural deny when verb ∈ READ_ONLY_VERBS AND any redirect
+// target is classified as in-repo by isInRepoWriteTarget. Safe-sink
+// targets (/tmp/, /dev/null, ~/.claude/, ...) remain allowed.
+// ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// Codex review fixes — adversarial cases caught during the bundle's
+// pre-commit review.
+// ----------------------------------------------------------------------
+describe("evaluateBashCommand — codex review fixes", () => {
+  it("denies cat src > .claude/../src/file.ts (relative `..` escapes safe-sink)", () => {
+    // Codex #1 (HIGH): the relative-path branch of isInRepoWriteTarget
+    // didn't normalize `..` segments, so `.claude/../src/foo.ts`
+    // matched the `.claude` safe-sink and was allowed even though the
+    // path resolves back inside the repo. Fix: path.normalize the
+    // relative target, parity with the absolute branch.
+    const r = evaluateBashCommand(
+      "cat src/foo.ts > .claude/../src/escaped.ts",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows cat src > .claude/notes/foo.md (genuine .claude target)", () => {
+    // Negative: the parity fix must not break legitimate in-component
+    // .claude writes.
+    const r = evaluateBashCommand("cat src/foo.ts > .claude/notes/foo.md");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("denies tee >|src/out (codex #3 — restore tee's repo-internal deny)", () => {
+    // Codex #3 (MEDIUM): the B3 fd-redirect skip ignores `>|src/out`,
+    // so the prior matchesDangerousTee scan no longer caught it. tee
+    // is a write verb by design — restore the deny via
+    // iterRedirectTargets(segment) inside matchesDangerousTee.
+    const r = evaluateBashCommand("echo x | tee >|src/out");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies tee 2>src/err (stderr redirect to in-repo path)", () => {
+    const r = evaluateBashCommand("echo x | tee 2>src/err");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still allows tee /tmp/log 2>&1 (B3 regression guard)", () => {
+    // The codex-#3 fix must NOT re-introduce the original 1042-tee
+    // false-positive — `2>&1` is fd-duplication and iterRedirectTargets
+    // skips it.
+    const r = evaluateBashCommand("echo x | tee /tmp/log.txt 2>&1");
+    expect(r.decision).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — 1100 cp-bypass via read-only verb redirect", () => {
+  it("denies cat <file> > <in-repo> (the original 1100 bypass)", () => {
+    const r = evaluateBashCommand(
+      "cat sandbox-inside/lib.ts > sandbox-inside/copy.ts",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies head src > dst (same class via head)", () => {
+    const r = evaluateBashCommand("head src/foo.ts > out.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies grep foo src > out.ts (read-only verb + in-repo redirect)", () => {
+    const r = evaluateBashCommand("grep foo src/bar.ts > out.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies tail -n 5 src > dst", () => {
+    const r = evaluateBashCommand("tail -n 5 src/foo.ts > tail.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies wc -l src > stats.txt (in-repo target)", () => {
+    const r = evaluateBashCommand("wc -l src/foo.ts > stats.txt");
+    expect(r.decision).toBe("deny");
+  });
+
+  // Negative side-effect cases: safe-sink redirects must stay allowed.
+  it("allows cat src > /tmp/scratch.txt (safe-sink prefix)", () => {
+    const r = evaluateBashCommand("cat src/foo.ts > /tmp/scratch.txt");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows cat src > /dev/null (safe-sink exact target)", () => {
+    const r = evaluateBashCommand("cat src/foo.ts > /dev/null");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows cat src > ~/.claude/notes/foo.md (1106 + 1100 interaction)", () => {
+    const r = evaluateBashCommand(
+      "cat src/foo.ts > ~/.claude/notes/foo.md",
+    );
+    expect(r.decision).toBe("allow");
+  });
+
+  it("still allows pure cat src (no redirect — read-only inspection)", () => {
+    const r = evaluateBashCommand("cat src/foo.ts");
+    expect(r.decision).toBe("allow");
+  });
+
+  it("still allows grep with no redirect", () => {
+    const r = evaluateBashCommand("grep -r foo src/");
+    expect(r.decision).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — 1042-rsync unicode whitespace bypass", () => {
+  it("denies rsync with ASCII space (regression guard)", () => {
+    const r = evaluateBashCommand("rsync -a src/ dst/");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies rsync with non-breaking space separator (U+00A0)", () => {
+    const r = evaluateBashCommand("rsync -a src/ dst/");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies rsync with thin space separator (U+2009)", () => {
+    const r = evaluateBashCommand(
+      "rsync --delete src/ /repo/target/",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies rsync with ideographic space separator (U+3000)", () => {
+    const r = evaluateBashCommand("rsync　-a src/ dst/");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies rsync with vertical tab separator (U+000B)", () => {
+    const r = evaluateBashCommand("rsync-a src/ dst/");
+    expect(r.decision).toBe("deny");
+  });
+});
+
 
 describe("evaluateBashCommand — a2-02 eval deferred-string bypass", () => {
   it("denies eval with literal cat-redirect string", () => {
@@ -1515,6 +1731,42 @@ describe("evaluateBashCommand — dogfood-001 in-repo redirect (warn since v0.1.
     expect(
       evaluateBashCommand("printf x > /tmp/foo.log").decision,
     ).toBe("allow");
+  });
+
+  // -------------------------------------------------------------------
+  // Issue 1106 — `.claude/` path-component-aware safe-sink.
+  // Claude Code agent state dir (~/.claude/projects/**, ~/.claude/plans/**)
+  // is AI-managed scratch space, not source code. Writes there must be
+  // silent-allow rather than warn.
+  // -------------------------------------------------------------------
+  it("allows printf > ~/.claude/plans/foo.md (1106 — agent state dir)", () => {
+    expect(
+      evaluateBashCommand("printf x > ~/.claude/plans/foo.md").decision,
+    ).toBe("allow");
+  });
+
+  it("allows printf > /home/user/.claude/projects/x/y.md (absolute form)", () => {
+    expect(
+      evaluateBashCommand(
+        "printf x > /home/user/.claude/projects/x/y.md",
+      ).decision,
+    ).toBe("allow");
+  });
+
+  it("does NOT match dotclaude (only literal `.claude` path component is safe)", () => {
+    // Negative case: a path that contains `claude` or `dotclaude` is NOT
+    // a Claude Code agent state dir. Must still warn (not allow).
+    const r = evaluateBashCommand(
+      "printf x > /home/user/dotclaude/foo.md",
+    );
+    expect(r.decision).toBe("warn");
+  });
+
+  it("does NOT match `.claudefoo` substring (component boundary required)", () => {
+    const r = evaluateBashCommand(
+      "printf x > /home/user/.claudefoo/bar.md",
+    );
+    expect(r.decision).toBe("warn");
   });
 
   it("allows echo foo &> /dev/null (combined-redirect form)", () => {

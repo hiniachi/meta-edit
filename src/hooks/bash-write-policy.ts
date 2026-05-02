@@ -73,9 +73,10 @@ export const DENY_SUBSTRINGS: readonly string[] = [
   // `tee` moved to DENY_VERBS so unicode whitespace separators
   // (U+00A0, U+2009, etc.) between `tee` and its target path don't
   // bypass the deny via the substring `"tee "`. See issue a2-01.
+  // Issue 1042-rsync: `rsync` migrated to DENY_VERBS for the same
+  // reason — substring match against `"rsync "` / `"rsync\t"` did not
+  // catch non-breaking-space / thin-space / ideographic-space variants.
   "git apply",
-  "rsync ",
-  "rsync\t",
 ];
 
 // Patterns that are "verb path" forms — denied when they look like they
@@ -352,6 +353,26 @@ function evaluateSegment(
         reason: denyReason(needle),
       };
     }
+  }
+
+  // Issue 1100: structural cp-bypass deny for read-only verbs.
+  //
+  // `cat src > dst`, `head src > dst`, `grep foo src > dst`, etc. are
+  // functionally `cp` (or in some cases `cp + transform`). Pre-fix,
+  // these slipped past DENY_SUBSTRINGS — `"cat >"` requires the verb
+  // and the redirect to be adjacent — and `cat`/`head`/`grep`/... are
+  // not in DENY_VERBS because their default mode is read-only.
+  //
+  // Use the same infrastructure as the v0.1.5 structural redirect
+  // check: a redirect target classified as in-repo by
+  // isInRepoWriteTarget (i.e. NOT in the safe-sink allowlist —
+  // /dev/null, /tmp/, /var/tmp/, /run/, /sys/, /.claude/) combined
+  // with a read-only verb is denied. /tmp/log, ~/.claude/foo, and
+  // /dev/null targets remain allowed (legitimate debug/scratch
+  // redirects).
+  const cpBypass = matchesReadOnlyVerbCpBypass(rawSegment);
+  if (cpBypass !== null) {
+    return cpBypass;
   }
 
   // Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`,
@@ -1058,6 +1079,10 @@ const DENY_VERBS: ReadonlySet<string> = new Set([
   "mv",
   "cp",
   "patch",
+  // Issue 1042-rsync: `rsync` migrated from DENY_SUBSTRINGS so Unicode
+  // whitespace separators (U+00A0, U+2009, U+3000, U+000B, …) between
+  // the verb and its arguments cannot bypass the deny.
+  "rsync",
 ]);
 
 // Path-classification helper used by dd / tee scoped denies. Conservative:
@@ -1087,6 +1112,23 @@ const SAFE_EXACT_TARGETS: ReadonlySet<string> = new Set([
   "/dev/zero",
 ]);
 
+// Path-component-aware safe-sink needles (issue 1106). Matches anywhere
+// the literal needle appears as a directory component — both leading
+// and trailing boundaries must be path separators (or end-of-string),
+// and the leading side must be at the start of a token / after a
+// separator. Distinct from SAFE_ABSOLUTE_PREFIXES (which anchors at the
+// start of an absolute path) because the relevant sinks live under the
+// user's home directory, which the bash hook does not expand.
+//
+//   `.claude`   — Claude Code agent-state dir (~/.claude/projects/**,
+//                 ~/.claude/plans/**). Writes here are AI-managed
+//                 scratch space, not part of any source repo.
+//
+// Negative-match examples (kept correct via containsAsPathComponent):
+//   `/home/nia/dotclaude/foo`         — no `.claude` component, no match
+//   `/path/to/.claudefoo/bar`         — `.claudefoo` is one component, no match
+const SAFE_PATH_COMPONENT_NEEDLES: readonly string[] = [".claude"];
+
 function isInRepoWriteTarget(target: string): boolean {
   if (target.length === 0) return false;
   if (SAFE_EXACT_TARGETS.has(target)) return false;
@@ -1095,11 +1137,21 @@ function isInRepoWriteTarget(target: string): boolean {
   // `/tmp/` but resolves OUTSIDE the safe sink. Resolve `..` segments
   // before the prefix check so traversal cannot escape the allowlist.
   // path.normalize on POSIX collapses `a/b/../c` → `a/c` while leaving
-  // genuine path strings unchanged. dogfood-001 self-review caught this.
-  const resolved = target.startsWith("/")
-    ? path.normalize(target)
-    : target;
+  // genuine path strings unchanged. dogfood-001 self-review caught
+  // this for the absolute branch; codex-review #1 (HIGH) caught the
+  // matching parity bug on the relative branch — `.claude/../src/foo.ts`
+  // had `.claude` as a path component (matched the safe-sink needle)
+  // even though the path resolves to `src/foo.ts` inside the repo.
+  // Normalize relative targets too to close that escape.
+  const resolved = path.normalize(target);
   if (SAFE_EXACT_TARGETS.has(resolved)) return false;
+  // Path-component-aware safe sinks. Apply BEFORE the absolute-prefix
+  // branch so `~/.claude/...` (relative-shaped, since we don't expand
+  // tildes) and `/home/<user>/.claude/...` (absolute) both reach the
+  // check.
+  for (const needle of SAFE_PATH_COMPONENT_NEEDLES) {
+    if (containsAsPathComponent(resolved, needle)) return false;
+  }
   if (resolved.startsWith("/")) {
     return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
@@ -1194,9 +1246,51 @@ function matchesDangerousTee(segment: string): boolean {
   for (; i < tokens.length; i++) {
     const tok = tokens[i]!;
     if (tok.startsWith("-")) continue;
+    // Issue 1042-tee: skip fd-redirect tokens. `tokenizeSegment`
+    // splits on whitespace only, so `2>&1`, `2>/dev/null`, `>&2`,
+    // `1>file`, `3>&1`, etc. arrive here as single tokens that don't
+    // start with `-`. `isInRepoWriteTarget` treats anything not in
+    // SAFE_EXACT_TARGETS / SAFE_ABSOLUTE_PREFIXES as a relative
+    // (in-repo) path, so these fd-redirect tokens were producing
+    // false-positive denies on legitimate pipelines like
+    // `npm test 2>&1 | tee /tmp/log`.
+    if (isFdRedirectToken(tok)) continue;
     if (isInRepoWriteTarget(tok)) return true;
   }
+  // Codex review #3 (MEDIUM): the fd-redirect skip above intentionally
+  // ignores tokens like `>|src/out` so legitimate `tee /tmp/log 2>&1`
+  // pipelines aren't denied. But tee is a write verb by design — when
+  // the redirect FORM carries a real in-repo target (`tee >|src/out`,
+  // `tee 2>src/err`, `tee 1>src/log`), the higher-level
+  // redirectsOutsideSafeSinkAllowlist only emits warn (v0.1.5
+  // loosening), which is too weak for tee. Run iterRedirectTargets
+  // explicitly here and restore the deny if any target lands in-repo.
+  for (const target of iterRedirectTargets(segment)) {
+    if (target.length === 0) continue;
+    if (isInRepoWriteTarget(target)) return true;
+  }
   return false;
+}
+
+/**
+ * True for tokens that look like shell fd-redirect operators rather
+ * than plain file paths. Matches:
+ *   - bare `>` / `>>` / `<`
+ *   - `>&N`, `&>...`
+ *   - `<digits>>...`, `<digits>>&<digits>` (e.g. `2>&1`, `3>file`)
+ *
+ * These should be skipped by tee/dd argument scanners so a stderr
+ * redirection on the same pipeline does not get classified as the
+ * write target.
+ */
+function isFdRedirectToken(tok: string): boolean {
+  if (tok.length === 0) return false;
+  // `>file`, `>>file`, `>&N`, `&>file`
+  if (tok.startsWith(">") || tok.startsWith("&>")) return true;
+  if (tok.startsWith("<")) return true;
+  // `2>&1`, `2>/dev/null`, `42>>foo`, etc. — leading digits followed
+  // by `>` mark this as an fd-redirect.
+  return /^\d+(?:>|<)/.test(tok);
 }
 
 // Per-wrapper short options that take a separate value argument. After
@@ -1593,6 +1687,41 @@ function redirectsOutsideSafeSinkAllowlist(rawSegment: string): boolean {
   return false;
 }
 
+/**
+ * Issue 1100: detect the cp-bypass class —
+ *   `<read-only verb> [args] > <in-repo path>`
+ * is functionally a copy/transform-into a repo file. Pre-fix this
+ * slipped past DENY_SUBSTRINGS' adjacent `"cat >"` needle and past
+ * DENY_VERBS (cat/head/grep/... are in READ_ONLY_VERBS, not DENY_VERBS,
+ * by intent — read-only inspection is desirable).
+ *
+ * The fix is structural: when the leading verb is in READ_ONLY_VERBS
+ * AND any redirect target is classified as in-repo by isInRepoWriteTarget,
+ * deny. Safe-sink targets (`/dev/null`, `/tmp/...`, `~/.claude/...`)
+ * remain allowed by virtue of isInRepoWriteTarget returning false for
+ * them. Returns the deny decision or `null` (no opinion).
+ */
+function matchesReadOnlyVerbCpBypass(rawSegment: string): HookDecision | null {
+  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb === null || !READ_ONLY_VERBS.has(verb)) return null;
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0) continue;
+    if (isInRepoWriteTarget(target)) {
+      return {
+        decision: "deny",
+        reason:
+          `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` +
+          `into a repo file. Use a typed edit_* tool (e.g. edit_create_file, ` +
+          `edit_refactor_only) instead of redirecting a read-only verb's ` +
+          `stdout to a repository path. Out-of-repo redirects (` +
+          `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`,
+      };
+    }
+  }
+  return null;
+}
+
 // Detect `<decoder> ... | <shell>` patterns where a runtime payload is
 // decoded then piped into a shell interpreter. Static analysis cannot
 // see the decoded contents, so we deny the structural pipe outright.
@@ -1677,7 +1806,17 @@ function hasSafetyFlag(segment: string, verb: string): boolean {
     // output file, fall back to deny.
     const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
     if (!hasDryRun) return false;
-    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(
+    // Issue 0428: POSIX short-option grammar allows the value to be
+    // GLUED to the option letter (`-oFILE`). The pre-fix regex only
+    // matched space- / `=` / end-of-string-separated forms, so
+    // `patch --dry-run -osrc/new.ts < d.diff` slipped past the
+    // safety-flag carve-out and the segment was treated as read-only.
+    // The `\S` arm closes that bypass: any non-whitespace character
+    // immediately after `-o` is treated as the start of a glued value.
+    // False-positive surface (e.g. `-output` as a literal one-dash
+    // string) is acceptable — patch would reject the command anyway,
+    // and meta-edit "denying a command patch wouldn't run" is harmless.
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|\S|$)|--output(?:\s|=|$))/.test(
       segment,
     );
     return !hasOutput;

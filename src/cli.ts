@@ -9,8 +9,8 @@ import {
   runInstallHooks,
   runUninstallHooks,
 } from "./cli/hooks-cmd.js";
+import { renderHelp } from "./cli/help-cmd.js";
 import { VERSION } from "./version.js";
-import { SPEC_URL } from "./docs-urls.js";
 
 export async function main(argv: string[]): Promise<number> {
   const [, , subcommand, ...rest] = argv;
@@ -21,8 +21,21 @@ export async function main(argv: string[]): Promise<number> {
     case undefined:
     case "-h":
     case "--help":
-      printHelp();
+    case "help": {
+      // First positional after the help flag, if any, names a typed_edit
+      // tool whose verbatim description should be printed. This is the
+      // recovery surface for issue 1530 — the agent runs `meta-edit -h
+      // edit_boundary_condition` from a Bash to pull the load-bearing
+      // description text back into its context.
+      const toolArg = rest[0];
+      const result = renderHelp(toolArg);
+      if (!result.ok) {
+        err.write(`${result.error}\n`);
+        return 64;
+      }
+      out.write(result.output);
       return 0;
+    }
 
     case "--version":
     case "-v":
@@ -79,30 +92,13 @@ export async function main(argv: string[]): Promise<number> {
       return runUninstallHooks({ scope: parsed.scope, out, err });
     }
 
-    default:
+    default: {
       err.write(`meta-edit: unknown subcommand "${subcommand}"\n`);
-      printHelp();
+      const help = renderHelp();
+      if (help.ok) out.write(help.output);
       return 64;
+    }
   }
-}
-
-function printHelp(): void {
-  process.stdout.write(`meta-edit ${VERSION}
-
-Usage:
-  meta-edit serve                          Run the MCP stdio server.
-  meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]
-                                           Print edits.jsonl entries.
-  meta-edit summary [--since DATE]         Aggregate statistics from the edit log.
-  meta-edit install-hooks --scope user|project
-                                           Install Claude Code hooks into settings.json.
-  meta-edit uninstall-hooks --scope user|project
-                                           Remove Claude Code hooks from settings.json.
-  meta-edit --version                      Show version.
-  meta-edit --help                         Show this help.
-
-See ${SPEC_URL} for full specification.
-`);
 }
 
 // Only run when invoked directly as a script (not when imported by tests).

@@ -129,6 +129,34 @@ describe("validateRequest — disk + path-safety", () => {
     };
   }
 
+  it("rejects calls when repoRoot has no .git/.jj sentinel (issue 1530)", () => {
+    // Mirrors the production onboarding flow: server booted in a fresh
+    // directory, ListTools landed descriptions in agent context, then the
+    // agent attempts a typed_edit. validateRequest must surface a clear
+    // not_a_repository error rather than letting the call land against
+    // an unrelated filesystem location under process.cwd().
+    const isolatedTmp = fs.mkdtempSync(
+      path.join(os.tmpdir(), "meta-edit-common-norepo-"),
+    );
+    try {
+      const r = validateRequest(
+        "edit_boundary_condition",
+        modifyReq(),
+        { repoRoot: isolatedTmp },
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(
+          r.warnings.some((w) =>
+            w.includes("does not appear to be a repository root"),
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      fs.rmSync(isolatedTmp, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an absolute target_file", () => {
     const r = validateRequest("edit_boundary_condition",
       modifyReq({ target_file: "/etc/passwd" }), ctx());
