@@ -1358,11 +1358,10 @@ If configuration is needed in the future (e.g., adjusting allowlist for the bash
 
 ### Recommended stack
 
-- TypeScript for the MCP server and CLI
+- TypeScript for the MCP server, hooks, and CLI
 - `zod` for argument schemas
-- A well-maintained unified-diff library (e.g., `jsdiff`) for patch application — do not write your own diff engine. Verify the chosen library handles file additions, deletions, and renames if you intend to allow those in patches; restrict patch operations to the subset the library handles correctly
-- JSONL for the edit log — no database, no migration concerns
-- GitHub Actions for the CI sample
+- JSONL for the edit log; no database
+- Bun + Node 20 in CI
 
 ### Repository layout
 
@@ -1370,44 +1369,29 @@ If configuration is needed in the future (e.g., adjusting allowlist for the bash
 meta-edit/
   src/
     tools/
-      common.ts              shared types, validation, patch application
-      descriptions.ts        the nineteen descriptions, verbatim from §4
-      registry.ts            MCP tool registration
-    server.ts                MCP stdio server entry
-    cli.ts                   CLI entry
+      common.ts             shared types, validation, token issuance
+      descriptions.ts       the nineteen descriptions, verbatim from §4
+      registry.ts           MCP tool registration
+    server.ts               MCP stdio server entry
+    cli.ts                  CLI entry
     state/
-      edit-log.ts            jsonl read/write
-      protected-paths.ts     path matching
+      edit-log.ts           jsonl read/write
+      grants.ts             token issuance / lookup / consumption
+      protected-paths.ts    path matching
     hooks/
       deny-raw-edit.ts
       deny-bash-write-bypass.ts
   examples/
     .github/workflows/meta-edit-summary.yml
   package.json
-  README.md
-  CLAUDE.md
-  SPEC.md                    this document
-  LICENSE
+  README.md  CLAUDE.md  SPEC.md
 ```
 
-### The most important file
+### Descriptions-verbatim rule
 
-`src/tools/descriptions.ts` is the most important file in the repository. It contains the nineteen descriptions from §4 of this document, verbatim. The spec and the file must stay in sync. When one is updated, the other must be updated immediately, in the same change.
+`src/tools/descriptions.ts` contains the nineteen descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
 
-```typescript
-export const TOOL_DESCRIPTIONS = {
-  edit_refactor_only: `Refactor production code without changing observable behavior.
-
-Use this tool when:
-- ...`,
-
-  edit_test_only_change: `...`,
-
-  // ... nineteen total
-} as const;
-```
-
-Tool handlers share common logic via helpers, but each tool is registered separately with its own description. Do not collapse them into a single generic handler that takes a `kind` argument. The whole point of nineteen separate tools is that **tool selection is the reasoning step**.
+Tool handlers share common logic via helpers, but each tool is registered separately under the MCP server with its own description. Per Article 4, tool selection is the cognitive intervention; the surface is not collapsed into a generic `kind`-parameterized handler.
 
 ---
 
