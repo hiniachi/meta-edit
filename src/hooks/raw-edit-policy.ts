@@ -168,7 +168,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   const { toolName, toolInput, repoRoot, grants, log } = args;
   const nowFn = args.now ?? (() => new Date());
 
-  // 0. The matcher should already have filtered to the four raw edits;
+  // 0. The matcher should already have filtered to the raw-edit set;
   // re-check defensively. evaluateRawEdit returns `allow` for unknown
   // names — promote that to a deny so a misconfigured matcher fails
   // closed rather than waving the call through.
@@ -177,6 +177,24 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     return {
       decision: "deny",
       reason: `deny-raw-edit invoked for non-raw tool "${toolName}"; check hook matcher`,
+    };
+  }
+
+  // 0a. opencode's apply_patch carries no top-level file_path — its
+  // input is a unified-diff blob with embedded `*** Update File:` /
+  // `*** Add File:` headers. The grant flow keys on a single canonical
+  // file path (SPEC §5.1), so we cannot bind a grant for an apply_patch
+  // call. Deny outright with an actionable reason rather than letting
+  // the call fall through to the "missing file_path" path below, whose
+  // wording would mislead the agent into thinking they should retry
+  // with a file_path argument that the tool simply does not have.
+  if (lcName === "apply_patch") {
+    return {
+      decision: "deny",
+      reason:
+        `meta-edit denies "apply_patch": its unified-diff input has no top-level file_path to bind a typed_edit declaration against. ` +
+        `Use the opencode \`edit\` or \`write\` tool (which DO carry file_path) after a typed_edit declaration, or invoke a typed edit_* MCP tool directly. ` +
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
     };
   }
 
