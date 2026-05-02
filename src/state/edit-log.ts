@@ -14,9 +14,13 @@ import { RiskLevelSchema } from "../tools/common.js";
 //                   is successfully issued. Carries the full declaration
 //                   payload (kind, target_file, rationale, risk_level,
 //                   test_files, binding, token).
-//   2. "consumed" -- written by the deny-raw-edit hook (PostToolUse) once
-//                   a binding has been consumed by a native Edit/Write/
-//                   MultiEdit call. Carries (edit_id, ts, consuming_tool).
+//   2. "consumed" -- written by the deny-raw-edit hook (PreToolUse) once
+//                   a token's binding has been authorized for a native
+//                   Edit/Write/MultiEdit call. The record is appended
+//                   BEFORE the native write executes; the audit log
+//                   captures hook authorization, not write success
+//                   (write success is git's job). Carries
+//                   (edit_id, ts, consuming_tool).
 //   3. "rejected" -- written by the typed_edit MCP handler on validation
 //                   failure. Carries (edit_id, ts, kind, target_file,
 //                   audit_error).

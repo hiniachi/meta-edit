@@ -44,9 +44,12 @@ export function formatSummary(
   entries: EditLogEntry[],
   since: Date | undefined,
 ): string {
-  // Reconcile by edit_id: an issued record paired with a consumed sibling is
-  // a fully-applied edit; an issued record without a consumed sibling is an
-  // abandoned/expired declaration. A rejected record never has a sibling.
+  // Reconcile by edit_id: an issued record paired with a consumed sibling
+  // means the deny-raw-edit hook authorized the corresponding native
+  // Edit/Write call (PreToolUse, before the write executes). The actual
+  // write success is not in the audit log — that's git's job. An issued
+  // record without a consumed sibling is an abandoned/expired declaration.
+  // A rejected record never has a sibling.
   const issuedIds = new Set<string>();
   const consumedIds = new Set<string>();
   const rejectedIds = new Set<string>();
@@ -60,10 +63,10 @@ export function formatSummary(
   // record always has an issued sibling (or the audit log is corrupt; the
   // reconciliation surfaces that as `issued without consumed`).
   const totalDeclarations = issuedIds.size + rejectedIds.size;
-  let appliedCount = 0;
+  let authorizedCount = 0;
   let abandonedCount = 0;
   for (const id of issuedIds) {
-    if (consumedIds.has(id)) appliedCount++;
+    if (consumedIds.has(id)) authorizedCount++;
     else abandonedCount++;
   }
   const rejectedCount = rejectedIds.size;
@@ -82,8 +85,8 @@ export function formatSummary(
   lines.push(`meta-edit summary (${sinceLabel})`);
   lines.push("");
   lines.push(`Total declarations: ${totalDeclarations}`);
-  lines.push(`  Applied (issued + consumed):  ${appliedCount}`);
-  lines.push(`  Abandoned (issued, never consumed): ${abandonedCount}`);
+  lines.push(`  Authorized (hook approved write): ${authorizedCount}`);
+  lines.push(`  Abandoned (issued, never authorized): ${abandonedCount}`);
   lines.push(`  Rejected (validation failure): ${rejectedCount}`);
   lines.push("");
 

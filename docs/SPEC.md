@@ -1244,7 +1244,7 @@ The pre-condition check is **staleness detection**, not a TOCTOU defense: it cat
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
-After the native write completes, a PostToolUse path appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6).
+When the hook authorizes the native write (i.e. just before returning `allow`), it appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6). The record captures hook authorization, not write completion — the actual write success is git's job to verify, and under Article 3's friendly-AI threat model, write failures after hook approval are rare and recoverable.
 
 Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through this hook — see issue 1108) are an acknowledged hook-scope gap. Closing that gap is a future hook expansion (PostToolUse monitoring, MCP-write allowlist), not part of this hook.
 
@@ -1284,7 +1284,7 @@ Each declaration produces two records:
  "token":"met_20260502_a3f9b2..."}
 ```
 
-2. **Consumed** — written when the token is consumed by the deny-raw-edit hook (see §5).
+2. **Consumed** — written when the deny-raw-edit hook authorizes a native write (PreToolUse, before the write executes). "Consumed" denotes hook authorization; write success is not part of the audit log (see §5).
 
 ```json
 {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00",

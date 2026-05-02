@@ -57,7 +57,7 @@ describe("formatSummary", () => {
   it("renders zero edits", () => {
     const text = formatSummary([], undefined);
     expect(text).toContain("Total declarations: 0");
-    expect(text).toContain("Applied (issued + consumed):  0");
+    expect(text).toContain("Authorized (hook approved write): 0");
     expect(text).toContain("Rejected (validation failure): 0");
     expect(text).toContain("(no edits yet)");
     // edit_policy_change is always shown even with zero count.
@@ -78,8 +78,8 @@ describe("formatSummary", () => {
     const text = formatSummary(entries, undefined);
     // 3 issued + 1 rejected = 4 declarations.
     expect(text).toContain("Total declarations: 4");
-    expect(text).toContain("Applied (issued + consumed):  2");
-    expect(text).toContain("Abandoned (issued, never consumed): 1");
+    expect(text).toContain("Authorized (hook approved write): 2");
+    expect(text).toContain("Abandoned (issued, never authorized): 1");
     expect(text).toContain("Rejected (validation failure): 1");
   });
 

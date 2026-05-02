@@ -18612,11 +18612,11 @@ function formatSummary(entries, since) {
       rejectedIds.add(e.edit_id);
   }
   const totalDeclarations = issuedIds.size + rejectedIds.size;
-  let appliedCount = 0;
+  let authorizedCount = 0;
   let abandonedCount = 0;
   for (const id of issuedIds) {
     if (consumedIds.has(id))
-      appliedCount++;
+      authorizedCount++;
     else
       abandonedCount++;
   }
@@ -18630,8 +18630,8 @@ function formatSummary(entries, since) {
   lines.push(`meta-edit summary (${sinceLabel})`);
   lines.push("");
   lines.push(`Total declarations: ${totalDeclarations}`);
-  lines.push(`  Applied (issued + consumed):  ${appliedCount}`);
-  lines.push(`  Abandoned (issued, never consumed): ${abandonedCount}`);
+  lines.push(`  Authorized (hook approved write): ${authorizedCount}`);
+  lines.push(`  Abandoned (issued, never authorized): ${abandonedCount}`);
   lines.push(`  Rejected (validation failure): ${rejectedCount}`);
   lines.push("");
   lines.push("By tool:");
@@ -19044,4 +19044,4 @@ export {
   main
 };
 
-//# debugId=A262B2C2BB64F48264756E2164756E21
+//# debugId=B3B49AEB80034D8264756E2164756E21
