@@ -14,6 +14,16 @@ discovered_in: 2026-05-03 onboarding dogfood — fresh-directory adoption flow
 
 # [UX/Onboarding] Late-connect MCP path silently strips tool descriptions from agent context
 
+## Status
+
+✅ **RESOLVED** by PR #60 (merged 2026-05-02). `assertIsRepo` made lazy
+in `src/server.ts`; the per-tool gate moved into `validateRequest` via
+the new `repoIsValid` helper. Server now boots in non-repo directories
+so `ListTools` lands the tool descriptions in the agent's context
+before `git init`; per-tool calls return a clear `not_a_repository`
+warning until the directory becomes a repo. Fix direction (1) of this
+filing landed verbatim.
+
 ## TL;DR
 
 Onboarding sequence:

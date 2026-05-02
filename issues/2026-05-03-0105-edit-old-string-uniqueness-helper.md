@@ -11,6 +11,15 @@ discovered_in: 2026-05-03 v0.2.1 dogfood agent-burden audit
 
 # [UX] Edit's `old_string` uniqueness is the agent's responsibility, with no helper from meta-edit
 
+## Status
+
+✅ **CLOSED — option 3 accepted** by PR #61 (merged 2026-05-02).
+Per the PR body: "the no-match-or-multi-match error is reported by
+native Edit AFTER the deny-raw-edit hook approves, so meta-edit has
+no detection surface here without re-implementing Edit's matcher
+(Article 7 out-of-scope)." Constitutional default (rely on Claude
+Code's native Edit) stands.
+
 ## Concrete burden
 
 Claude Code's native `Edit` requires `old_string` to occur **exactly

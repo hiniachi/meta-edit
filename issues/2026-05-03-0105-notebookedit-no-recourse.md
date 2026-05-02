@@ -11,6 +11,16 @@ discovered_in: 2026-05-03 v0.2.1 dogfood agent-burden audit
 
 # [DESIGN] NotebookEdit is denied with no typed-surface recourse
 
+## Status
+
+✅ **RESOLVED** by PR #61 (merged 2026-05-02, commit `a66c098`).
+Explicit NotebookEdit deny removed from `evaluateTokenedEdit`. The
+prerequisite groundwork shipped earlier (v0.2.1 dropped `simulate()`,
+v0.2.2 added `notebook_path` extraction, v0.2.3 added the
+out-of-repo allow), so NotebookEdit now routes through the same
+canonicalize → grant → consume → `before_sha256` staleness flow as
+the other three raw edits. Option 2 of this filing was taken.
+
 ## Background
 
 `evaluateTokenedEdit` in `src/hooks/raw-edit-policy.ts` denies any

@@ -12,6 +12,17 @@ discovered_in: 2026-05-03 PR #60 (adoption-flow + bash-write polish bundle) auth
 
 # [UX] bash hook scans `git commit -m` / `gh pr create --body` prose as if it were a shell command
 
+## Status
+
+✅ **RESOLVED** by PR #61 (merged 2026-05-02, commit `67d955c`)
+together with the parent issue 1107. Position-aware
+`extractCommandVerbInfo({verb, verbEnd})` distinguishes verb-position
+(deny) from argument-position (warn). Recursion through `bash -c`,
+`eval`, `find -exec`, command substitution, and process substitution
+feeds inner segments back through the same routine, so inner-segment
+denies remain intact. Regression tests pin the `cat >`, `tee `, and
+`patch` dogfood examples cited in this filing.
+
 ## TL;DR
 
 Writing a commit message that contains the literal substrings `cat >`,

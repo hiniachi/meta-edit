@@ -11,6 +11,15 @@ discovered_in: 2026-05-03 v0.2.1 dogfood agent-burden audit
 
 # [UX] 19 tool descriptions cost ~7-8K tokens loaded on every typed_edit call
 
+## Status
+
+🟡 **DEFERRED** by PR #61 to a "v0.3 prose pass" follow-up. Per the
+PR body: "would require ~20 separate `edit_policy_change` declarations
++ verbatim parity validation for each tool description. Beyond this
+bundle's scope." Surface count is now 18 post-v0.3.1, so the target
+is "tone-refresh each of 18 descriptions" rather than the 19 stated
+in the original filing.
+
 ## Measurement
 
 `src/tools/descriptions.ts` is roughly 31 KB / 600 lines / ~8K tokens
