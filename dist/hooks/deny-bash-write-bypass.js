@@ -205,9 +205,7 @@ var DENY_SUBSTRINGS = [
   "perl -i",
   "cat >",
   "cat >>",
-  "git apply",
-  "rsync ",
-  "rsync\t"
+  "git apply"
 ];
 var PROTECTED_PATH_NEEDLES = [
   ".meta-edit/state",
@@ -321,6 +319,10 @@ function evaluateSegment(rawSegment, opts = {}) {
         reason: denyReason(needle)
       };
     }
+  }
+  const cpBypass = matchesReadOnlyVerbCpBypass(rawSegment);
+  if (cpBypass !== null) {
+    return cpBypass;
   }
   let firstWarn = null;
   const hosted = evaluateShellHostedPayload(rawSegment, opts);
@@ -760,7 +762,8 @@ var WRAPPER_VERBS = new Set([
 var DENY_VERBS = new Set([
   "mv",
   "cp",
-  "patch"
+  "patch",
+  "rsync"
 ]);
 var SAFE_ABSOLUTE_PREFIXES = [
   "/tmp/",
@@ -774,14 +777,19 @@ var SAFE_EXACT_TARGETS = new Set([
   "/dev/stderr",
   "/dev/zero"
 ]);
+var SAFE_PATH_COMPONENT_NEEDLES = [".claude"];
 function isInRepoWriteTarget(target) {
   if (target.length === 0)
     return false;
   if (SAFE_EXACT_TARGETS.has(target))
     return false;
-  const resolved = target.startsWith("/") ? path3.normalize(target) : target;
+  const resolved = path3.normalize(target);
   if (SAFE_EXACT_TARGETS.has(resolved))
     return false;
+  for (const needle of SAFE_PATH_COMPONENT_NEEDLES) {
+    if (containsAsPathComponent(resolved, needle))
+      return false;
+  }
   if (resolved.startsWith("/")) {
     return !SAFE_ABSOLUTE_PREFIXES.some((p) => resolved.startsWith(p));
   }
@@ -861,10 +869,27 @@ function matchesDangerousTee(segment) {
     const tok = tokens[i];
     if (tok.startsWith("-"))
       continue;
+    if (isFdRedirectToken(tok))
+      continue;
     if (isInRepoWriteTarget(tok))
       return true;
   }
+  for (const target of iterRedirectTargets(segment)) {
+    if (target.length === 0)
+      continue;
+    if (isInRepoWriteTarget(target))
+      return true;
+  }
   return false;
+}
+function isFdRedirectToken(tok) {
+  if (tok.length === 0)
+    return false;
+  if (tok.startsWith(">") || tok.startsWith("&>"))
+    return true;
+  if (tok.startsWith("<"))
+    return true;
+  return /^\d+(?:>|<)/.test(tok);
 }
 var WRAPPER_VALUE_OPTS = {
   sudo: new Set([
@@ -1094,6 +1119,23 @@ function redirectsOutsideSafeSinkAllowlist(rawSegment) {
   }
   return false;
 }
+function matchesReadOnlyVerbCpBypass(rawSegment) {
+  const trimmed = stripLeadingEnvAssignments(rawSegment.trimStart());
+  const verb = extractCommandVerb(trimmed);
+  if (verb === null || !READ_ONLY_VERBS.has(verb))
+    return null;
+  for (const target of iterRedirectTargets(rawSegment)) {
+    if (target.length === 0)
+      continue;
+    if (isInRepoWriteTarget(target)) {
+      return {
+        decision: "deny",
+        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (e.g. edit_create_file, ` + `edit_refactor_only) instead of redirecting a read-only verb's ` + `stdout to a repository path. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
+      };
+    }
+  }
+  return null;
+}
 var DECODE_AND_EXEC_RE = /(?:base64\s+(?:--decode\b|-[A-Za-z]*d[A-Za-z]*\b)|xxd\s+-[A-Za-z]*r[A-Za-z]*\b|openssl\s+(?:base64|enc)\b[^|]*?\s-d\b)[^|]*\|\s*(?:sudo\s+|env\s+(?:[A-Z][A-Z0-9_]*=\S*\s+)*)?(?:\/\S+\/)?(?:bash|sh|dash|zsh|ksh|ash)\b/;
 function matchesDecodeAndExecute(command) {
   return DECODE_AND_EXEC_RE.test(command);
@@ -1142,7 +1184,7 @@ function hasSafetyFlag(segment, verb) {
     const hasDryRun = /(?:^|\s)(?:--dry-run|--check)(?:\s|$)/.test(segment);
     if (!hasDryRun)
       return false;
-    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|$)|--output(?:\s|=|$))/.test(segment);
+    const hasOutput = /(?:^|\s)(?:-o(?:\s|=|\S|$)|--output(?:\s|=|$))/.test(segment);
     return !hasOutput;
   }
   return false;
@@ -1547,4 +1589,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=BF200EE7FDB7335664756E2164756E21
+//# debugId=DFEB78E3824DAF0264756E2164756E21

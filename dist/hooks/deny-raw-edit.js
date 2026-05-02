@@ -45,7 +45,7 @@ var __export = (target, all) => {
 };
 
 // src/hooks/deny-raw-edit.ts
-import * as path7 from "node:path";
+import * as path8 from "node:path";
 
 // src/hooks/hook-runtime.ts
 async function readStdin() {
@@ -99,12 +99,12 @@ function replyAllowWithWarning(reason) {
 
 // src/hooks/raw-edit-policy.ts
 import * as crypto2 from "node:crypto";
-import * as fs5 from "node:fs/promises";
-import * as path5 from "node:path";
+import * as fs6 from "node:fs/promises";
+import * as path6 from "node:path";
 
 // src/state/edit-log.ts
-import * as fs4 from "node:fs";
-import * as path4 from "node:path";
+import * as fs5 from "node:fs";
+import * as path5 from "node:path";
 
 // node_modules/zod/v3/external.js
 var exports_external = {};
@@ -4081,8 +4081,8 @@ var coerce = {
 var NEVER = INVALID;
 // src/tools/common.ts
 import * as crypto from "node:crypto";
-import * as fs3 from "node:fs";
-import * as path3 from "node:path";
+import * as fs4 from "node:fs";
+import * as path4 from "node:path";
 
 // src/tools/descriptions.ts
 var TOOL_NAMES = [
@@ -4834,6 +4834,20 @@ function isProtectedPath(p, options = {}) {
   return false;
 }
 
+// src/tools/repo-validity.ts
+import * as fs3 from "node:fs";
+import * as path3 from "node:path";
+function repoIsValid(dir) {
+  const sentinels = [".git", ".jj"];
+  const found = sentinels.some((s) => fs3.existsSync(path3.join(dir, s)));
+  if (found)
+    return { ok: true };
+  return {
+    ok: false,
+    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory or restart the MCP server with ` + `--repo-root pointed at the actual repository root.`
+  };
+}
+
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
 var AdditionalFileSchema = exports_external.object({
@@ -4857,6 +4871,10 @@ function sha256Hex(content) {
 var SHA256_EMPTY = sha256Hex("");
 function validateRequest(toolName, request, ctx) {
   const warnings = [];
+  const repoCheck = repoIsValid(ctx.repoRoot);
+  if (!repoCheck.ok) {
+    return { ok: false, warnings: [repoCheck.error] };
+  }
   if (request.rationale.trim().length === 0) {
     warnings.push("rationale must be non-empty");
   }
@@ -4928,7 +4946,7 @@ function validateRequest(toolName, request, ctx) {
   return { ok: true, primaryBinding, additionalBindings };
 }
 function checkPathSafety(p, repoRoot) {
-  if (path3.isAbsolute(p)) {
+  if (path4.isAbsolute(p)) {
     return {
       ok: false,
       error: `path "${p}" is absolute; must be repository-relative`
@@ -4952,9 +4970,9 @@ function checkPathSafety(p, repoRoot) {
   if (norm.length === 0) {
     return { ok: false, error: "path is empty after normalization" };
   }
-  const lexicalRoot = path3.resolve(repoRoot);
-  const lexicalResolved = path3.resolve(lexicalRoot, norm);
-  if (lexicalResolved !== lexicalRoot && !lexicalResolved.startsWith(lexicalRoot + path3.sep)) {
+  const lexicalRoot = path4.resolve(repoRoot);
+  const lexicalResolved = path4.resolve(lexicalRoot, norm);
+  if (lexicalResolved !== lexicalRoot && !lexicalResolved.startsWith(lexicalRoot + path4.sep)) {
     return { ok: false, error: `path "${p}" escapes repository root` };
   }
   const realRoot = realpathOrSelf(lexicalRoot);
@@ -4965,13 +4983,13 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" could not be canonicalized via realpath; failing closed`
     };
   }
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path3.sep)) {
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path4.sep)) {
     return {
       ok: false,
       error: `path "${p}" escapes repository root after symlink resolution`
     };
   }
-  const canonical = normalizeRepoRelative(path3.relative(realRoot, realResolved));
+  const canonical = normalizeRepoRelative(path4.relative(realRoot, realResolved));
   if (canonical.length === 0) {
     return { ok: false, error: `path "${p}" resolves to the repository root` };
   }
@@ -4985,7 +5003,7 @@ function checkPathSafety(p, repoRoot) {
 }
 function realpathOrSelf(p) {
   try {
-    return fs3.realpathSync(p);
+    return fs4.realpathSync(p);
   } catch {
     return p;
   }
@@ -4998,10 +5016,10 @@ function containsParentTraversal(p) {
   return false;
 }
 function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
-  const absolute = path3.join(repoRoot, canonical);
+  const absolute = path4.join(repoRoot, canonical);
   let onDisk = null;
   try {
-    onDisk = fs3.readFileSync(absolute, "utf8");
+    onDisk = fs4.readFileSync(absolute, "utf8");
   } catch (e) {
     const code = e?.code;
     if (code === "ENOENT") {
@@ -5011,13 +5029,13 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
           error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
         };
       }
-      const parent = path3.dirname(absolute);
+      const parent = path4.dirname(absolute);
       try {
-        const parentStat = fs3.statSync(parent);
+        const parentStat = fs4.statSync(parent);
         if (!parentStat.isDirectory()) {
           return {
             ok: false,
-            error: `${fieldLabel} "${canonical}": parent path "${path3.dirname(canonical)}" exists but is not a directory`
+            error: `${fieldLabel} "${canonical}": parent path "${path4.dirname(canonical)}" exists but is not a directory`
           };
         }
       } catch (parentErr) {
@@ -5025,7 +5043,7 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
         if (parentCode === "ENOENT") {
           return {
             ok: false,
-            error: `${fieldLabel} "${canonical}": parent directory "${path3.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
+            error: `${fieldLabel} "${canonical}": parent directory "${path4.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
           };
         }
         return {
@@ -5114,8 +5132,8 @@ class EditLog {
   todayKey = null;
   todayCounter = 0;
   constructor(repoRoot) {
-    this.statePath = path4.join(repoRoot, ".meta-edit", "state");
-    this.logPath = path4.join(this.statePath, "edits.jsonl");
+    this.statePath = path5.join(repoRoot, ".meta-edit", "state");
+    this.logPath = path5.join(this.statePath, "edits.jsonl");
   }
   get filePath() {
     return this.logPath;
@@ -5158,19 +5176,19 @@ class EditLog {
     ensureNoSymlinkOnPath(this.statePath);
     const line = JSON.stringify(entry) + `
 `;
-    const O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection");
     }
     this.withFileLock(() => {
       let fd = null;
       try {
-        fd = fs4.openSync(this.logPath, fs4.constants.O_WRONLY | fs4.constants.O_APPEND | fs4.constants.O_CREAT | O_NOFOLLOW, 384);
-        fs4.writeSync(fd, line, null, "utf8");
+        fd = fs5.openSync(this.logPath, fs5.constants.O_WRONLY | fs5.constants.O_APPEND | fs5.constants.O_CREAT | O_NOFOLLOW, 384);
+        fs5.writeSync(fd, line, null, "utf8");
       } finally {
         if (fd !== null) {
           try {
-            fs4.closeSync(fd);
+            fs5.closeSync(fd);
           } catch {}
         }
       }
@@ -5178,18 +5196,18 @@ class EditLog {
   }
   ensureStateDir() {
     ensureNoSymlinkOnPath(this.statePath);
-    fs4.mkdirSync(this.statePath, { recursive: true, mode: 448 });
+    fs5.mkdirSync(this.statePath, { recursive: true, mode: 448 });
     if (process.platform !== "win32") {
-      fs4.chmodSync(this.statePath, 448);
+      fs5.chmodSync(this.statePath, 448);
     }
   }
   withFileLock(fn) {
-    const lockPath = path4.join(this.statePath, ".lock");
+    const lockPath = path5.join(this.statePath, ".lock");
     const start = Date.now();
     const TIMEOUT_MS = 30000;
     while (true) {
       try {
-        fs4.mkdirSync(lockPath);
+        fs5.mkdirSync(lockPath);
         break;
       } catch (e) {
         const code = e.code;
@@ -5206,15 +5224,15 @@ class EditLog {
       return fn();
     } finally {
       try {
-        fs4.rmdirSync(lockPath);
+        fs5.rmdirSync(lockPath);
       } catch {}
     }
   }
   readCounterFile(key) {
-    const counterPath = path4.join(this.statePath, "counter.json");
+    const counterPath = path5.join(this.statePath, "counter.json");
     let text;
     try {
-      text = fs4.readFileSync(counterPath, "utf8");
+      text = fs5.readFileSync(counterPath, "utf8");
     } catch (e) {
       const code = e.code;
       if (code === "ENOENT")
@@ -5236,10 +5254,10 @@ class EditLog {
     return 0;
   }
   writeCounterFile(key, value) {
-    const counterPath = path4.join(this.statePath, "counter.json");
+    const counterPath = path5.join(this.statePath, "counter.json");
     const payload = JSON.stringify({ [key]: value });
     try {
-      const lst = fs4.lstatSync(counterPath);
+      const lst = fs5.lstatSync(counterPath);
       if (lst.isSymbolicLink()) {
         throw new Error(`refusing to use edit-log path: "${counterPath}" is a symlink. The audit-log counter must not be redirected through a symlink.`);
       }
@@ -5248,18 +5266,18 @@ class EditLog {
       if (code !== "ENOENT")
         throw e;
     }
-    const O_NOFOLLOW = fs4.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to write the audit-log counter without symlink-leaf protection");
     }
     let fd = null;
     try {
-      fd = fs4.openSync(counterPath, fs4.constants.O_WRONLY | fs4.constants.O_CREAT | fs4.constants.O_TRUNC | O_NOFOLLOW, 384);
-      fs4.writeSync(fd, payload, null, "utf8");
+      fd = fs5.openSync(counterPath, fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_TRUNC | O_NOFOLLOW, 384);
+      fs5.writeSync(fd, payload, null, "utf8");
     } finally {
       if (fd !== null) {
         try {
-          fs4.closeSync(fd);
+          fs5.closeSync(fd);
         } catch {}
       }
     }
@@ -5267,7 +5285,7 @@ class EditLog {
   readAll() {
     let text;
     try {
-      text = fs4.readFileSync(this.logPath, "utf8");
+      text = fs5.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return [];
@@ -5295,7 +5313,7 @@ class EditLog {
   scanMaxCounterForKey(key) {
     let text;
     try {
-      text = fs4.readFileSync(this.logPath, "utf8");
+      text = fs5.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return 0;
@@ -5327,14 +5345,14 @@ class EditLog {
   }
 }
 function ensureNoSymlinkOnPath(maybeRelativeDir) {
-  const absDir = path4.resolve(maybeRelativeDir);
-  const segments = absDir.split(path4.sep).filter((s) => s.length > 0);
-  let cur = path4.sep;
+  const absDir = path5.resolve(maybeRelativeDir);
+  const segments = absDir.split(path5.sep).filter((s) => s.length > 0);
+  let cur = path5.sep;
   for (const seg of segments) {
-    cur = path4.join(cur, seg);
+    cur = path5.join(cur, seg);
     let stat;
     try {
-      stat = fs4.lstatSync(cur);
+      stat = fs5.lstatSync(cur);
     } catch (e) {
       const code = e?.code;
       if (code === "ENOENT")
@@ -5374,7 +5392,7 @@ function evaluateRawEdit(toolName) {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool.`
+      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` + `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`
     };
   }
   return { decision: "allow" };
@@ -5382,37 +5400,42 @@ function evaluateRawEdit(toolName) {
 async function evaluateTokenedEdit(args) {
   const { toolName, toolInput, repoRoot, grants, log } = args;
   const nowFn = args.now ?? (() => new Date);
-  if (!LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
+  const lcName = toolName.toLowerCase();
+  if (!LOWER_RAW_EDIT_TOOLS.has(lcName)) {
     return {
       decision: "deny",
       reason: `deny-raw-edit invoked for non-raw tool "${toolName}"; check hook matcher`
     };
   }
-  if (toolName.toLowerCase() === "notebookedit") {
+  const pathField = lcName === "notebookedit" ? "notebook_path" : "file_path";
+  const pathRaw = typeof toolInput[pathField] === "string" ? toolInput[pathField] : "";
+  if (pathRaw.length === 0) {
+    return {
+      decision: "deny",
+      reason: `${toolName} call missing "${pathField}"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`
+    };
+  }
+  if (!isPathInsideRepo(pathRaw, repoRoot)) {
+    return { decision: "allow" };
+  }
+  if (lcName === "notebookedit") {
     return {
       decision: "deny",
       reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`
     };
   }
-  const filePathRaw = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-  if (filePathRaw.length === 0) {
-    return {
-      decision: "deny",
-      reason: `${toolName} call missing "file_path"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`
-    };
-  }
-  const canonical = canonicalizeForBinding(filePathRaw, repoRoot);
+  const canonical = canonicalizeForBinding(pathRaw, repoRoot);
   if (canonical === null) {
     return {
       decision: "deny",
-      reason: `meta-edit could not canonicalize "${filePathRaw}" to a repository-relative path; failing closed.`
+      reason: `meta-edit could not canonicalize "${pathRaw}" to a repository-relative path; failing closed.`
     };
   }
   const match = await grants.findActiveBindingForFile(canonical);
   if (match === null) {
     return {
       decision: "deny",
-      reason: `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` + `Call a typed edit_* MCP tool first.`
+      reason: `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` + `Call a typed edit_* MCP tool first. ` + `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`
     };
   }
   const { grant, binding: bound } = match;
@@ -5456,21 +5479,21 @@ function canonicalizeForBinding(inputPath, repoRoot) {
   if (typeof inputPath !== "string" || inputPath.length === 0)
     return null;
   let resolved;
-  if (path5.isAbsolute(inputPath)) {
-    resolved = path5.normalize(inputPath);
+  if (path6.isAbsolute(inputPath)) {
+    resolved = path6.normalize(inputPath);
   } else {
-    resolved = path5.resolve(repoRoot, inputPath);
+    resolved = path6.resolve(repoRoot, inputPath);
   }
   const realRoot = realpathOrSelfSync(repoRoot);
   const realResolved = realpathOfDeepestExisting(resolved);
   if (realResolved === null)
     return null;
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path5.sep)) {
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path6.sep)) {
     return null;
   }
   let rel;
   try {
-    rel = normalizeRepoRelative(path5.relative(realRoot, realResolved));
+    rel = normalizeRepoRelative(path6.relative(realRoot, realResolved));
   } catch {
     return null;
   }
@@ -5478,14 +5501,26 @@ function canonicalizeForBinding(inputPath, repoRoot) {
     return null;
   return rel;
 }
+function isPathInsideRepo(inputPath, repoRoot) {
+  if (typeof inputPath !== "string" || inputPath.length === 0)
+    return true;
+  const resolved = path6.isAbsolute(inputPath) ? path6.normalize(inputPath) : path6.resolve(repoRoot, inputPath);
+  const realRoot = realpathOrSelfSync(repoRoot);
+  const realResolved = realpathOfDeepestExisting(resolved);
+  if (realResolved === null)
+    return true;
+  if (realResolved === realRoot)
+    return true;
+  return realResolved.startsWith(realRoot + path6.sep);
+}
 function realpathOrSelfSync(p) {
   const r = realpathOfDeepestExisting(p);
-  return r ?? path5.resolve(p);
+  return r ?? path6.resolve(p);
 }
 async function readFileForBinding(repoRoot, canonical) {
-  const abs = path5.join(repoRoot, canonical);
+  const abs = path6.join(repoRoot, canonical);
   try {
-    return { ok: true, content: await fs5.readFile(abs, "utf8") };
+    return { ok: true, content: await fs6.readFile(abs, "utf8") };
   } catch (e) {
     const err = e;
     if (err.code === "ENOENT") {
@@ -5503,8 +5538,8 @@ function shortHash(h) {
 
 // src/state/grants.ts
 import * as crypto3 from "node:crypto";
-import * as fs6 from "node:fs/promises";
-import * as path6 from "node:path";
+import * as fs7 from "node:fs/promises";
+import * as path7 from "node:path";
 var GRANT_TTL_MS = 300000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
@@ -5580,16 +5615,16 @@ async function withSharedLock(key, fn) {
 class GrantsStoreImpl {
   grantsDir;
   constructor(repoRoot) {
-    this.grantsDir = path6.join(repoRoot, ".meta-edit", "state", "grants");
+    this.grantsDir = path7.join(repoRoot, ".meta-edit", "state", "grants");
   }
   mutexKey(token_id) {
-    return path6.resolve(this.grantPath(token_id));
+    return path7.resolve(this.grantPath(token_id));
   }
   async ensureDir() {
-    await fs6.mkdir(this.grantsDir, { recursive: true, mode: 448 });
+    await fs7.mkdir(this.grantsDir, { recursive: true, mode: 448 });
   }
   grantPath(token_id) {
-    return path6.join(this.grantsDir, `${token_id}.json`);
+    return path7.join(this.grantsDir, `${token_id}.json`);
   }
   async issue(args) {
     if (args.binding.length === 0) {
@@ -5629,7 +5664,7 @@ class GrantsStoreImpl {
       };
       const filePath = this.grantPath(token_id);
       try {
-        await fs6.writeFile(filePath, JSON.stringify(grant), {
+        await fs7.writeFile(filePath, JSON.stringify(grant), {
           encoding: "utf8",
           flag: "wx",
           mode: 384
@@ -5653,7 +5688,7 @@ class GrantsStoreImpl {
     const filePath = this.grantPath(token_id);
     let text;
     try {
-      text = await fs6.readFile(filePath, "utf8");
+      text = await fs7.readFile(filePath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return null;
@@ -5682,7 +5717,7 @@ class GrantsStoreImpl {
     const filePath = this.grantPath(token_id);
     let text;
     try {
-      text = await fs6.readFile(filePath, "utf8");
+      text = await fs7.readFile(filePath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT") {
         return {
@@ -5732,13 +5767,13 @@ class GrantsStoreImpl {
     const fullyConsumed = parsed.consumed_files.length === parsed.binding.length;
     if (fullyConsumed) {
       try {
-        await fs6.unlink(filePath);
+        await fs7.unlink(filePath);
       } catch (e) {
         if (e.code !== "ENOENT")
           throw e;
       }
     } else {
-      await fs6.writeFile(filePath, JSON.stringify(parsed), {
+      await fs7.writeFile(filePath, JSON.stringify(parsed), {
         encoding: "utf8",
         mode: 384
       });
@@ -5751,7 +5786,7 @@ class GrantsStoreImpl {
     }
     let names;
     try {
-      names = await fs6.readdir(this.grantsDir);
+      names = await fs7.readdir(this.grantsDir);
     } catch (e) {
       if (e.code === "ENOENT")
         return null;
@@ -5763,10 +5798,10 @@ class GrantsStoreImpl {
     for (const name of names) {
       if (!name.endsWith(".json"))
         continue;
-      const filePath = path6.join(this.grantsDir, name);
+      const filePath = path7.join(this.grantsDir, name);
       let text;
       try {
-        text = await fs6.readFile(filePath, "utf8");
+        text = await fs7.readFile(filePath, "utf8");
       } catch (e) {
         if (e.code === "ENOENT")
           continue;
@@ -5799,7 +5834,7 @@ class GrantsStoreImpl {
   async reapExpired() {
     let names;
     try {
-      names = await fs6.readdir(this.grantsDir);
+      names = await fs7.readdir(this.grantsDir);
     } catch (e) {
       if (e.code === "ENOENT")
         return 0;
@@ -5810,10 +5845,10 @@ class GrantsStoreImpl {
     for (const name of names) {
       if (!name.endsWith(".json"))
         continue;
-      const filePath = path6.join(this.grantsDir, name);
+      const filePath = path7.join(this.grantsDir, name);
       let text;
       try {
-        text = await fs6.readFile(filePath, "utf8");
+        text = await fs7.readFile(filePath, "utf8");
       } catch (e) {
         if (e.code === "ENOENT")
           continue;
@@ -5830,7 +5865,7 @@ class GrantsStoreImpl {
       if (Date.parse(parsed.expires_at) > now)
         continue;
       try {
-        await fs6.unlink(filePath);
+        await fs7.unlink(filePath);
         removed++;
       } catch (e) {
         if (e.code === "ENOENT")
@@ -5847,11 +5882,11 @@ function createGrantsStore(repoRoot) {
 // src/hooks/deny-raw-edit.ts
 function resolveRepoRoot(eventCwd) {
   if (typeof eventCwd === "string" && eventCwd.length > 0) {
-    return path7.resolve(eventCwd);
+    return path8.resolve(eventCwd);
   }
   const envRoot = process.env["META_EDIT_REPO_ROOT"];
   if (typeof envRoot === "string" && envRoot.length > 0) {
-    return path7.resolve(envRoot);
+    return path8.resolve(envRoot);
   }
   return process.cwd();
 }
@@ -5895,4 +5930,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=41736AE193E86E4264756E2164756E21
+//# debugId=2C4807FC7065558464756E2164756E21
