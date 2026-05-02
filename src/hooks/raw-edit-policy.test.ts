@@ -235,14 +235,19 @@ describe("evaluateTokenedEdit — gate failures", () => {
     expect(r.reason).toMatch(/drifted/);
   });
 
-  it("denies NotebookEdit explicitly (out of v0.2 scope) before grant lookup", async () => {
+  it("denies NotebookEdit (in-repo) before grant lookup — out of v0.2 scope", async () => {
+    // 1102: NotebookEdit deny is REPO-INTERNAL only. NotebookEdit
+    // surfaces `notebook_path`, not `file_path`, in tool_input — supply
+    // a real in-repo notebook so the deny exercises the v0.2-scope
+    // branch, not the missing-key fallback.
+    fs.mkdirSync(path.join(tmpRoot, "notebooks"), { recursive: true });
+    writeFile("notebooks/x.ipynb", "{}\n");
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
-    // No grant required — the deny fires before lookup.
     const r = await evaluateTokenedEdit({
       toolName: "NotebookEdit",
       toolInput: {
-        file_path: path.join(tmpRoot, "notebooks/x.ipynb"),
+        notebook_path: path.join(tmpRoot, "notebooks/x.ipynb"),
       },
       repoRoot: tmpRoot,
       grants,
@@ -274,21 +279,69 @@ describe("evaluateTokenedEdit — gate failures", () => {
     expect(r.reason).toMatch(/file_path/);
   });
 
-  it("denies when canonicalization escapes the repo", async () => {
+  it("denies NotebookEdit when notebook_path is missing (fail-closed)", async () => {
+    // 1102: missing key → deny, regardless of toolName. The path-field
+    // check runs before the in-repo check.
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
-    writeFile("src/foo.ts", "x\n");
-    await issueGrant(grants, "edit_20260502_0009", [
-      {
-        file: "src/foo.ts",
-        before_sha256: sha256("x\n"),
-      },
-    ]);
+    const r = await evaluateTokenedEdit({
+      toolName: "NotebookEdit",
+      toolInput: {},
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/notebook_path/);
+  });
 
+  it("allows out-of-repo Edit (issue 1102: typed_edit only governs repo-internal writes)", async () => {
+    // 1102: Claude Code plan-mode writes to ~/.claude/plans/*.md, other
+    // plugins write outside the repo, /tmp scratch files etc. — none of
+    // these are governed by typed_edit. Supply an absolute path that
+    // realpath-resolves outside `tmpRoot` and assert allow.
+    const outsideRepo = path.join(os.tmpdir(), `outside-${process.pid}.txt`);
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
     const r = await evaluateTokenedEdit({
       toolName: "Edit",
       toolInput: {
-        file_path: "/etc/passwd",
+        file_path: outsideRepo,
+        old_string: "x",
+        new_string: "y",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows out-of-repo NotebookEdit (1102 covers notebook_path too)", async () => {
+    const outsideRepo = path.join(os.tmpdir(), `outside-${process.pid}.ipynb`);
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    const r = await evaluateTokenedEdit({
+      toolName: "NotebookEdit",
+      toolInput: { notebook_path: outsideRepo },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("denies in-repo Edit without an active grant (1102 negative side-effect: no consume on deny)", async () => {
+    // The deny matrix counterpart to the out-of-repo allow above.
+    // Verifies that scoping the policy to the repo did not weaken the
+    // in-repo deny path.
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "x\n");
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
         old_string: "x",
         new_string: "y",
       },
@@ -297,6 +350,7 @@ describe("evaluateTokenedEdit — gate failures", () => {
       log,
     });
     expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/no active typed_edit declaration/);
   });
 
   it("denies (fail-closed) when target path is a directory (EISDIR)", async () => {

@@ -92,7 +92,9 @@ export function evaluateRawEdit(toolName: string): HookDecision {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool.`,
+      reason:
+        `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` +
+        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
     };
   }
   return { decision: "allow" };
@@ -106,9 +108,15 @@ export function evaluateRawEdit(toolName: string): HookDecision {
  *
  * v0.2.2: `_meta_edit_token` removed — Claude Code's native Edit / Write /
  * MultiEdit input schemas reject extra fields, so the agent cannot pass a
- * token through. The hook resolves grants server-side by file_path. */
+ * token through. The hook resolves grants server-side by file_path.
+ *
+ * 1102 (path-aware): `notebook_path` recorded so the hook can scope itself
+ * out of out-of-repo NotebookEdit writes (e.g. Claude Code's plan-mode
+ * targeting `~/.claude/plans/*.md`). For repo-internal NotebookEdit the
+ * hook still denies (v0.2 scope cap, see step 3 below). */
 export type RawToolInput = {
   file_path?: unknown;
+  notebook_path?: unknown;
   old_string?: unknown;
   new_string?: unknown;
   content?: unknown;
@@ -150,42 +158,60 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   // re-check defensively. evaluateRawEdit returns `allow` for unknown
   // names — promote that to a deny so a misconfigured matcher fails
   // closed rather than waving the call through.
-  if (!LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
+  const lcName = toolName.toLowerCase();
+  if (!LOWER_RAW_EDIT_TOOLS.has(lcName)) {
     return {
       decision: "deny",
       reason: `deny-raw-edit invoked for non-raw tool "${toolName}"; check hook matcher`,
     };
   }
 
-  // 1. NotebookEdit is out of v0.2 scope. Refuse before grant lookup so
-  // a multi-binding grant covering the file does not get partially
-  // consumed by a NotebookEdit that the hook would never authorize.
-  if (toolName.toLowerCase() === "notebookedit") {
+  // 1. Extract path: NotebookEdit uses `notebook_path`, the other three
+  // use `file_path`. Missing key is fail-closed deny: the hook cannot
+  // determine whether a write is repo-internal without a path, and
+  // friendly-AI threat model (Article 3) does not justify trusting an
+  // empty payload.
+  const pathField = lcName === "notebookedit" ? "notebook_path" : "file_path";
+  const pathRaw = typeof toolInput[pathField] === "string"
+    ? (toolInput[pathField] as string)
+    : "";
+  if (pathRaw.length === 0) {
+    return {
+      decision: "deny",
+      reason: `${toolName} call missing "${pathField}"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`,
+    };
+  }
+
+  // 2. Issue 1102: out-of-repo writes are not governed by typed_edit.
+  // The hook is scoped to repo-internal writes only — Claude Code's
+  // plan-mode (~/.claude/plans/*.md), other plugins targeting agent
+  // state directories, and ad-hoc /tmp/scratch writes must pass through.
+  // Realpath-based check; symlink-resolved path outside repoRoot ⇒ allow.
+  // Realpath failure is treated as in-repo (fail closed) — we cannot
+  // confirm out-of-repo without a successful realpath.
+  if (!isPathInsideRepo(pathRaw, repoRoot)) {
+    return { decision: "allow" };
+  }
+
+  // 3. NotebookEdit is out of v0.2 scope FOR REPO-INTERNAL WRITES.
+  // The out-of-repo branch above already let agent-state notebooks
+  // through; the deny here applies to anything inside the repo.
+  if (lcName === "notebookedit") {
     return {
       decision: "deny",
       reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`,
     };
   }
 
-  // 2. file_path presence + canonicalization. The grant lookup is keyed
-  // on the canonical (post-realpath, repo-relative, normalized) form
-  // produced at issue time by tools/common.ts checkPathSafety; we must
-  // reach the same form here. A path that escapes the repo or vanishes
-  // under realpath cannot match any honest binding — fail closed.
-  const filePathRaw = typeof toolInput.file_path === "string"
-    ? toolInput.file_path
-    : "";
-  if (filePathRaw.length === 0) {
-    return {
-      decision: "deny",
-      reason: `${toolName} call missing "file_path"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`,
-    };
-  }
-  const canonical = canonicalizeForBinding(filePathRaw, repoRoot);
+  // 4. file_path canonicalization. The grant lookup is keyed on the
+  // canonical (post-realpath, repo-relative, normalized) form produced
+  // at issue time by tools/common.ts checkPathSafety; we must reach the
+  // same form here. A path that vanishes under realpath fails closed.
+  const canonical = canonicalizeForBinding(pathRaw, repoRoot);
   if (canonical === null) {
     return {
       decision: "deny",
-      reason: `meta-edit could not canonicalize "${filePathRaw}" to a repository-relative path; failing closed.`,
+      reason: `meta-edit could not canonicalize "${pathRaw}" to a repository-relative path; failing closed.`,
     };
   }
 
@@ -201,7 +227,8 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
       decision: "deny",
       reason:
         `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` +
-        `Call a typed edit_* MCP tool first.`,
+        `Call a typed edit_* MCP tool first. ` +
+        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
     };
   }
   const { grant, binding: bound } = match;
@@ -331,6 +358,37 @@ export function canonicalizeForBinding(
   }
   if (rel.length === 0) return null;
   return rel;
+}
+
+/**
+ * Return true if `inputPath` (resolved against `repoRoot` if relative,
+ * then realpath'd through the deepest existing prefix) lands inside
+ * the repository tree. Issue 1102: the deny-raw-edit hook only governs
+ * repo-internal writes; out-of-repo Edit/Write/MultiEdit/NotebookEdit
+ * (e.g. Claude Code plan-mode targeting `~/.claude/plans/*.md`) must
+ * pass through.
+ *
+ * Symlink-aware via `realpathOfDeepestExisting`, matching the semantics
+ * `canonicalizeForBinding` uses for grant lookup. On realpath failure
+ * the function returns `true` (fail-closed: keep the deny path).
+ *
+ * Empty / non-string inputs are treated as in-repo so the caller's
+ * "missing path key" branch (step 1 in evaluateTokenedEdit) takes
+ * precedence and emits a more useful deny reason.
+ */
+export function isPathInsideRepo(inputPath: string, repoRoot: string): boolean {
+  if (typeof inputPath !== "string" || inputPath.length === 0) return true;
+
+  const resolved = path.isAbsolute(inputPath)
+    ? path.normalize(inputPath)
+    : path.resolve(repoRoot, inputPath);
+
+  const realRoot = realpathOrSelfSync(repoRoot);
+  const realResolved = realpathOfDeepestExisting(resolved);
+  if (realResolved === null) return true; // fail-closed
+
+  if (realResolved === realRoot) return true;
+  return realResolved.startsWith(realRoot + path.sep);
 }
 
 function realpathOrSelfSync(p: string): string {

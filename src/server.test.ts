@@ -32,7 +32,13 @@ function mkBareDir(): string {
 }
 
 // ---------------------------------------------------------------------------
-// a7-03 — createServer must reject non-repo directories
+// 1530 — createServer must NOT eager-throw on a non-repo directory.
+//
+// The eager throw used to kill the MCP server before transport handshake.
+// Claude Code marked the server as failed for the session and the nineteen
+// tool descriptions never reached the running agent's context. The fix
+// (Bundle A) moves the check into validateRequest at per-tool-call time;
+// createServer only emits an advisory stderr line.
 // ---------------------------------------------------------------------------
 
 describe("createServer repoRoot validation", () => {
@@ -60,27 +66,44 @@ describe("createServer repoRoot validation", () => {
     expect(() => createServer({ repoRoot: jjRepo })).not.toThrow();
   });
 
-  it("throws a descriptive error when repoRoot has no repo sentinel", () => {
-    expect(() => createServer({ repoRoot: bareDir })).toThrow(
-      /not a (git )?repository|no \.git|repo sentinel/i,
-    );
+  it("does NOT throw on a non-repo directory (issue 1530 — lazy check)", () => {
+    // Capture stderr to avoid the advisory line bleeding into test output.
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let stderrBuf = "";
+    (process.stderr as unknown as { write: (s: string) => boolean }).write = (
+      s: string,
+    ) => {
+      stderrBuf += s;
+      return true;
+    };
+    try {
+      expect(() => createServer({ repoRoot: bareDir })).not.toThrow();
+      // The advisory must still surface so the operator sees the
+      // misconfiguration without waiting for the first failed call.
+      expect(stderrBuf).toContain("does not appear to be a repository root");
+    } finally {
+      (process.stderr as unknown as { write: typeof origWrite }).write =
+        origWrite;
+    }
   });
 
-  it("throws when repoRoot is a freshly-created tmp dir with no sentinel", () => {
-    // Do NOT pass `os.tmpdir()` directly: on some hosts `/tmp/.git` exists
-    // (CI sandboxes, dev fixtures), which would make `assertIsRepo` succeed
-    // and silently mask the regression.  A fresh `mkdtempSync` subdir under
-    // tmpdir is guaranteed to have no `.git`/`.jj` of its own; `assertIsRepo`
-    // only checks the immediate dir (it does not walk up), so this isolates
-    // the test from any sentinels at higher levels.
+  it("does NOT throw on a freshly-created tmp dir with no sentinel", () => {
+    // Mirrors the production onboarding flow described in issue 1530:
+    // user starts Claude Code in a fresh dir, MCP server connects.
+    // We must reach ListTools (so descriptions land); per-tool calls
+    // get rejected later by validateRequest, not by a synchronous throw
+    // in createServer.
     const isolatedTmp = fs.mkdtempSync(
       path.join(os.tmpdir(), "meta-edit-srv-notrepo-"),
     );
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: (s: string) => boolean }).write =
+      () => true;
     try {
-      expect(() => createServer({ repoRoot: isolatedTmp })).toThrow(
-        /not a (git )?repository|no \.git|repo sentinel/i,
-      );
+      expect(() => createServer({ repoRoot: isolatedTmp })).not.toThrow();
     } finally {
+      (process.stderr as unknown as { write: typeof origWrite }).write =
+        origWrite;
       fs.rmSync(isolatedTmp, { recursive: true, force: true });
     }
   });

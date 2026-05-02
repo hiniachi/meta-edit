@@ -1,9 +1,8 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools/registry.js";
 import { type ValidationContext } from "./tools/common.js";
+import { repoIsValid } from "./tools/repo-validity.js";
 import { makeIssuingHandler } from "./tools/apply.js";
 import { EditLog } from "./state/edit-log.js";
 import { createGrantsStore } from "./state/grants.js";
@@ -13,29 +12,21 @@ export type CreateServerOptions = {
   repoRoot?: string;
 };
 
-/**
- * Verify that `dir` looks like a repository root by checking for a known VCS
- * sentinel (`.git` or `.jj`).  This is intentionally a shallow check — full
- * git integrity is out of scope per SPEC.md §3.  The goal is to prevent
- * silent misconfiguration: launching `meta-edit serve` from `/tmp`, `/home`,
- * `/`, etc. would otherwise let the MCP server treat that directory as the
- * editable root.
- */
-function assertIsRepo(dir: string): void {
-  const sentinels = [".git", ".jj"];
-  const found = sentinels.some((s) => fs.existsSync(path.join(dir, s)));
-  if (!found) {
-    throw new Error(
-      `meta-edit: "${dir}" does not appear to be a repository root ` +
-        `(no .git or .jj directory found). ` +
-        `Start the server from the repository root or pass --repo-root.`,
-    );
-  }
-}
-
 export function createServer(options: CreateServerOptions = {}): Server {
   const repoRoot = options.repoRoot ?? process.cwd();
-  assertIsRepo(repoRoot);
+  // Issue 1530: do NOT throw here even if the repo-root sentinel is
+  // absent. A synchronous throw inside createServer kills the MCP server
+  // before transport handshake — Claude Code marks the server failed
+  // for the session and the nineteen tool descriptions never reach the
+  // running agent's context. Boot the server, let ListTools land the
+  // descriptions, and let validateRequest surface the per-tool
+  // not_a_repository error when the agent actually tries to edit.
+  // Emit one advisory line to stderr so the operator sees the
+  // misconfiguration without having to wait for the first failed call.
+  const repoCheck = repoIsValid(repoRoot);
+  if (!repoCheck.ok) {
+    process.stderr.write(`[meta-edit] WARN: ${repoCheck.error}\n`);
+  }
   const context: ValidationContext = { repoRoot };
   const log = new EditLog(repoRoot);
   const grants = createGrantsStore(repoRoot);

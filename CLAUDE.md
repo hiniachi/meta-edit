@@ -222,6 +222,7 @@ You have access to Bash.
 - **Implement detection / verification / classification**: refuse, point at `SPEC.md` Article 7. Those belong to v0.2 if needed at all.
 - **Trust without descriptions**: refuse. The descriptions are the product.
 - **Use raw Edit/Write after Phase 3**: refuse. If `edit_*` tools are broken, fix them rather than bypass.
+- **Use any other write-capable MCP tool to land bytes inside this repo** (e.g. `ctx_execute` with `fs.writeFileSync`, `apply_patch`-style external utilities, future code-execution surfaces): refuse. The typed-surface invariant is enforced by hooking `Edit` / `Write` / `MultiEdit` / `NotebookEdit`; arbitrary other write surfaces are explicitly out of MVP scope per `SPEC.md` Article 7 (issue 1108). Honor the invariant by going through `edit_*` even when no hook would catch you — that honor is the load-bearing mitigation while the MVP is running. If you need a write capability the typed surface cannot express, file an issue rather than route around the surface.
 - **Add scope creep**: refuse. Add a TODO with a reference to v0.2 if it's about a possible future classifier.
 - **Rewrite descriptions to be shorter / friendlier**: push back. Descriptions are tuned for a reason. Changes need explicit justification and propagate to the spec.
 
