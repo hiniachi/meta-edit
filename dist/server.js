@@ -16553,11 +16553,9 @@ var TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   "edit_policy_change",
-  "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact"
+  "edit_docs_only"
 ];
-var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only" && name !== "edit_create_planning_artifact");
+var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only");
 var TOOL_DESCRIPTIONS = {
   edit_refactor_only: `Refactor production code without changing observable behavior.
 
@@ -16611,6 +16609,9 @@ Use this tool when:
 - Strengthening assertions in existing tests
 - Refactoring test fixtures or helpers
 - Removing flaky or duplicated tests
+- Filling content into a freshly-created (currently empty) test file:
+  empty files are created freely without an MCP declaration (see SPEC §5);
+  the content fill goes through this tool
 
 Required: patch must only modify a single file — the \`target_file\` you
 declare as a test file. test_files must be empty. The server does not
@@ -17047,6 +17048,18 @@ document it explicitly — do not silently absorb it.
 For security-related dependency upgrades, the rationale must say so
 explicitly.
 
+Boundary with edit_policy_change (Cargo.toml / pyproject.toml / package.json
+overlap). Manifests with mixed personalities — package metadata + build
+profile + per-target optimization flags — sometimes straddle the line.
+Use edit_dependency_config when the change is about WHICH packages are
+present at WHICH versions (the dep graph or runtime config). Use
+edit_policy_change when the change is about HOW the build / release
+runs (release profile flags, codegen options, CI behavior, lint rules).
+A Cargo.toml \`[dependencies]\` entry update is dependency_config; a
+\`[profile.release]\` flag flip (e.g. \`opt-level\`, \`lto\`,
+\`wasm-opt = false\`) is policy_change. When a single PR touches both
+sections, split into two declarations.
+
 Fallback obligation:
 Before applying this tool, summarize the change in user-facing
 terms: which package, what version delta, runtime vs dev, expected
@@ -17067,6 +17080,11 @@ Use this tool when:
 - Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
 - Modifying tool descriptions of edit_* tools themselves
 - Modifying argument schemas or hook behavior
+- Modifying build / release profile flags in package manifests
+  (\`[profile.release]\` in Cargo.toml, \`[tool.poetry.build]\` in
+  pyproject.toml, \`scripts\` / \`engines\` mutations in package.json
+  that change how the project builds or releases) — see the boundary
+  note in edit_dependency_config
 
 Required tests (you MUST cover):
 1. Configuration validity: the new configuration must parse and load
@@ -17110,6 +17128,10 @@ Use this tool when:
 - Editing JSDoc / docstrings / Rustdoc that document existing API
 - Editing changelogs, release notes, contribution guides
 - Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
+- Filling content into a freshly-created (currently empty) Markdown file:
+  issues/*.md, ADRs, design docs, post-mortems, dogfood reports.
+  Empty files are created freely without an MCP declaration (see SPEC §5);
+  the content fill goes through this tool.
 
 Required tests: NONE. test_files may be empty.
 
@@ -17136,11 +17158,6 @@ This tool MUST NOT be used when:
 - The patch contains a code example (fenced block, inline snippet)
   that does not compile or run as written; broken examples mislead
   readers more than no example
-- The patch CREATES a new planning artifact (issue file, ADR, design
-  doc, post-mortem) — use edit_create_planning_artifact for the
-  planning-stage tone. Modifying an EXISTING planning artifact may use
-  this tool when the change is a documentation update; new-artifact
-  filing should not
 - The patch updates a Markdown test fixture loaded by tests at runtime
   (use edit_test_only_change since the fixture's content is part of
   the test contract)
@@ -17153,124 +17170,6 @@ Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
 mislead future readers (including future AI agents). Treat
 documentation as a contract with future readers.
-
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_create_file: `Create a new file at a path that does not yet exist on disk.
-At declaration time, the server verifies the target does not yet exist;
-the binding fails if any path already exists on disk. The actual create
-is performed by native Edit / Write under the deny-raw-edit hook's
-binding-validation gate (see §5).
-
-Use this tool when:
-- Adding a new source module, helper, or class file
-- Adding a new test file when fulfilling another tool's test obligations
-- Adding new configuration files, fixtures, or example assets
-- Scaffolding code for which no in-place modify path applies
-
-Required tests (you MUST cover):
-1. The newly-created file must be exercised by at least one test that
-   imports, loads, or otherwise consumes it. Files that are not exercised
-   by any test are dead on arrival.
-2. If the new file is itself a test file, it must contain at least one
-   explicit assertion. The mere existence of a test file is not a test.
-
-test_files must be non-empty (you must declare which test covers the
-new code). The \`target_file\` MUST NOT exist on disk at declaration
-time; the server binds \`before_sha256\` to \`sha256("")\` automatically.
-For multi-file scaffolding, list additional creates in
-\`additional_files\` (this tool is one of the two workflow-required
-tools per Article 6 / §3).
-
-This tool MUST NOT be used when:
-- The target path already exists; modifying an existing file is the job
-  of one of the modify-only edit_* tools
-- The new path lands inside a protected directory (.meta-edit/state/**,
-  .meta-edit/tmp/**)
-- The change is a rename or move (delete-and-add); the modify/create
-  shape cannot represent rename atomically and the audit log would not
-  reflect the original file's deletion
-- The file is a binary payload; native Edit / Write's string-based
-  parameters cannot carry non-UTF-8 bytes
-- The new file is a planning artifact (issue file, ADR, design doc,
-  post-mortem, dogfood report) — use edit_create_planning_artifact so
-  the audit log records the planning-stage tone instead of a
-  production-code create with placeholder test_files
-- The new file's content is a near-duplicate of an existing file (a
-  copy or near-copy is a refactor or a move, not a create — use
-  edit_refactor_only on the source if the duplication is intentional)
-- The new file is a re-export shim that simply re-emits another
-  module's exports (the underlying module is the change locus; use
-  edit_refactor_only on it instead)
-- The new file is auto-generated build output; generated files belong
-  in .gitignore, not in a typed_edit-recorded create
-Rationale: the other modify-only edit_* tools cannot represent file
-creation. Without an explicit creation tool, agents resort to bash
-redirects, undermining the typed-tool surface meta-edit exists to defend.
-Creation has a different precondition profile (no current state to check)
-and a strong post-condition (the file did not exist; now it does), and
-the audit log records it explicitly so reviewers see new-file additions
-distinct from in-place edits.
-
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_create_planning_artifact: `Create a NEW planning artifact: an issue file, an
-architecture decision record (ADR), a design document, a post-mortem,
-a dogfood report, or any other document whose purpose is to record a
-decision, observation, or plan rather than to be loaded by code.
-
-This tool is CREATE-only — the target_file MUST NOT exist on disk at
-declaration time. Modifying an EXISTING planning artifact (revising
-an ADR, updating an issue body, appending a post-mortem section) goes
-through edit_docs_only.
-
-Use this tool when:
-- Filing a new issue or bug report under issues/
-- Writing a new architecture decision record (ADR)
-- Drafting a new design document, RFC, or proposal
-- Recording a new post-mortem or incident report
-- Capturing a new dogfood observation, audit finding, or hypothesis
-
-Required tests: NONE. test_files must be empty.
-
-The artifact IS the deliverable. There is no production behavior the
-artifact is supposed to verify, and there is no test that can stand in
-for "the document captures the decision correctly". Reviewers verify by
-reading.
-
-Like edit_docs_only and edit_create_file, this tool is one of the
-workflow tools (Article 6 / §3) and accepts \`additional_files\` for
-multi-file batches (e.g. filing two related issues at once, or adding
-an ADR and updating a cross-reference index together; cap 32).
-
-This tool MUST NOT be used when:
-- The patch modifies any executable production code, including library
-  scripts run during build / CI
-- The patch modifies any test code (use edit_test_only_change)
-- The patch modifies build, CI, or meta-edit configuration files
-  (use edit_dependency_config or edit_policy_change)
-- The "planning artifact" is actually executable documentation that
-  loads or generates code (use edit_dependency_config or
-  edit_create_file as appropriate)
-- The change is renaming or moving a planning artifact across paths;
-  the modify/create shape cannot represent rename atomically
-
-Distinction from edit_docs_only: edit_docs_only is for documentation
-that ships with production code (README, inline comments, JSDoc/
-docstrings, CHANGELOG). edit_create_planning_artifact is for
-planning-stage documents that record decisions rather than ship as
-user-facing reference material. When the line is unclear, prefer
-edit_docs_only — production reference docs have a stricter contract.
-
-Rationale: planning artifacts (issues, ADRs, design docs) have no test
-obligation, but they also have a different review tone than production
-docs — reviewers care about decision quality, not about API drift or
-example correctness. Without an explicit planning-artifact tool, agents
-were forced to use edit_docs_only (production-docs framing) or
-edit_create_file with placeholder \`test_files\`, both of which
-distorted the audit log.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17402,9 +17301,7 @@ var AdditionalFileSchema = exports_external.object({
 }).strict();
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
-  "edit_docs_only",
-  "edit_create_file",
-  "edit_create_planning_artifact"
+  "edit_docs_only"
 ];
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
@@ -17444,7 +17341,7 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = toolName === "edit_create_file" || toolName === "edit_create_planning_artifact";
+  const isCreate = false;
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
@@ -18157,7 +18054,7 @@ function formatAuditError(editId, e) {
 import * as crypto3 from "node:crypto";
 import * as fs6 from "node:fs/promises";
 import * as path6 from "node:path";
-var GRANT_TTL_MS = 300000;
+var GRANT_TTL_MS = 600000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
   const y = d.getFullYear();
@@ -18498,7 +18395,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.3.0",
+  version: "0.3.1",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18518,7 +18415,7 @@ var package_default = {
     "LICENSE"
   ],
   scripts: {
-    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts --target node --outdir dist --root src --sourcemap=external",
     test: "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     typecheck: "tsc --noEmit",
@@ -18601,4 +18498,4 @@ export {
   createServer
 };
 
-//# debugId=F9D2A1AD97F4B4B464756E2164756E21
+//# debugId=20773D69A10C634C64756E2164756E21

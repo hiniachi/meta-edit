@@ -1,6 +1,6 @@
 {
   "name": "@hiniachi/meta-edit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   "license": "MIT",
   "author": "nia <nia@yukinofurumachi.com>",
@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
+    "build": "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts --target node --outdir dist --root src --sourcemap=external",
     "test": "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     "typecheck": "tsc --noEmit",
