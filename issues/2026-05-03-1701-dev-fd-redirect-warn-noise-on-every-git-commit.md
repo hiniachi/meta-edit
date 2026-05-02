@@ -11,6 +11,16 @@ discovered_in: 2026-05-03 PR #60 (adoption-flow + bash-write polish bundle) auth
 
 # [UX] every `git commit` / `gh pr create` heredoc emits a structural redirect-warn
 
+## Status
+
+🟡 **PARTIAL** via PR #61 (merged 2026-05-02, commit `67d955c`).
+Outer-segment `iterRedirectTargets` now tracks substitution depth
+via opt-in `skipSubstitutionInternal`, plumbed through
+`redirectsOutsideSafeSinkAllowlist`. Outer-segment case is silenced;
+recursive-inner pseudo-segments from heredoc bodies still surface
+the warn. Heredoc-aware segmentation is the clean fix; deferred to
+a follow-up. Option 2 of this filing landed in part.
+
 ## TL;DR
 
 Every `git commit -m "$(cat <<'EOF' ... EOF)"` and `gh pr create --body

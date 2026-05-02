@@ -143,6 +143,26 @@ that #49 and #50 no longer collide on `033`/`034`.
 
 ---
 
+## v0.3 dogfood — 2026-05-03 onboarding cluster (8 issues)
+
+Filed 2026-05-03 during v0.2.x → v0.3.x dogfood. Cluster spans
+`assertIsRepo` onboarding, NotebookEdit recourse, audit-burden, and
+bash-hook prose noise. Resolution status as of v0.3.1 release
+(PRs #60–#62):
+
+| ID | Sev | Title | Status |
+|----|-----|-------|--------|
+| 2026-05-03-1530-mcp-late-connect-descriptions-missing | HIGH | `assertIsRepo` eager-fail strips descriptions from agent context | ✅ #60 |
+| 2026-05-03-0105-rejection-consumes-edit-id-counter | LOW | rejected typed_edit advances daily counter | ✅ #61 |
+| 2026-05-03-0105-notebookedit-no-recourse | MEDIUM | NotebookEdit denied unconditionally | ✅ #61 |
+| 2026-05-03-0105-edit-old-string-uniqueness-helper | LOW | `old_string` uniqueness has no meta-edit helper | ✅ #61 (closed-as-accepted, Article 7) |
+| 2026-05-03-1700-bash-hook-scans-commit-message-prose | MEDIUM | `git commit -m` / `gh pr create` prose triggers DENY_* | ✅ #61 |
+| 2026-05-03-0105-description-size-token-cost | LOW | 18 descriptions cost ~7-8K tokens per call | 🟡 deferred to v0.3 prose pass |
+| 2026-05-03-0105-test-files-upfront-declaration-burden | MEDIUM | upfront `test_files` declaration burden | 🟡 partial (SPEC §3 clarification only) |
+| 2026-05-03-1701-dev-fd-redirect-warn-noise-on-every-git-commit | LOW | heredoc-plumbing `>` warn on every git commit | 🟡 partial (outer-segment fixed; heredoc-aware segmentation pending) |
+
+---
+
 ## Provenance
 
 Filed by 7 sub-agents (sonnet) in parallel; consolidated under jj. Per-agent commits in this branch:

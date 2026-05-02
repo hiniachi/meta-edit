@@ -12,6 +12,14 @@ discovered_in: 2026-05-03 v0.2.1 dogfood agent-burden audit
 
 # [UX] Validation rejection consumes the daily `edit_id` counter, polluting the sequence
 
+## Status
+
+✅ **RESOLVED** by PR #61 (merged 2026-05-02, commit `81f58b9`).
+Rejected typed_edit calls now produce `reject_<key>_<8-hex>` handles
+via the new `EditLog.nextRejectId(now)`; the daily
+`edit_<key>_<NNNN>` counter only advances on issued declarations.
+Option 1 of this filing was taken.
+
 ## Concrete behavior
 
 `edit_id` is allocated as `edit_<YYYYMMDD>_<NNNN>` from a

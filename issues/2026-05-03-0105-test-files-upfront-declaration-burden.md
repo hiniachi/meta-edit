@@ -11,6 +11,16 @@ discovered_in: 2026-05-03 v0.2.1 dogfood agent-burden audit
 
 # [DESIGN] `test_files` upfront declaration burden — agent has to commit to test paths before knowing them
 
+## Status
+
+🟡 **PARTIAL** via PR #61 (merged 2026-05-02). Option 3
+(clarification only) landed: SPEC §3 now states explicitly that
+`test_files` entries are forward declarations and may name paths
+that do not yet exist. The description-tone refinement (this
+filing's preferred mitigation) is still pending and is expected to
+roll into the same v0.3 prose pass that covers
+`0105-description-size-token-cost`.
+
 ## Concrete burden
 
 Every SQLite-derived production tool (15 of the 17, excluding
