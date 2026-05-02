@@ -37,6 +37,12 @@ export function filterEntries(
   filters: LogFilters,
 ): EditLogEntry[] {
   return entries.filter((e) => {
+    // Unparseable timestamps are dropped UNCONDITIONALLY (whether or not
+    // --since is in play) so that invalid-ts entries can never silently
+    // change the count between filtered and unfiltered views. Per issue
+    // 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+    const ts = parseTimestamp(e.ts);
+    if (ts === null) return false;
     if (filters.tool !== undefined) {
       // `kind` only exists on issued + rejected; consumed records carry
       // only the consuming_tool, which is never an edit_* tool name.
@@ -50,9 +56,7 @@ export function filterEntries(
       if (e.risk_level !== filters.risk) return false;
     }
     if (filters.since !== undefined) {
-      const t = parseTimestamp(e.ts);
-      if (t === null) return false;
-      if (t.getTime() < filters.since.getTime()) return false;
+      if (ts.getTime() < filters.since.getTime()) return false;
     }
     return true;
   });
@@ -66,13 +70,20 @@ export function parseLogArgs(argv: string[]): {
   error: string;
 } {
   const filters: LogFilters = {};
+  let toolSeen = false;
+  let riskSeen = false;
+  let sinceSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--tool") {
+      if (toolSeen) return { ok: false, error: "--tool may only appear once" };
+      toolSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--tool requires a value" };
       filters.tool = v;
     } else if (arg === "--risk") {
+      if (riskSeen) return { ok: false, error: "--risk may only appear once" };
+      riskSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--risk requires a value" };
       if (v !== "low" && v !== "medium" && v !== "high" && v !== "critical") {
@@ -80,6 +91,8 @@ export function parseLogArgs(argv: string[]): {
       }
       filters.risk = v;
     } else if (arg === "--since") {
+      if (sinceSeen) return { ok: false, error: "--since may only appear once" };
+      sinceSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--since requires a date" };
       const d = parseSinceDate(v);

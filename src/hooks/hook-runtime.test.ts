@@ -1,6 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import { Readable } from "node:stream";
-import { readStdin } from "./hook-runtime.js";
+import {
+  readStdin,
+  replyAllow,
+  replyAllowWithWarning,
+  replyDeny,
+} from "./hook-runtime.js";
 
 // ---------------------------------------------------------------------------
 // Helper: temporarily replace process.stdin with a mock Readable.
@@ -63,5 +68,106 @@ describe("readStdin — fail-closed behaviour", () => {
     await expect(
       withMockStdin(JSON.stringify({ tool_name: "Edit" }), () => readStdin()),
     ).resolves.toEqual({ tool_name: "Edit" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Closes issue 2026-05-02-1041-reply-deny-stdout-shape-untested.
+// The Claude Code hook protocol requires a specific JSON shape on stdout.
+// A refactor that renamed permissionDecision or hookSpecificOutput would
+// silently change deny into "no opinion / allow" with nothing breaking.
+// ---------------------------------------------------------------------------
+
+function captureStdout(fn: () => unknown): string {
+  const chunks: string[] = [];
+  const original = process.stdout.write.bind(process.stdout);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stdout as any).write = (chunk: any) => {
+    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  };
+  try {
+    fn();
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stdout as any).write = original;
+  }
+  return chunks.join("");
+}
+
+function captureStderr(fn: () => unknown): string {
+  const chunks: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stderr as any).write = (chunk: any) => {
+    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  };
+  try {
+    fn();
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stderr as any).write = original;
+  }
+  return chunks.join("");
+}
+
+describe("replyDeny — stdout JSON shape", () => {
+  it("emits hookSpecificOutput.permissionDecision === 'deny' with the supplied reason", () => {
+    const out = captureStdout(() => replyDeny("test reason"));
+    const parsed = JSON.parse(out) as {
+      hookSpecificOutput: {
+        hookEventName: string;
+        permissionDecision: string;
+        permissionDecisionReason: string;
+      };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe("test reason");
+  });
+
+  it("returns exit code 0 (the deny is the decision, not the exit code)", () => {
+    captureStdout(() => {
+      expect(replyDeny("x")).toBe(0);
+    });
+  });
+});
+
+describe("replyAllow — stdout shape", () => {
+  it("emits empty stdout (silent allow / no opinion)", () => {
+    const out = captureStdout(() => replyAllow());
+    expect(out).toBe("");
+  });
+
+  it("returns exit code 0", () => {
+    captureStdout(() => {
+      expect(replyAllow()).toBe(0);
+    });
+  });
+});
+
+describe("replyAllowWithWarning — stdout + stderr shape", () => {
+  it("emits permissionDecision 'allow' plus additionalContext mirroring the reason", () => {
+    let stderrCaptured = "";
+    const out = captureStdout(() => {
+      stderrCaptured = captureStderr(() => replyAllowWithWarning("redirect warn"));
+    });
+    const parsed = JSON.parse(out) as {
+      hookSpecificOutput: {
+        hookEventName: string;
+        permissionDecision: string;
+        permissionDecisionReason: string;
+        additionalContext: string;
+      };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe("redirect warn");
+    // additionalContext is the field actually fed to Claude; without it
+    // the v0.1.5+ warn surface would be silent to the agent.
+    expect(parsed.hookSpecificOutput.additionalContext).toBe("redirect warn");
+    // stderr mirror for hosts that surface it.
+    expect(stderrCaptured).toContain("redirect warn");
   });
 });

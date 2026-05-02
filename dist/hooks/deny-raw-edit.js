@@ -5011,6 +5011,28 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
           error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
         };
       }
+      const parent = path3.dirname(absolute);
+      try {
+        const parentStat = fs3.statSync(parent);
+        if (!parentStat.isDirectory()) {
+          return {
+            ok: false,
+            error: `${fieldLabel} "${canonical}": parent path "${path3.dirname(canonical)}" exists but is not a directory`
+          };
+        }
+      } catch (parentErr) {
+        const parentCode = parentErr?.code;
+        if (parentCode === "ENOENT") {
+          return {
+            ok: false,
+            error: `${fieldLabel} "${canonical}": parent directory "${path3.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
+          };
+        }
+        return {
+          ok: false,
+          error: `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`
+        };
+      }
       return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
@@ -5873,4 +5895,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=54B7F60137539AFF64756E2164756E21
+//# debugId=41736AE193E86E4264756E2164756E21

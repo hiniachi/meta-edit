@@ -13,9 +13,16 @@ import { parseStrictSince } from "./parse-since.js";
  * record of ground truth.
  */
 function stripAnsi(s: string): string {
-  // CSI: ESC [ ... letter ; OSC: ESC ] ... BEL ; plus any bare ESC byte.
+  // CSI: ESC [ ... letter
+  // OSC: ESC ] ... terminator, where terminator is BEL (\x07) OR ST
+  //      (ESC \). Content forbids ESC so a malformed sequence cannot
+  //      swallow the next escape's introducer.
+  // Bare ESC: any leftover ESC byte (last alternative).
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|.)/g, "");
+  return s.replace(
+    /\x1b(?:\[[0-?]*[ -/]*[@-~]|\](?:[^\x07\x1b]*\x07|[^\x07\x1b]*\x1b\\)|.)/g,
+    "",
+  );
 }
 
 export type SummaryOptions = {
@@ -28,12 +35,16 @@ export type SummaryOptions = {
 export function runSummaryCommand(options: SummaryOptions): number {
   const log = new EditLog(options.repoRoot);
   const all = log.readAll();
+  // Unparseable timestamps are dropped UNCONDITIONALLY so summary counts
+  // never silently change between with-and-without --since views. Per
+  // issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+  const tsValid = all.filter((e) => Number.isFinite(new Date(e.ts).getTime()));
   const filtered =
     options.since === undefined
-      ? all
-      : all.filter((e) => {
+      ? tsValid
+      : tsValid.filter((e) => {
           const t = new Date(e.ts).getTime();
-          return Number.isFinite(t) && t >= (options.since as Date).getTime();
+          return t >= (options.since as Date).getTime();
         });
   const text = formatSummary(filtered, options.since);
   options.out.write(text);

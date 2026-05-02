@@ -52,6 +52,22 @@ describe("filterEntries", () => {
     expect(r.length).toBe(2);
   });
 
+  // Regression-guard for issue 2026-05-02-0428: pin the inclusive --since
+  // boundary so a future change from `t < since` to `t <= since`
+  // (exclusive) fails loudly. The existing inclusive test only covers
+  // ts > since; this one covers ts === since exactly.
+  it("keeps an entry whose ts is exactly equal to --since (inclusive boundary)", () => {
+    const exactEntry = issued({
+      edit_id: "edit_exact_0001",
+      ts: "2026-04-29T00:00:00+09:00",
+    });
+    const r = filterEntries([exactEntry], {
+      since: new Date("2026-04-29T00:00:00+09:00"),
+    });
+    expect(r.length).toBe(1);
+    expect(r[0]?.edit_id).toBe("edit_exact_0001");
+  });
+
   it("combines filters with AND", () => {
     const r = filterEntries(all, {
       tool: "edit_boundary_condition",
@@ -76,6 +92,31 @@ describe("filterEntries", () => {
     // Only the issued record carries `kind`; the consumed sibling drops out.
     expect(r.length).toBe(1);
     expect(r[0]?.phase).toBe("issued");
+  });
+
+  // Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter.
+  // filterEntries used to drop unparseable ts only when --since was set,
+  // creating a count discrepancy between filtered and unfiltered views.
+  // Now invalid ts is dropped unconditionally.
+  it("drops entries with unparseable ts even without --since (inversion test)", () => {
+    const bad = issued({ edit_id: "edit_bad_0001", ts: "not-a-date" });
+    const r = filterEntries([bad], {});
+    // OLD behavior: kept (length 1). NEW behavior: dropped (length 0).
+    expect(r.length).toBe(0);
+  });
+
+  it("drops entries with unparseable ts when --since is set (existing path, now unified)", () => {
+    const bad = issued({ edit_id: "edit_bad_0002", ts: "not-a-date" });
+    const r = filterEntries([bad], {
+      since: new Date("2026-04-29T00:00:00+09:00"),
+    });
+    expect(r.length).toBe(0);
+  });
+
+  it("keeps entries with valid ts regardless of --since (regression-free)", () => {
+    const good = issued({ edit_id: "edit_good_0001", ts: "2026-04-30T10:00:00+09:00" });
+    expect(filterEntries([good], {}).length).toBe(1);
+    expect(filterEntries([good], { since: new Date("2026-04-29T00:00:00+09:00") }).length).toBe(1);
   });
 
   it("excludes non-issued records when --risk is set (only issued carries risk_level)", () => {
@@ -145,6 +186,26 @@ describe("parseLogArgs", () => {
   it("accepts a valid ISO 8601 timestamp", () => {
     const r = parseLogArgs(["--since", "2026-04-30T12:34:56Z"]);
     expect(r.ok).toBe(true);
+  });
+
+  // Closes issue 2026-05-02-1041-parse-log-args-duplicate-flags-silently-accepted.
+  // Each flag may appear at most once, matching parseSummaryArgs's behavior.
+  it("rejects duplicate --tool", () => {
+    const r = parseLogArgs(["--tool", "edit_boundary_condition", "--tool", "edit_permission_logic"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--tool may only appear once/);
+  });
+
+  it("rejects duplicate --risk", () => {
+    const r = parseLogArgs(["--risk", "low", "--risk", "high"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--risk may only appear once/);
+  });
+
+  it("rejects duplicate --since", () => {
+    const r = parseLogArgs(["--since", "2026-04-29", "--since", "2026-04-30"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--since may only appear once/);
   });
 });
 

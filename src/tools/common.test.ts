@@ -179,6 +179,7 @@ describe("validateRequest — disk + path-safety", () => {
   });
 
   it("succeeds on a valid edit_create_file declaration with sha256(\"\") binding", () => {
+    fs.mkdirSync(path.join(tmpRoot, "src")); // parent dir must exist (v0.2.2)
     const r = validateRequest("edit_create_file",
       modifyReq({
         target_file: "src/new.ts",
@@ -188,6 +189,57 @@ describe("validateRequest — disk + path-safety", () => {
       expect(r.primaryBinding.canonical).toBe("src/new.ts");
       expect(r.primaryBinding.before_sha256).toBe(SHA256_EMPTY);
       expect(r.additionalBindings).toEqual([]);
+    }
+  });
+
+  // Closes issue 2026-05-02-1101-edit-create-file-no-implicit-mkdir.
+  // Without the parent-dir check, edit_create_file's eventual native Write
+  // fails silently with ENOENT, leaving an issued+consumed audit pair
+  // without a corresponding file on disk. Reject early at declaration
+  // time with a clear message so the agent can mkdir + re-declare.
+  it("rejects edit_create_file when the target_file's parent directory does not exist", () => {
+    const r = validateRequest("edit_create_file",
+      modifyReq({
+        target_file: "newdir/nested/file.ts", // newdir/nested/ does not exist
+      }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) =>
+          /parent directory.*does not exist|create it before declaring|mkdir/i.test(w),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects edit_create_file when the parent path exists but is not a directory", () => {
+    // Plant a regular file where the parent should be.
+    fs.mkdirSync(path.join(tmpRoot, "src"));
+    fs.writeFileSync(path.join(tmpRoot, "src/blocker"), "x", "utf8");
+    const r = validateRequest("edit_create_file",
+      modifyReq({
+        target_file: "src/blocker/child.ts", // src/blocker is a file
+      }), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) =>
+          /not a directory|exists but is not|ENOTDIR/i.test(w),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("succeeds on edit_create_file when parent dir exists (regression-free)", () => {
+    fs.mkdirSync(path.join(tmpRoot, "newdir/nested"), { recursive: true });
+    const r = validateRequest("edit_create_file",
+      modifyReq({
+        target_file: "newdir/nested/file.ts",
+      }), ctx());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.canonical).toBe("newdir/nested/file.ts");
+      expect(r.primaryBinding.before_sha256).toBe(SHA256_EMPTY);
     }
   });
 

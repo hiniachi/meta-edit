@@ -17470,6 +17470,28 @@ function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
           error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
         };
       }
+      const parent = path3.dirname(absolute);
+      try {
+        const parentStat = fs3.statSync(parent);
+        if (!parentStat.isDirectory()) {
+          return {
+            ok: false,
+            error: `${fieldLabel} "${canonical}": parent path "${path3.dirname(canonical)}" exists but is not a directory`
+          };
+        }
+      } catch (parentErr) {
+        const parentCode = parentErr?.code;
+        if (parentCode === "ENOENT") {
+          return {
+            ok: false,
+            error: `${fieldLabel} "${canonical}": parent directory "${path3.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`
+          };
+        }
+        return {
+          ok: false,
+          error: `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`
+        };
+      }
       return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
@@ -18523,6 +18545,9 @@ function runLogCommand(options) {
 }
 function filterEntries(entries, filters) {
   return entries.filter((e) => {
+    const ts = parseTimestamp(e.ts);
+    if (ts === null)
+      return false;
     if (filters.tool !== undefined) {
       if (e.phase === "consumed")
         return false;
@@ -18536,10 +18561,7 @@ function filterEntries(entries, filters) {
         return false;
     }
     if (filters.since !== undefined) {
-      const t = parseTimestamp(e.ts);
-      if (t === null)
-        return false;
-      if (t.getTime() < filters.since.getTime())
+      if (ts.getTime() < filters.since.getTime())
         return false;
     }
     return true;
@@ -18547,14 +18569,23 @@ function filterEntries(entries, filters) {
 }
 function parseLogArgs(argv) {
   const filters = {};
+  let toolSeen = false;
+  let riskSeen = false;
+  let sinceSeen = false;
   for (let i = 0;i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--tool") {
+      if (toolSeen)
+        return { ok: false, error: "--tool may only appear once" };
+      toolSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--tool requires a value" };
       filters.tool = v;
     } else if (arg === "--risk") {
+      if (riskSeen)
+        return { ok: false, error: "--risk may only appear once" };
+      riskSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--risk requires a value" };
@@ -18563,6 +18594,9 @@ function parseLogArgs(argv) {
       }
       filters.risk = v;
     } else if (arg === "--since") {
+      if (sinceSeen)
+        return { ok: false, error: "--since may only appear once" };
+      sinceSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--since requires a date" };
@@ -18589,14 +18623,15 @@ function parseSinceDate(s) {
 
 // src/cli/summary-cmd.ts
 function stripAnsi(s) {
-  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|.)/g, "");
+  return s.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\](?:[^\x07\x1b]*\x07|[^\x07\x1b]*\x1b\\)|.)/g, "");
 }
 function runSummaryCommand(options) {
   const log = new EditLog(options.repoRoot);
   const all = log.readAll();
-  const filtered = options.since === undefined ? all : all.filter((e) => {
+  const tsValid = all.filter((e) => Number.isFinite(new Date(e.ts).getTime()));
+  const filtered = options.since === undefined ? tsValid : tsValid.filter((e) => {
     const t = new Date(e.ts).getTime();
-    return Number.isFinite(t) && t >= options.since.getTime();
+    return t >= options.since.getTime();
   });
   const text = formatSummary(filtered, options.since);
   options.out.write(text);
@@ -18737,7 +18772,14 @@ function settingsPathForScope(scope, options = {}) {
 }
 function runInstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = installMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: installed PreToolUse hooks into ${target}
@@ -18751,7 +18793,14 @@ function runUninstallHooks(options) {
 `);
     return 0;
   }
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = uninstallMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: removed PreToolUse hooks from ${target}
@@ -18862,7 +18911,11 @@ function readSettings(filePath) {
   const text = fs7.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`failed to parse ${filePath} as JSON: ${e.message}`);
+  }
 }
 function writeSettings(filePath, settings) {
   const dir = path7.dirname(filePath);
@@ -19047,4 +19100,4 @@ export {
   main
 };
 
-//# debugId=735D66E5BDB797BD64756E2164756E21
+//# debugId=12B0E315E394754D64756E2164756E21
