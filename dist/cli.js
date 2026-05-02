@@ -18476,7 +18476,7 @@ async function runStdioServer(options = {}) {
 }
 
 // src/cli.ts
-import * as fs8 from "node:fs";
+import * as fs9 from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // src/cli/parse-since.ts
@@ -18970,6 +18970,178 @@ function parseHooksArgs(argv) {
   return { ok: true, scope };
 }
 
+// src/cli/opencode-cmd.ts
+import * as crypto5 from "node:crypto";
+import * as fs8 from "node:fs";
+import * as os2 from "node:os";
+import * as path8 from "node:path";
+var META_EDIT_OPENCODE_RESOURCES = {
+  mcpServerName: "meta-edit",
+  pluginPackage: "@hiniachi/meta-edit/opencode"
+};
+function configPathForScope(scope, options = {}) {
+  const home = options.home ?? os2.homedir();
+  const cwd = options.cwd ?? process.cwd();
+  if (scope === "user") {
+    return path8.join(home, ".config", "opencode", "opencode.json");
+  }
+  return path8.join(cwd, "opencode.json");
+}
+function runInstallOpencode(opts) {
+  const target = configPathForScope(opts.scope, opts);
+  let existing;
+  try {
+    existing = readConfig(target);
+  } catch (e) {
+    opts.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
+  const updated = installMetaEditOpencode(existing);
+  writeConfig(target, updated);
+  opts.out.write(`meta-edit: installed opencode mcp + plugin into ${target}
+`);
+  return 0;
+}
+function runUninstallOpencode(opts) {
+  const target = configPathForScope(opts.scope, opts);
+  if (!fs8.existsSync(target)) {
+    opts.out.write(`meta-edit: ${target} does not exist; nothing to uninstall.
+`);
+    return 0;
+  }
+  let existing;
+  try {
+    existing = readConfig(target);
+  } catch (e) {
+    opts.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
+  const updated = uninstallMetaEditOpencode(existing);
+  writeConfig(target, updated);
+  opts.out.write(`meta-edit: removed opencode mcp + plugin from ${target}
+`);
+  return 0;
+}
+function installMetaEditOpencode(config2) {
+  const out = clone3(config2);
+  if (out.mcp === null || typeof out.mcp !== "object" || Array.isArray(out.mcp)) {
+    out.mcp = {};
+  }
+  const mcp = out.mcp;
+  mcp[META_EDIT_OPENCODE_RESOURCES.mcpServerName] = {
+    type: "local",
+    command: ["meta-edit", "serve"],
+    enabled: true
+  };
+  let plugins;
+  if (Array.isArray(out.plugin)) {
+    plugins = [...out.plugin];
+  } else {
+    plugins = [];
+  }
+  if (!plugins.includes(META_EDIT_OPENCODE_RESOURCES.pluginPackage)) {
+    plugins.push(META_EDIT_OPENCODE_RESOURCES.pluginPackage);
+  }
+  out.plugin = plugins;
+  return out;
+}
+function uninstallMetaEditOpencode(config2) {
+  const out = clone3(config2);
+  if (out.mcp !== null && typeof out.mcp === "object" && !Array.isArray(out.mcp)) {
+    const mcp = out.mcp;
+    delete mcp[META_EDIT_OPENCODE_RESOURCES.mcpServerName];
+    if (Object.keys(mcp).length === 0) {
+      delete out.mcp;
+    }
+  }
+  if (Array.isArray(out.plugin)) {
+    const remaining = out.plugin.filter((p) => p !== META_EDIT_OPENCODE_RESOURCES.pluginPackage);
+    if (remaining.length === 0) {
+      delete out.plugin;
+    } else {
+      out.plugin = remaining;
+    }
+  }
+  return out;
+}
+function readConfig(filePath) {
+  if (!fs8.existsSync(filePath))
+    return {};
+  const text = fs8.readFileSync(filePath, "utf8");
+  if (text.trim().length === 0)
+    return {};
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`failed to parse ${filePath} as JSON: ${e.message}`);
+  }
+}
+function writeConfig(filePath, config2) {
+  const dir = path8.dirname(filePath);
+  fs8.mkdirSync(dir, { recursive: true });
+  let mode = 384;
+  try {
+    mode = fs8.statSync(filePath).mode & 4095;
+  } catch {}
+  const tempName = path8.basename(filePath) + "." + crypto5.randomBytes(8).toString("hex") + ".metaedit-tmp";
+  const tempPath = path8.join(dir, tempName);
+  let fd = null;
+  try {
+    fd = fs8.openSync(tempPath, fs8.constants.O_WRONLY | fs8.constants.O_CREAT | fs8.constants.O_EXCL | (fs8.constants.O_NOFOLLOW ?? 0), 384);
+    fs8.writeFileSync(fd, JSON.stringify(config2, null, 2) + `
+`, {
+      encoding: "utf8"
+    });
+    fs8.fsyncSync(fd);
+  } catch (e) {
+    try {
+      fs8.unlinkSync(tempPath);
+    } catch {}
+    throw e;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs8.closeSync(fd);
+      } catch {}
+    }
+  }
+  try {
+    fs8.chmodSync(tempPath, mode);
+  } catch {}
+  try {
+    fs8.renameSync(tempPath, filePath);
+  } catch (e) {
+    try {
+      fs8.unlinkSync(tempPath);
+    } catch {}
+    throw e;
+  }
+}
+function clone3(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+function parseOpencodeArgs(argv) {
+  let scope;
+  for (let i = 0;i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--scope") {
+      const v = argv[++i];
+      if (v !== "user" && v !== "project") {
+        return { ok: false, error: `--scope must be "user" or "project" (got "${v}")` };
+      }
+      scope = v;
+    } else {
+      return { ok: false, error: `unknown flag: ${arg}` };
+    }
+  }
+  if (scope === undefined) {
+    return { ok: false, error: "--scope <user|project> is required" };
+  }
+  return { ok: true, scope };
+}
+
 // src/docs-urls.ts
 var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 var SPEC_URL = `${BASE}/docs/SPEC.md`;
@@ -19018,6 +19190,10 @@ Usage:
                                            Install Claude Code hooks into settings.json.
   meta-edit uninstall-hooks --scope user|project
                                            Remove Claude Code hooks from settings.json.
+  meta-edit install-opencode --scope user|project
+                                           Install opencode mcp + plugin into opencode.json.
+  meta-edit uninstall-opencode --scope user|project
+                                           Remove opencode mcp + plugin from opencode.json.
   meta-edit help [TOOL]                    Show this help, or the verbatim
                                            description for one typed_edit tool.
   meta-edit --version                      Show version.
@@ -19124,6 +19300,24 @@ async function main(argv) {
       }
       return runUninstallHooks({ scope: parsed.scope, out, err });
     }
+    case "install-opencode": {
+      const parsed = parseOpencodeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit install-opencode: ${parsed.error}
+`);
+        return 64;
+      }
+      return runInstallOpencode({ scope: parsed.scope, out, err });
+    }
+    case "uninstall-opencode": {
+      const parsed = parseOpencodeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit uninstall-opencode: ${parsed.error}
+`);
+        return 64;
+      }
+      return runUninstallOpencode({ scope: parsed.scope, out, err });
+    }
     default: {
       err.write(`meta-edit: unknown subcommand "${subcommand}"
 `);
@@ -19138,8 +19332,8 @@ function isMainModule() {
   if (!process.argv[1])
     return false;
   try {
-    const argv1Real = fs8.realpathSync(process.argv[1]);
-    const moduleReal = fs8.realpathSync(fileURLToPath(import.meta.url));
+    const argv1Real = fs9.realpathSync(process.argv[1]);
+    const moduleReal = fs9.realpathSync(fileURLToPath(import.meta.url));
     return argv1Real === moduleReal;
   } catch {
     return false;
@@ -19157,4 +19351,4 @@ export {
   main
 };
 
-//# debugId=CC03A4818A2E0B0364756E2164756E21
+//# debugId=BB06EE69908D092164756E2164756E21
