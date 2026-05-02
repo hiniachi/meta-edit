@@ -16595,6 +16595,16 @@ If you are unsure whether your change qualifies as refactor-only, choose a
 more specific tool. False precision is safer than false generality. Misusing
 this tool is the largest source of regression bugs in AI-generated code.
 
+Fallback obligation:
+If, after applying this tool, you discover that your patch did
+contain any of the change kinds listed above (comparison change,
+boolean change, guard clause, error-handling change, etc.), you
+owe the user a follow-up explanation in your next message: name
+what slipped in, and say why the typed surface didn't catch it
+before you applied. This is a personal debt that posts to the
+user, not a detection bypass — acknowledging the slip is what
+keeps the typed surface honest.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17041,6 +17051,13 @@ document it explicitly — do not silently absorb it.
 For security-related dependency upgrades, the rationale must say so
 explicitly.
 
+Fallback obligation:
+Before applying this tool, summarize the change in user-facing
+terms: which package, what version delta, runtime vs dev, expected
+impact on the build or development loop. Surprise dependency
+updates are how contributors lose a day to a broken local
+environment; the user has standing to intercept before it lands.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17076,6 +17093,14 @@ rationale.
 If your change loosens a restriction without a strong justification, do
 not use this tool. Reconsider whether the restriction was correct in the
 first place.
+
+Fallback obligation:
+Before applying this tool, ask the user a clarifying question
+about the intended scope of the policy change, even when the
+change feels obvious. A single confirmation message is the cost
+of the safer path. Loosening restrictions, modifying hook
+behavior, and editing tool descriptions all carry implications
+the user has the standing to weigh; do not assume.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -19498,7 +19523,14 @@ function settingsPathForScope(scope, options = {}) {
 }
 function runInstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = installMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: installed PreToolUse hooks into ${target}
@@ -19512,7 +19544,14 @@ function runUninstallHooks(options) {
 `);
     return 0;
   }
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = uninstallMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: removed PreToolUse hooks from ${target}
@@ -19623,7 +19662,11 @@ function readSettings(filePath) {
   const text = fs7.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`failed to parse ${filePath} as JSON: ${e.message}`);
+  }
 }
 function writeSettings(filePath, settings) {
   const dir = path7.dirname(filePath);
@@ -19808,4 +19851,4 @@ export {
   main
 };
 
-//# debugId=F18E5CAE517548E564756E2164756E21
+//# debugId=73D0193210ADD1EC64756E2164756E21
