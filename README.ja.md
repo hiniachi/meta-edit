@@ -152,7 +152,7 @@ meta-edit install-hooks --scope user
 ご支援は次の用途に使われます。
 
 - 観測された AI の失敗パターンに基づく新しい `edit_*` カテゴリの追加
-- v0.2 で予定している軽量 diff 分類器の実装（[`SPEC.md` §11](./docs/SPEC.md) 参照）
+- v0.2 で予定している軽量 diff 分類器の実装（[`SPEC.md` Article 2](./docs/SPEC.md) 参照）
 - Claude Code Plugin との統合強化
 
 ## ライセンス
