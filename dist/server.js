@@ -18374,6 +18374,10 @@ var package_default = {
     "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
   },
   main: "./dist/server.js",
+  exports: {
+    ".": "./dist/server.js",
+    "./opencode": "./dist/opencode/plugin.js"
+  },
   files: [
     "dist/",
     "docs/SPEC.md",
@@ -18383,7 +18387,7 @@ var package_default = {
     "LICENSE"
   ],
   scripts: {
-    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts --target node --outdir dist --root src --sourcemap=external",
+    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts src/opencode/plugin.ts --target node --outdir dist --root src --sourcemap=external",
     test: "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     typecheck: "tsc --noEmit",
@@ -18396,6 +18400,14 @@ var package_default = {
     "@modelcontextprotocol/sdk": "^1.0.0",
     diff: "^9",
     zod: "^3.23.0"
+  },
+  peerDependencies: {
+    "@opencode-ai/plugin": "*"
+  },
+  peerDependenciesMeta: {
+    "@opencode-ai/plugin": {
+      optional: true
+    }
   },
   devDependencies: {
     "@types/bun": "^1.3.13",
@@ -18466,4 +18478,4 @@ export {
   createServer
 };
 
-//# debugId=D52494EA1118E34C64756E2164756E21
+//# debugId=2022F9D0BFF16C0664756E2164756E21
