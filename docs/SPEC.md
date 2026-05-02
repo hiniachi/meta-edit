@@ -1146,110 +1146,71 @@ General principles (apply to every edit):
 
 ## 5. Hooks
 
-Two hooks. No more.
+Two PreToolUse hooks, both shipped under `hooks/` in this repo.
 
-### 5.1 `deny-raw-edit`
+### 5.1. deny-raw-edit (token-aware)
 
-Triggered on `PreToolUse` for `Edit`, `Write`, `MultiEdit`, `NotebookEdit`. Always denies.
-
-`NotebookEdit` is included because Jupyter (`.ipynb`) cells contain arbitrary executable code (Python, shell `!cmd`, JavaScript) — edits to them warrant the same kind-specific discipline as edits to `.py` or `.ts` source files. Tool-name comparison is case-insensitive so a host shim that delivers alternate casings (`"edit"`, `"WRITE"`, `"multiedit"`, `"notebookedit"`) cannot bypass the gate.
-
-Response payload:
-
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Raw Edit/Write/MultiEdit/NotebookEdit is disabled. Use one of the edit_* tools (e.g., edit_boundary_condition, edit_refactor_only). See tool descriptions for guidance on which to use."
-  }
-}
-```
-
-### 5.2 `deny-bash-write-bypass`
-
-Triggered on `PreToolUse` for `Bash`. Inspects the command line and denies if it matches a write-bypass pattern, unless it matches an allowlist pattern.
-
-This hook operates on a **best-effort basis**. It uses substring matching on the command line, which is straightforward to bypass (heredocs in alternative languages, base64-encoded commands, indirect invocations through shell aliases or wrappers, etc.). The MVP does not attempt to defeat a determined bypass; it raises the cost of the obvious bypasses to the point where using an `edit_*` tool is the path of least resistance. Stronger guarantees would require shell command parsing or a filesystem sandbox, both of which are out of scope.
-
-Deny families:
-
-1. **Verb-based deny patterns** (substring or verb match on the command, after basic normalization). All entries below are `deny`, not `warn`:
-
-   ```
-   sed -i
-   sed --in-place
-   perl -pi
-   perl -i
-   perl -e / ruby -e / php -r        (when the snippet writes a file)
-   python -c                         (when the snippet contains write_text, write, open(... 'w', etc.)
-   node -e                           (when the snippet contains writeFile, writeFileSync)
-   cat >
-   cat >>
-   tee <in-repo target>
-   tee -a <in-repo target>
-   mv ... <files in repo>
-   cp ... <files in repo>
-   dd of=<in-repo target>
-   git apply
-   patch
-   rsync
-
-   heredoc-with-redirect             (`cat <<MARKER ... > target`,
-                                      `cat <<-MARKER ... > target`,
-                                      `cat <<"MARKER" ... > target`,
-                                      `cat <<'MARKER' ... > target`)
-   eval <non-literal argument>       (`eval "$X"`, eval of `$(...)` /
-                                      backticks / variable expansions)
-   decode-and-execute pipelines      (`base64 -d | bash`,
-                                      `xxd -r -p | sh`,
-                                      `openssl base64 -d | bash`, …)
-   ```
-
-   The deny set is intentionally larger than the verb list above — it covers shape-based detections too. Source of truth for the exact set is `src/hooks/bash-write-policy.ts` (`DENY_SUBSTRINGS`, `DENY_PREFIX_PATTERNS`, `DENY_VERBS`, `matchesDangerousDd`, `matchesDangerousTee`, `matchesEvalDeferredString`, `matchesPythonNodeWrite`, `matchesDecodeAndExecute`, plus the heredoc-with-redirect regex in `evaluateSegment`).
-
-2. **Structural redirect-target warn** (dogfood-001 + dogfood-005, loosened to warn in v0.1.5). Any `>` / `>>` / `>|` write redirect whose target is not on the safe-sink allowlist is **warned-and-allowed** — the call proceeds, but the hook returns `permissionDecision: "allow"` together with a `permissionDecisionReason` and mirrors the same text on stderr, so the AI is nudged toward an `edit_*` tool while a human reviewer sees the warning in the transcript. This catches new write verbs (`printf > foo.ts`, `echo > foo.ts`, future utilities) structurally, without requiring the per-verb table above to enumerate every one. The safe-sink allowlist is:
-
-   ```
-   exact: /dev/null  /dev/stdout  /dev/stderr  /dev/zero
-   prefix: /tmp/  /var/tmp/  /run/  /sys/
-   ```
-
-   Relative paths and absolute paths outside the safe-sink list are treated as bypass-risk and warned. Use one of the nineteen `edit_*` tools for in-repo writes; capture command output to `/tmp/` or `/dev/null` if you need a sink.
-
-   **`deny` always wins over `warn`** when both fire on the same command. Verb-deny patterns (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, the heredoc-with-redirect form, the inline-interpreter writes, etc.) and protected-path checks run *before* the structural redirect check, so well-known bypasses still produce `deny`. Across segments, the top-level evaluator surfaces `deny` if any segment denies; otherwise it surfaces the first `warn`; otherwise `allow`.
-
-   v0.1.4 and prior denied this case outright. The loosening (deny → warn) was driven by a structural false-positive surface: legitimate redirects to outside-repo absolute paths (`~/.cache/...`, `$RUNNER_TEMP`, `/home/user/scratch/...`) had no safe-sink entry and were uniformly denied. The verb-denylist still catches the well-known bypasses, and `.meta-edit/state/**` / `.meta-edit/tmp/**` writes are still denied earlier in the pipeline. If observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around the typed tools through this surface at scale, the warn will be tightened back to deny — see `OBSERVED-FAILURES.md` for the restore trigger.
-
-   The DENY_SUBSTRINGS verb scan and the protected-path scan apply `stripQuotedContent` first, so a documentation string containing the literal trigger phrase inside a quoted argument (`printf 'do not use sed -i' > /tmp/notes.md`) is not denied. Shell-hosting wrappers (`bash -c "..."`, `sh -c "..."`, `eval "..."`) re-extract their literal argument and scan it raw so embedded bypasses inside the wrapper's quoted code remain caught.
-
-Allowlist patterns (override deny):
+Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit` tools. Validates that each call carries a `_meta_edit_token` parameter referencing a fresh declaration in `.meta-edit/state/grants/`.
 
 ```
-prettier --write
-eslint --fix
-gofmt -w
-cargo fmt
-ruff --fix
-ruff format
-black
-prisma generate
-openapi-generator
-swagger-codegen
+on_pre_tool_use(toolName, toolInput):
+  token_id = toolInput["_meta_edit_token"]
+  if not token_id:
+    return deny("untyped raw edit")
+
+  token = grants.lookup(token_id)
+  if token is None or token.expired():
+    return deny("token expired or unknown")
+
+  file_path = realpath(toolInput["file_path"])
+  bound = token.find_binding(file_path)
+  if bound is None:
+    return deny("file_path not bound by this token")
+
+  # Pre-condition: declared starting state matches disk
+  disk_content = read(file_path) if exists(file_path) else b""
+  if sha256(disk_content) != bound.before_sha256:
+    return deny("disk has drifted from declaration (staleness)")
+
+  # Post-condition: simulated write produces declared content.
+  # Catches honest mistakes where toolInput would produce content
+  # differing from the declared after_sha256.
+  proposed = simulate(toolName, toolInput, disk_content)
+  if sha256(proposed) != bound.after_sha256:
+    return deny("simulated write does not match declared after_sha256")
+
+  grants.consume(token_id, file_path)
+  return allow()
+
+simulate(toolName, toolInput, current):
+  case "Edit":         return current.replace(toolInput.old_string,
+                                              toolInput.new_string, count=1)
+  case "Write":        return toolInput.content
+  case "MultiEdit":    apply each edit in sequence; return final
+  case "NotebookEdit": return UNSUPPORTED   # see §11 / Article 7
 ```
 
-The allowlist exists because formatters and code generators are part of normal development workflows, and forbidding them outright would make `meta-edit` unusable in real projects. These tools are conventionally semantic-preserving (formatters) or driven by separate input files (codegens), so they are unlikely to be used as deliberate edit-tool bypass. If observation shows AIs routing edits through formatters or codegens to avoid `edit_*` tools, the allowlist will be tightened in a future version.
+The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
 
-Allowlist applies only when the command's effect is bounded to formatting or codegen, never to arbitrary file rewrites.
+Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
-Writes to `.meta-edit/state/**` and `.meta-edit/tmp/**` are denied even if the command otherwise matches the allowlist. The hook decides "would write" along two axes:
+After the native write completes, a PostToolUse path appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6).
 
-1. **Verb is not in the read-only carve-out.** The hook maintains a small set of common read-only inspection utilities (`tail`, `head`, `cat`, `grep` / `egrep` / `fgrep`, `wc`, `cut`, `tr`, `od`, `hexdump`, `stat`, `ls`, `du`, `df`, `jq`, `diff`, `cmp`). If the command's leading verb (after wrapper / env-assignment / absolute-path normalization) is **not** in that set, any reference to a protected path is denied.
-2. **`>` / `>>` redirect target is protected.** Even when the leading verb is read-only, if the command has a write redirect whose target token references a protected path (substring match, after backslash strip and path-doubling collapse, ignoring `>&` fd-duplications and quoted regions), the deny still fires.
+Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through this hook — see issue 1108) are an acknowledged hook-scope gap. Closing that gap is a future hook expansion (PostToolUse monitoring, MCP-write allowlist), not part of this hook.
 
-This carve-out exists so debugging workflows like `tail -2 .meta-edit/state/edits.jsonl` or `jq . .meta-edit/state/edits.jsonl` work without disabling the hook. Any verb that has a non-redirect write side-effect — including in-place mutation, an output flag, an output positional, a shell-escape mode, or a subprocess-spawning option — is deliberately omitted from the read-only set so the protected-path deny still fires when targeting protected directories. Examples: `find -delete`, `sort -o OUT`, `uniq IN OUT`, `xxd -r`, `yq -i`, `less -O OUT`, `more !command`, `rg --pre=CMD`, `file -C`, `awk 'print > "..."'`, `dd of=...`.
+### 5.2. deny-bash-write-bypass
 
-When in doubt, the hook denies and asks the AI to use an `edit_*` tool.
+Fires on Claude Code's `Bash` tool. Denies write patterns that would route bytes into the repository without going through native Edit/Write:
+
+- **Verb denylist**: `cat >`, `sed -i`, `tee`, `dd of=`, `mv`, `cp`, `patch`, `rsync`, `git apply`, ...
+- **Heredoc-with-redirect**: `cat <<EOF > target`
+- **Inline interpreter writes**: `python -c '...write'`, `node -e '...write'`, `perl -e ...`, `ruby -e ...`, `php -r ...`
+- **Decode-and-execute pipelines**: `base64 -d | bash`, `eval "$(...)"`
+- **Protected-path writes**: `printf > .meta-edit/state/...` (always denied regardless of redirect target)
+
+The structural redirect-target check (a redirect to a path outside the safe-sink allowlist) is **warned, not denied** since v0.1.5. The call proceeds with a `permissionDecisionReason` nudging the agent toward an `edit_*` tool. The verb-denylist and protected-path checks remain `deny`.
+
+Substring-matching is the bypass-resistance limit. Determined commands (alternative interpreters, encoded payloads, exotic constructs) can evade. Per Article 3's non-adversarial assumption, the goal is to make the typed surface easier than honest workaround paths, not to provide a sandbox.
 
 ---
 
