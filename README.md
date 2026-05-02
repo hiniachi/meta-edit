@@ -18,7 +18,7 @@ Tool definitions don't decay. The schema and description of the tool the agent i
 
 The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification (Part I constitution + Part II derived spec), and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the post-v0.2 detection backlog.
 
-Status: `0.2.0` pre-release. v0.2 reframes the mechanism as **declaration + token binding** (per `SPEC.md` Article 5): the MCP server validates declarations and issues short-lived tokens; native `Edit` / `Write` performs the actual writes under the `deny-raw-edit` hook's binding-validation gate. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
+Status: `0.2.3` pre-release. v0.2 reframes the mechanism as **declaration + token binding** (per `SPEC.md` Article 5): the MCP server validates declarations and issues short-lived tokens; native `Edit` / `Write` performs the actual writes under the `deny-raw-edit` hook's binding-validation gate. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
 
 ## The nineteen tools
 
