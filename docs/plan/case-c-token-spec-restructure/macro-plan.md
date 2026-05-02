@@ -47,6 +47,16 @@ lightweight diff classifier as a backstop. Adding detection prematurely
 makes the question impossible to answer cleanly, so it is forbidden in
 MVP scope (see Article 7).
 
+Falsifiability is a known gap of this article: "do descriptions change
+behavior" is sharper if accompanied by observable measurements. The
+edit log already records every typed call; useful indicators that
+should be derivable from it include declaration-without-Edit
+follow-through rate, expired-token rate, and per-tool selection
+distribution against a manually classified ground truth. Concrete
+thresholds for "descriptions are insufficient → add a classifier" are
+left for v0.2 observation, but the indicators above are the intended
+signal channel.
+
 ### Article 3 — Threat model
 
 The expected operator is a **friendly-but-friction-driven** agent.
@@ -136,11 +146,20 @@ replace it without amending the constitution.
    lifetime (single use, time-bounded) so that stale declarations do
    not accumulate authority.
 
-3. **The bash-write-policy hook is the load-bearing defense.** Whatever
-   binding mechanism is in use, shell-route bypasses (`cat >`, `sed
-   -i`, `tee`, heredocs, encoded-payload pipelines) are blocked
-   independently. The bash hook is the line that prevents binding
-   forgery from outside the typed surface.
+3. **The bash-write-policy hook is the load-bearing defense for
+   shell-route bypasses.** Whatever binding mechanism is in use,
+   shell-route bypasses (`cat >`, `sed -i`, `tee`, heredocs,
+   encoded-payload pipelines) are blocked independently. The bash hook
+   is the line that prevents accidental binding-forgery from outside
+   the typed surface.
+
+   Other-MCP write paths (e.g. `ctx_execute` writing to disk
+   without going through any meta-edit-aware hook — see issue 1108)
+   are an acknowledged hook-scope gap. Closing that gap belongs to a
+   future hook expansion (PostToolUse monitoring, MCP-write
+   allowlist), not to the constitution. The friendly-AI threat model
+   in Article 3 means the gap shows up as honest workflow misses, not
+   as adversarial bypasses.
 
 The current implementation choice is a single-use, TTL-bound,
 HMAC-signed token (Part III). It satisfies all three principles. If a
@@ -186,6 +205,12 @@ re-affirmation that this edit is test-only; the cognitive intervention
 fires twice, once for the production change and once for the test
 addition.
 
+If the production edit's `test_files` lists multiple paths, the agent
+issues one `edit_test_only_change` declaration per test file. This is
+the intended cost: each test file is its own cognitive unit ("this
+change is test-only"), so multi-file fulfillment cannot be batched
+under a single declaration.
+
 **`edit_test_only_change` is a strict 1-file SQLite-derived tool**:
 target_file is the test file itself, `test_files` MUST be empty, and
 the call binds exactly one file.
@@ -224,7 +249,8 @@ classifier) is the planned next step — and only that.
 - SQLite testing strategy: https://sqlite.org/testing.html
 - Issue 1103 — typed `edit_*` as thin Edit wrapper via grant-token
   (`issues/2026-05-02-1103-typed-edit-as-thin-edit-wrapper-via-grant-token.md`)
-- Brainstorm origin: `docs/plan/case-c-token-spec-restructure/macro-plan.md`
+- Issue 1108 — `deny-raw-edit` MCP tool scope gap
+  (`issues/2026-05-02-1108-deny-raw-edit-mcp-tool-scope-gap.md`)
 
 ---
 
@@ -332,17 +358,48 @@ on_pre_tool_use(toolName, toolInput):
   if bound is None:
     return deny("file_path not bound by this token")
 
-  current_sha = sha256(read(file_path)) if exists(file_path) else SHA256_EMPTY
-  if current_sha != bound.before_sha256:
-    return deny("disk content changed since declaration (TOCTOU)")
+  # Pre-condition: declared starting state matches disk
+  disk_content = read(file_path) if exists(file_path) else b""
+  if sha256(disk_content) != bound.before_sha256:
+    return deny("disk has drifted from declaration (staleness)")
+
+  # Post-condition: simulated write produces declared content.
+  # Catches honest mistakes where the agent's tool_input would
+  # produce content differing from the declared after_sha256.
+  proposed = simulate(toolName, toolInput, disk_content)
+  if sha256(proposed) != bound.after_sha256:
+    return deny("simulated write does not match declared after_sha256")
 
   grants.consume(token_id, file_path)
   return allow()
+
+simulate(toolName, toolInput, current):
+  case "Edit":       return current.replace(toolInput.old_string,
+                                            toolInput.new_string, count=1)
+  case "Write":      return toolInput.content
+  case "MultiEdit":  result = current
+                     for e in toolInput.edits:
+                       result = result.replace(e.old_string,
+                                               e.new_string, count=1)
+                     return result
+  case "NotebookEdit": return UNSUPPORTED   # see open decisions
 ```
 
-After the Edit completes, a PostToolUse hook (or the MCP server polling
-on grant consumption) appends to `.meta-edit/state/edits.jsonl` with
-`applied: true` and the consuming tool's name.
+The pre-condition check is **staleness detection**, not a TOCTOU
+defense: it catches declarations made against a prior disk state, but
+it does not eliminate the residual race between hook approval and the
+native write completing. The residual race is accepted under
+Article 3's friendly-AI threat model.
+
+Read-only tool calls (Read, Grep, Glob, Bash without writes, etc.)
+do NOT consume tokens. The hook fires only on
+`Edit / Write / MultiEdit / NotebookEdit`. The agent may freely
+interleave reads between declaration and consumption, bounded only by
+the token's TTL.
+
+After the Edit completes, a PostToolUse hook (or the MCP server
+polling on grant consumption) appends to `.meta-edit/state/edits.jsonl`
+with `applied: true` and the consuming tool's name.
 
 ### Edit log shape (replaces current §6)
 
@@ -369,51 +426,63 @@ declaration. Audit consumers reconcile by `edit_id`.
 
 ### Open mechanics decisions
 
-- **MultiEdit support** — Recommended yes. The hook reads disk before,
-  applies the multi-edit's internal sequence in-memory, computes the
-  resulting sha256, compares to `after_sha256`. If matches, the actual
-  MultiEdit is allowed.
+- **MultiEdit support** — Recommended yes. Specified above in the
+  `simulate()` cases.
 - **NotebookEdit support** — Out of scope for v0.2 first cut. Hook
   denies `NotebookEdit` unconditionally inside the repo. Revisit when
   notebook-heavy projects start dogfooding.
 - **Token storage** — `.meta-edit/state/grants/<token_id>.json`,
   protected path. Concurrent declarations get separate token files; no
-  global lock.
-- **Token signing** — HMAC-SHA256 with a server-startup-generated key
-  at `.meta-edit/state/grant.key` (mode 0600). Hook verifies signature
-  before lookup. Stops a different MCP/process from forging tokens by
-  writing into `.meta-edit/state/grants/`.
+  global lock. No HMAC signing: forgery requires writing into
+  `.meta-edit/state/`, which `deny-bash-write-bypass` already blocks.
+  Adversarial-MCP forgery is out of scope per Article 3.
+- **`additional_files` cardinality cap** — Server enforces a soft cap
+  (suggested initial value: 32) on the size of the workflow tools'
+  binding set. Larger batches must be split. The cap is operational
+  hygiene (audit-log noise, declaration-time sha256 cost), not a
+  constitutional value, and may be tuned by observation.
 
 ---
 
 ## Part IV — Migration strategy
 
-Per issue 1103 §採用判断ポイント, the recommendation is **(i) v0.2
-branch with current `main` continuing on apply.ts**. Rationale:
+**Decision (user 2026-05-02): spec-first, single PR.**
 
-- Hypothesis-validation comparability: side-by-side observation of
-  "heavy apply.ts main" vs "thin token v0.2".
-- Risk isolation: token-binding has new failure modes (TOCTOU window,
-  signature key handling) worth shaking out off the release line.
-- SPEC slim is implementation-mostly-orthogonal: the constitutional
-  restructure can land on `main` even without the Case C migration,
-  just by trimming review-accretion. We may want to **split the spec
-  slim from the token-binding feature**.
+The constitution lands on `main` as a single PR (this work),
+including the Article 5 binding mandate, even though `main`'s code
+still uses the v0.1.x apply.ts content-pair implementation.
+Implementation work follows in subsequent PRs guided by the spec.
+
+### Why not split spec-slim from feature
+
+The earlier draft proposed splitting (a) a doc-only slim PR landing on
+`main` and (b) a feature PR on a `v0.2-token-binding` branch. Rejected
+because:
+
+- **AI-agent context drift.** Implementation PRs without the spec in
+  hand tend to default to existing patterns and postpone the
+  migration. Spec-first ensures the constitutional constraints are
+  visible whenever the code is being touched.
+- **The split's claimed benefit (avoiding spec-vs-code drift) is
+  weaker than its cost.** The drift window is the time between
+  constitution-on-main and code-catching-up. During this window,
+  Article 5 is the target semantics; the legacy implementation is
+  honest about being legacy. This is preferable to leaving the
+  constitution off `main` while the code drifts further from it.
 
 ### Suggested PR sequence
 
-1. **`spec-constitutional-restructure` PR** (this work) — adds Part I
-   articles, slims review-accretion in Part II, no behavior change.
-   Lands on `main`. Pure documentation.
-2. **`v0.2-token-binding` branch** — implements Article 5/6, switches
-   `apply.ts` to a thin grant issuer, rewires `deny-raw-edit` to be
-   token-aware. Tested in branch, observed in self-application.
-3. **`v0.2.0` release** — cuts a tag once Case C shows acceptable
-   ergonomics and bypass rates in dogfood.
-
-Either step (1) alone is a complete unit of value (the spec becomes
-re-readable for newcomers). Step (2) requires step (1)'s constitution
-in place to be reviewable against the bet.
+1. **Constitutional restructure PR (this work)** — adds Part I
+   articles, restructures Part II per the disposition map. Article 5
+   states the binding mandate as target semantics; the spec briefly
+   leads the implementation. Lands on `main`.
+2. **Implementation PRs** migrate `apply.ts` → thin grant issuer,
+   rewire `deny-raw-edit` to be token-aware, and update
+   `src/tools/{common,registry}.ts` and `src/state/edit-log.ts`.
+   Each PR's review surface is "does this realize Article 5/6's
+   mandate?" rather than re-debating the design.
+3. **v0.2.0 release** cuts when the implementation catches up to the
+   constitution.
 
 ---
 
@@ -426,11 +495,37 @@ Before this plan moves to implementation:
 - [ ] User reviews **Part II mapping** — disagreements on a section's
       disposition (keep/slim/absorb/cut) get resolved here, not later.
 - [ ] User reviews **Part III mechanics** — open decisions
-      (MultiEdit, NotebookEdit, signing) get answered or deferred.
-- [ ] User confirms **Part IV migration sequence** — specifically the
-      "split slim from token-binding" recommendation.
+      (MultiEdit yes; NotebookEdit deferred; storage no-HMAC;
+      `additional_files` cardinality cap) get answered or deferred.
+- [x] **Part IV migration sequence — RESOLVED 2026-05-02.** Spec-first,
+      single PR (no doc/feature split).
 
-Once all four pass, hand off to `superpowers:writing-plans` to produce
-a micro-plan that maps to specific edits in `docs/SPEC.md` and
-(eventually) `src/tools/{common,registry}.ts`, `src/hooks/raw-edit-policy.ts`,
-`src/state/edit-log.ts`.
+Once Part I / Part II / Part III pass, hand off to
+`superpowers:writing-plans` to produce a micro-plan that maps to
+specific edits in `docs/SPEC.md` and (eventually) `src/tools/{common,registry}.ts`,
+`src/hooks/raw-edit-policy.ts`, `src/state/edit-log.ts`.
+
+### Codex review history (2026-05-02)
+
+Codex review run after the corrections in commit `0079f6c`. Findings:
+
+- **HIGH adopted**: `after_sha256` post-condition check added to hook
+  pseudocode (catches honest mismatches between declaration and
+  proposed write).
+- **HIGH softened**: pre-condition sha256 check reframed as
+  "staleness detection," not TOCTOU defense; residual race accepted
+  per Article 3.
+- **HIGH descoped**: HMAC signing dropped from open decisions —
+  adversarial-MCP forgery is outside Article 3's threat model.
+  Issue 1108 added to References as the acknowledged hook-scope gap
+  to be closed by future hook expansion, not by this constitution.
+- **HIGH resolved**: spec-vs-code drift accepted as cost of spec-first
+  migration; Part IV updated.
+- **MED adopted**: `additional_files` cardinality cap added (initial
+  value 32). Falsifiability paragraph added to Article 2.
+- **MED retained-as-designed**: 17/2 split and "1 declaration ≡ 1
+  file" for SQLite-derived multi-file refactors are deliberate
+  cognitive-intervention choices, not regressions.
+- **LOW + editorial**: multi-test-file fulfillment clause added to
+  Article 6; Article 8 self-reference removed; intervening-read
+  semantics specified in Part III.
