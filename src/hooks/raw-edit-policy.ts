@@ -35,9 +35,13 @@
 // proposed write differed from declaration — at the cost of (a)
 // client-supplied after_sha256 friction at issue time, (b) maintaining a
 // per-tool replay engine here, and (c) a NotebookEdit "UNSUPPORTED"
-// branch. The cost outweighed the benefit. NotebookEdit is now denied at
-// the policy level (out of v0.2 scope), and the staleness check on
-// before_sha256 remains the single load-bearing pre-condition.
+// branch. All three were removed. v0.2.1 then policy-denied
+// NotebookEdit at gate time as a placeholder; v0.3.0 (issue
+// 0105-notebookedit) lifts that deny because the staleness check on
+// before_sha256 operates on byte content (the .ipynb JSON file as a
+// whole) and is well-defined regardless of cell semantics.
+// NotebookEdit now routes through the same canonicalize → grant →
+// consume → before_sha256 flow as Edit / Write / MultiEdit.
 //
 // Threat model (Article 3): non-adversarial. We do NOT HMAC-sign tokens,
 // we do NOT defend against deep TOCTOU between approval and write, we do
@@ -64,10 +68,10 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
   // NotebookEdit edits Jupyter (.ipynb) cells, which carry executable
   // code (Python, shell `!cmd`, JS). Without this entry an agent could
-  // rewrite notebook cells and bypass the typed surface entirely. Per
-  // v0.2.1 the hook denies NotebookEdit at the policy level (out of v0.2
-  // scope) before token lookup, so a misdirected token does not get
-  // partially consumed.
+  // rewrite notebook cells and bypass the typed surface entirely.
+  // v0.3.0 routes NotebookEdit through the same grant lookup +
+  // before_sha256 staleness flow as the other three raw edits; the
+  // staleness check operates on byte content of the .ipynb JSON.
   "NotebookEdit",
 ]);
 

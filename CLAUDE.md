@@ -22,7 +22,7 @@ edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
 edit_policy_change            edit_docs_only
-edit_create_file
+edit_create_file              edit_create_planning_artifact
 ```
 
 The full descriptions are in `SPEC.md` §4. Those descriptions are the product. The rest is plumbing.

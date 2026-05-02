@@ -115,16 +115,17 @@ edit_permission_logic         edit_dependency_config
 edit_policy_change
 ```
 
-**Two workflow-required tools.** The development workflow imposes
+**Three workflow-required tools.** The development workflow imposes
 actions that are not "code edits as cognitive units" but "environment
 setup that the agent feels motivated to perform in batches"
-(scaffolding new files, sweeping documentation updates). Forcing those
-into a one-call-per-file rhythm creates friction that biases the agent
-toward shell-redirect bypass. They are recognized constitutionally as
-batch-friendly:
+(scaffolding new files, sweeping documentation updates, filing
+planning artifacts). Forcing those into a one-call-per-file rhythm
+creates friction that biases the agent toward shell-redirect bypass.
+They are recognized constitutionally as batch-friendly:
 
 ```
 edit_docs_only                edit_create_file
+edit_create_planning_artifact
 ```
 
 The full per-tool descriptions live in Part II §4 of SPEC.md and in
@@ -340,7 +341,7 @@ PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
 
 MCP server: meta-edit-mcp
   ├─ 17 SQLite-discipline-derived tools (single-file declarations)
-  ├─ 2 workflow tools (batch declarations of N files)
+  ├─ 3 workflow tools (batch declarations of N files)
   └─ Issues tokens; never writes files
 
 State
@@ -366,7 +367,7 @@ type EditToolRequest = {
   risk_level: "low" | "medium" | "high" | "critical";
   test_files: string[];           // forward declaration; not bound by token
 
-  // ONLY accepted by the 2 workflow tools (edit_docs_only,
+  // ONLY accepted by the 3 workflow tools (edit_docs_only,
   // edit_create_file). The 17 SQLite-derived tools MUST omit this
   // field; validation rejects its presence elsewhere.
   additional_files?: Array<{
@@ -403,7 +404,7 @@ The MCP server enforces:
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via subsequent `edit_test_only_change` calls. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - For modify-only tools, `target_file` MUST exist on disk; the server reads it and binds `before_sha256 := sha256(disk_content_utf8)`.
 - For `edit_create_file`, `target_file` MUST NOT exist on disk; the server binds `before_sha256 := sha256("")`. Each entry in `additional_files` is treated as a create the same way.
-- `additional_files` is accepted only for the 2 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
+- `additional_files` is accepted only for the 3 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
 Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.
@@ -1328,12 +1329,18 @@ Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`
 on_pre_tool_use(toolName, toolInput):
   if toolName not in {Edit, Write, MultiEdit, NotebookEdit}:
     return deny("not a raw edit tool")
-  if toolName == "NotebookEdit":
-    return deny("NotebookEdit is out of v0.2 scope")
 
-  file_path = realpath(toolInput["file_path"])
+  # NotebookEdit re-allowed in v0.3.0 (issue 0105-notebookedit). The
+  # original simulate()-based objection was eliminated when v0.2.1
+  # dropped after_sha256 / replay; the staleness check on
+  # before_sha256 operates on byte content, well-defined for .ipynb
+  # JSON regardless of cell semantics.
+  path_field = "notebook_path" if toolName == "NotebookEdit" else "file_path"
+  file_path = realpath(toolInput[path_field])
   if file_path is None:
-    return deny("missing or non-canonical file_path")
+    return deny("missing or non-canonical " + path_field)
+  if file_path is outside repoRoot:
+    return allow()  # 1102: out-of-repo writes are not governed
 
   match = grants.findActiveBindingForFile(file_path)
   if match is None:
@@ -1359,7 +1366,7 @@ The pre-condition check is **staleness detection**, not a TOCTOU defense: it cat
 
 > **v0.2.2 fix.** The v0.2.0 / v0.2.1 hook required the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check entirely server-side: the agent makes a normal native call after `typed_edit`, and the hook resolves the active declaration on its own by file path. The constitutional principles (Article 5: declaration → presence-check → consume) are unchanged; only the implementation of the presence-check changed.
 
-> **v0.2.1 thinning.** A v0.2.0 draft of this hook also performed a `simulate(toolName, toolInput, disk_content)` replay and compared `sha256(proposed) == bound.after_sha256`. Per Article 3 (non-adversarial) and Article 4 (descriptions as comfortable tools), the post-condition check was friction without proportional value: it required client-supplied `after_sha256`, a per-tool replay engine in the hook, and a `NotebookEdit` UNSUPPORTED branch. All three were removed. NotebookEdit is now denied at the policy level before grant lookup; the staleness check on `before_sha256` is the single load-bearing pre-condition.
+> **v0.2.1 thinning + v0.3.0 NotebookEdit re-allow.** A v0.2.0 draft of this hook also performed a `simulate(toolName, toolInput, disk_content)` replay and compared `sha256(proposed) == bound.after_sha256`. Per Article 3 (non-adversarial) and Article 4 (descriptions as comfortable tools), the post-condition check was friction without proportional value: it required client-supplied `after_sha256`, a per-tool replay engine in the hook, and a `NotebookEdit` UNSUPPORTED branch. All three were removed. v0.2.1 then policy-denied NotebookEdit at gate time as a placeholder until cell-semantics could be re-evaluated; v0.3.0 (issue 0105-notebookedit) lifts that deny because the staleness check on `before_sha256` operates on byte content (the `.ipynb` JSON file as a whole) and is well-defined regardless of cell semantics. NotebookEdit now routes through the same canonicalize → grant → consume → before_sha256 flow as Edit / Write / MultiEdit. The single load-bearing pre-condition remains the byte-level staleness check.
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 

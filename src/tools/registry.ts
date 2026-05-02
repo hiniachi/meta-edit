@@ -57,7 +57,7 @@ const sqliteToolInputSchema = {
   additionalProperties: false,
 } as const;
 
-// JSON schema for the 2 workflow tools (edit_docs_only, edit_create_file):
+// JSON schema for the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact):
 // adds the optional `additional_files` array (≤ MAX_ADDITIONAL_FILES).
 const workflowToolInputSchema = {
   type: "object",
@@ -73,7 +73,7 @@ const workflowToolInputSchema = {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
       description:
-        "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " +
+        "OPTIONAL. Additional files governed by this single declaration. Available only on the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " +
         String(MAX_ADDITIONAL_FILES) +
         ".",
       items: {

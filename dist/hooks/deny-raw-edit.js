@@ -4687,9 +4687,11 @@ This tool MUST NOT be used when:
 - The patch contains a code example (fenced block, inline snippet)
   that does not compile or run as written; broken examples mislead
   readers more than no example
-- The patch is a planning artifact (issue file, ADR, design doc,
-  post-mortem) — use edit_create_planning_artifact for the
-  planning-stage tone
+- The patch CREATES a new planning artifact (issue file, ADR, design
+  doc, post-mortem) — use edit_create_planning_artifact for the
+  planning-stage tone. Modifying an EXISTING planning artifact may use
+  this tool when the change is a documentation update; new-artifact
+  filing should not
 - The patch updates a Markdown test fixture loaded by tests at runtime
   (use edit_test_only_change since the fixture's content is part of
   the test contract)
@@ -4754,10 +4756,6 @@ This tool MUST NOT be used when:
   edit_refactor_only on it instead)
 - The new file is auto-generated build output; generated files belong
   in .gitignore, not in a typed_edit-recorded create
-- The new file's purpose is to satisfy a test obligation declared by
-  another edit_* call (use edit_test_only_change so the audit log
-  threads the test commitment to its consumer)
-
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
 redirects, undermining the typed-tool surface meta-edit exists to defend.
@@ -4769,19 +4767,22 @@ distinct from in-place edits.
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_create_planning_artifact: `Create or modify a planning artifact: an issue file, an
+  edit_create_planning_artifact: `Create a NEW planning artifact: an issue file, an
 architecture decision record (ADR), a design document, a post-mortem,
 a dogfood report, or any other document whose purpose is to record a
 decision, observation, or plan rather than to be loaded by code.
 
+This tool is CREATE-only — the target_file MUST NOT exist on disk at
+declaration time. Modifying an EXISTING planning artifact (revising
+an ADR, updating an issue body, appending a post-mortem section) goes
+through edit_docs_only.
+
 Use this tool when:
-- Filing an issue or bug report under \`issues/\`
-- Writing or revising an architecture decision record (ADR)
-- Drafting a design document, RFC, or proposal
-- Recording a post-mortem or incident report
-- Capturing a dogfood observation, audit finding, or hypothesis
-- Updating any markdown document whose audience is humans / future-AI
-  reviewers, not the runtime
+- Filing a new issue or bug report under issues/
+- Writing a new architecture decision record (ADR)
+- Drafting a new design document, RFC, or proposal
+- Recording a new post-mortem or incident report
+- Capturing a new dogfood observation, audit finding, or hypothesis
 
 Required tests: NONE. test_files must be empty.
 
@@ -4990,7 +4991,7 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = toolName === "edit_create_file";
+  const isCreate = toolName === "edit_create_file" || toolName === "edit_create_planning_artifact";
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
@@ -6023,4 +6024,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=BB09E00753E8CE9164756E2164756E21
+//# debugId=C84B11FEDF56B77A64756E2164756E21

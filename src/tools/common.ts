@@ -217,7 +217,14 @@ export function validateRequest(
   }
 
   // ---- 5. target_file path-safety + disk read -------------------------
-  const isCreate = toolName === "edit_create_file";
+  // edit_create_planning_artifact is CREATE-only (per its description),
+  // so the same "target MUST NOT exist; before_sha256 = sha256("")"
+  // validation path applies. Codex HIGH review: without this branch
+  // the validator falls through to modify-mode and rejects every
+  // planning-artifact filing on ENOENT.
+  const isCreate =
+    toolName === "edit_create_file" ||
+    toolName === "edit_create_planning_artifact";
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding: ValidatedBinding | null = null;
   if (!targetCheck.ok) {
