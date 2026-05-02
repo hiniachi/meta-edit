@@ -265,24 +265,6 @@ classifier) is the planned next step — and only that.
 
 ## Part II — Derived Specification
 
-## 1. The bet
-
-Modern AI coding agents (Claude Code, Cursor, Cline, Aider, Codex) all use a generic edit interface: one or two tools that take a file path and a patch. The agent decides what to edit, writes the patch, applies it, and moves on. The kind of change being made — boundary condition, permission logic, refactor, schema migration — is invisible to the system. The agent's reasoning about *what kind of edit this is* happens silently in its hidden state, if at all.
-
-`meta-edit` is built on a different bet:
-
-> If you split the generic edit tool into nineteen kind-specific tools, and put the testing obligations for each kind into the tool description, the AI will:
->
-> 1. Be forced to decide which kind of edit it is making, *as a tool selection step*
-> 2. Read the testing obligations every time, because tool descriptions are part of the prompt
-> 3. Tend to follow those obligations, because instruction-following on tool descriptions is strong in current models
-> 4. Self-correct when the description says "if you cannot do X, stop and ask"
-
-There is no detection, no verification, no enforcement beyond preventing the AI from bypassing the typed tools entirely. The bet is that **tool design alone is enough**.
-
-The MVP is built to find out whether this works. If AIs systematically misuse `edit_refactor_only` for behavioral changes, or skip writing tests despite the descriptions requiring them, v0.2 adds a lightweight diff classifier as a backstop. Until then, we keep it simple and observe.
-
----
 
 ## 2. Architecture
 
@@ -1325,26 +1307,6 @@ There is no PASS/WARN/BLOCK return. Judgment is delegated to humans, for now.
 
 ---
 
-## 8. Threat model and mitigations
-
-What we defend against, in MVP scope:
-
-- **AI uses raw Edit / Write / MultiEdit / NotebookEdit**: blocked by Claude Code permissions and `deny-raw-edit` hook (defense in depth)
-- **AI uses common Bash write patterns to bypass typed tools**: blocked on a best-effort basis by `deny-bash-write-bypass` for the verb-denylist (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`, heredoc-with-redirect, inline interpreter writes, decode-and-execute, …). The structural "redirect to a target outside the safe-sink allowlist" case is **warned, not denied** since v0.1.5 (see §5.2): the call proceeds with a `permissionDecisionReason` nudging the AI toward an `edit_*` tool. The hook uses substring matching and can be bypassed by determined commands (heredocs in alternative languages, encoded payloads, etc.); the goal is to make the obvious bypasses harder than using an `edit_*` tool, not to provide a sandbox
-- **AI rewrites the edit log through `meta-edit` tools or common shell write patterns**: blocked on a best-effort basis by protected-path checks and the bash hook. The MVP does not provide cryptographic tamper resistance or OS-level append-only guarantees
-- **AI provides empty `rationale` or empty `test_files` to slip past requirements**: blocked by argument validation
-
-What we explicitly do NOT defend against, in MVP scope:
-
-- **AI deliberately chooses the wrong edit_* tool** (e.g., uses `edit_refactor_only` for a boundary change)
-- **AI provides plausible but false `rationale` text**
-- **AI lists irrelevant files in `test_files`** (the server does not verify they exist or contain meaningful tests, nor that they are actually updated)
-- **AI declares low `risk_level` on a critical change** (the field is recorded but not enforced)
-- **AI uses an exotic Bash construct to bypass the hook** (best-effort detection only)
-
-Defending against these requires diff classification, test verification, mutation testing, command parsing, or filesystem sandboxing. None of these are in MVP scope. They are the obvious next layer if observation shows that descriptions and best-effort hooks are insufficient.
-
----
 
 ## 9. Configuration
 
@@ -1395,22 +1357,4 @@ Tool handlers share common logic via helpers, but each tool is registered separa
 
 ---
 
-## 11. Future direction
 
-If descriptions alone don't change AI behavior enough — for instance, if `edit_refactor_only` is routinely used for behavioral changes, or tests are routinely skipped — v0.2 adds a lightweight diff classifier as a backstop.
-
-The classifier would inspect the patch and flag obvious mismatches (e.g., `<=` changed to `<` in a patch declared as `edit_refactor_only`). Descriptions remain primary; classification flags mismatches as warnings in the edit log without blocking edits.
-
-That is the only planned semantic-enforcement direction. Workspace protocols, VCS adapters, mutation testing, regression verification, plan/spec/reference structuring — all of these are explicitly out of scope for `meta-edit`. They are valuable, but they belong to other projects.
-
-Smaller maintenance changes — refining tool descriptions based on observed usage, tightening the bash hook's allowlist if it becomes a bypass route, improving log details — are not "future directions" in the same sense; they are ordinary upkeep and will happen as needed.
-
-The structural redirect-target check (§5.2) sits in the same upkeep bucket. It was tightened to `deny` in v0.1.3 (dogfood-001) and loosened to `warn` in v0.1.5 because the safe-sink allowlist had a structural false-positive surface on legitimate redirects to outside-repo absolute paths. The expected restore path, if observation shows new write verbs (`printf`, `echo`, `jq --rawfile`, …) being routed around typed tools through this surface, is to flip the structural redirect check back to `deny` — not to add a classifier. The verb-denylist and protected-path checks remain on `deny` regardless. The trigger and revert procedure live in `OBSERVED-FAILURES.md`.
-
-`meta-edit` is exactly this: nineteen tools, two hooks, an edit log, a CLI summary. We'll know whether to add the classifier by running `meta-edit` and looking at the edit log.
-
----
-
-## 12. References
-
-- SQLite Testing Strategy. https://sqlite.org/testing.html
