@@ -52,6 +52,22 @@ describe("filterEntries", () => {
     expect(r.length).toBe(2);
   });
 
+  // Regression-guard for issue 2026-05-02-0428: pin the inclusive --since
+  // boundary so a future change from `t < since` to `t <= since`
+  // (exclusive) fails loudly. The existing inclusive test only covers
+  // ts > since; this one covers ts === since exactly.
+  it("keeps an entry whose ts is exactly equal to --since (inclusive boundary)", () => {
+    const exactEntry = issued({
+      edit_id: "edit_exact_0001",
+      ts: "2026-04-29T00:00:00+09:00",
+    });
+    const r = filterEntries([exactEntry], {
+      since: new Date("2026-04-29T00:00:00+09:00"),
+    });
+    expect(r.length).toBe(1);
+    expect(r[0]?.edit_id).toBe("edit_exact_0001");
+  });
+
   it("combines filters with AND", () => {
     const r = filterEntries(all, {
       tool: "edit_boundary_condition",

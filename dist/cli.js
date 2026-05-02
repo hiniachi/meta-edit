@@ -18737,7 +18737,14 @@ function settingsPathForScope(scope, options = {}) {
 }
 function runInstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = installMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: installed PreToolUse hooks into ${target}
@@ -18751,7 +18758,14 @@ function runUninstallHooks(options) {
 `);
     return 0;
   }
-  const existing = readSettings(target);
+  let existing;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${e.message}
+`);
+    return 1;
+  }
   const updated = uninstallMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(`meta-edit: removed PreToolUse hooks from ${target}
@@ -18862,7 +18876,11 @@ function readSettings(filePath) {
   const text = fs7.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`failed to parse ${filePath} as JSON: ${e.message}`);
+  }
 }
 function writeSettings(filePath, settings) {
   const dir = path7.dirname(filePath);
@@ -19047,4 +19065,4 @@ export {
   main
 };
 
-//# debugId=735D66E5BDB797BD64756E2164756E21
+//# debugId=8EAA0A000974785064756E2164756E21
