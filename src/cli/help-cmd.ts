@@ -80,10 +80,16 @@ Usage:
 Typed edit tools (run \`meta-edit -h <tool_name>\` for the full description):
 ${catalog}
 
-If the typed_edit catalog is missing from your AI agent's context (e.g. the
-MCP server connected late and ListTools never re-injected descriptions),
-running \`meta-edit -h <tool_name>\` from a Bash tool restores the
-load-bearing tool description text into the conversation.
+If the typed_edit tool SCHEMAS are not loaded in your AI agent's tool
+list (the harness deferred them, or the MCP server connected late),
+the harness-native recovery is to call ToolSearch — e.g. query
+\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`
+— so the schemas land in the agent's callable surface.
+
+Running \`meta-edit help <tool_name>\` from a Bash tool emits the
+verbatim description text for human inspection. It does NOT populate
+the agent's tool list; it only restores the prose into conversation
+context. For automated recovery prefer ToolSearch.
 
 See ${SPEC_URL} for the full specification.
 Tool descriptions: ${SPEC_TOOLS_URL}

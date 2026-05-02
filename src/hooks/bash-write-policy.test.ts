@@ -2256,3 +2256,103 @@ describe("evaluateBashCommand — Codex PR #42 review fixes", () => {
     });
   });
 });
+
+// ----------------------------------------------------------------------
+// Issue 1107 — position-aware DENY_SUBSTRINGS scan.
+//
+// Verb-position deny preserved; argument-position demoted to warn.
+// Recursion (bash -c "...", eval "...", find -exec ... \;) keeps inner
+// segments at verb-position, so the typed-edit invariant holds.
+// ----------------------------------------------------------------------
+describe("evaluateBashCommand — 1107 position-aware verb-window", () => {
+  it("denies sed -i at verb position (regression guard)", () => {
+    const r = evaluateBashCommand("sed -i 's/x/y/' src/foo.ts");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("allows quoted-prose 'sed -i' inside commit message (already stripped by stripQuotedContent)", () => {
+    // Quoted-string prose has been correctly blanked by stripQuotedContent
+    // for some time; 1107 only changes behavior for prose that SURVIVES
+    // stripping (heredoc bodies, unquoted args). Pin the existing
+    // good behavior so a future stripQuotedContent regression is visible.
+    const r = evaluateBashCommand(
+      "git commit -m 'fix: avoid sed -i bypass when redirect is staged'",
+    );
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows quoted-prose 'cat >' inside commit message", () => {
+    const r = evaluateBashCommand(
+      "git commit -m 'add deny rule for cat > patterns'",
+    );
+    expect(r.decision).toBe("allow");
+  });
+
+  it("still warns on top-level `>` to non-safe-sink (1701 regression guard)", () => {
+    // Negative case: plain top-level redirect (no $(...) wrapper) must
+    // still warn. The depth-aware flag only suppresses substitution-
+    // internal redirects.
+    const r = evaluateBashCommand("printf hi > weird-sibling.txt");
+    expect(r.decision).toBe("warn");
+  });
+
+  it("still denies substitution-hidden writes to protected paths (asymmetric depth)", () => {
+    // The protected-path detector deliberately keeps all-depths walking
+    // so substitution-hidden writes to .meta-edit/state/** still deny.
+    // This locks the asymmetry between warn (depth-aware) and deny
+    // (depth-blind) that 1701's design intentionally preserves.
+    const r = evaluateBashCommand(
+      "echo \"$(printf x > .meta-edit/state/edits.jsonl)\"",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("warns when 'sed -i' appears in heredoc body (1700 actual dogfood)", () => {
+    // The real PR #60 failure: heredoc bodies survive stripQuotedContent
+    // and used to trip the unconditional substring deny. Position-aware
+    // 1107 demotes this to warn — the substring is far past the verb
+    // (`git`) and the recursion path doesn't reach the heredoc body's
+    // free-form prose.
+    const r = evaluateBashCommand(
+      "git commit -m \"$(cat <<'EOF'\nfix: avoid sed -i bypass\nEOF\n)\"",
+    );
+    expect(r.decision).toBe("warn");
+  });
+
+  it("denies chained second segment with verb-position sed -i", () => {
+    // 1107 §頼めないケース: "git commit -m 'x' ; sed -i ..." denies on
+    // the second segment's verb-position sed -i. Important regression
+    // guard: position-aware scan must apply per-segment.
+    const r = evaluateBashCommand(
+      "git commit -m 'ok' ; sed -i 's/x/y/' src/foo.ts",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies bash -c \"sed -i ...\" via recursion (inner verb-position)", () => {
+    const r = evaluateBashCommand(
+      "bash -c \"sed -i 's/x/y/' src/foo.ts\"",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies eval \"cat > src/foo.ts\" via recursion", () => {
+    const r = evaluateBashCommand("eval \"cat > src/foo.ts\"");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("denies find -exec sed -i ... \\; via inner-segment extraction", () => {
+    const r = evaluateBashCommand(
+      "find . -name '*.ts' -exec sed -i 's/x/y/' {} \\;",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("allows 'patch' inside quoted PR-body prose (stripped by stripQuotedContent)", () => {
+    const r = evaluateBashCommand(
+      "gh pr create --body 'extends hasSafetyFlag for the patch -oFILE form'",
+    );
+    expect(r.decision).toBe("allow");
+  });
+});
+

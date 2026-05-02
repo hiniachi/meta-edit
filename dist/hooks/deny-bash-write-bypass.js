@@ -312,11 +312,24 @@ function evaluateSegment(rawSegment, opts = {}) {
       reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " + "redirect target; writes to these paths must go through an " + "edit_policy_change tool call."
     };
   }
+  const trimOffset = normalized.length - normalized.trimStart().length;
+  const verbInfo = extractCommandVerbInfo(normalized.trimStart());
+  const verbWindowEnd = verbInfo === null ? scanText.length : trimOffset + verbInfo.verbEnd + VERB_WINDOW_TAIL_CHARS;
+  let firstWarn = null;
   for (const needle of DENY_SUBSTRINGS) {
-    if (scanText.includes(needle)) {
+    const pos = scanText.indexOf(needle);
+    if (pos < 0)
+      continue;
+    if (pos < verbWindowEnd) {
       return {
         decision: "deny",
         reason: denyReason(needle)
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason: `pattern "${needle}" appears at argument position (verb is "${verbInfo?.verb ?? "unknown"}"); ` + `not denied because the typed-edit hypothesis (Article 3 + Article 4) trusts ` + `descriptions to guide the agent away from real bypass intent. Recorded as ` + `bypass-risk and may be tightened in a future version (1107).`
       };
     }
   }
@@ -324,12 +337,11 @@ function evaluateSegment(rawSegment, opts = {}) {
   if (cpBypass !== null) {
     return cpBypass;
   }
-  let firstWarn = null;
   const hosted = evaluateShellHostedPayload(rawSegment, opts);
   if (hosted !== null) {
     if (hosted.decision === "deny")
       return hosted;
-    if (hosted.decision === "warn")
+    if (hosted.decision === "warn" && firstWarn === null)
       firstWarn = hosted;
   }
   if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
@@ -558,6 +570,45 @@ function extractSubstitutionInners(seg) {
       continue;
     }
     if (!inSingle && c === "$" && seg[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      let innerSingle = false;
+      let innerDouble = false;
+      while (j < seg.length && depth > 0) {
+        const cj = seg[j];
+        if (cj === "\\" && !innerSingle && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "'" && !innerDouble) {
+          innerSingle = !innerSingle;
+          j++;
+          continue;
+        }
+        if (cj === '"' && !innerSingle) {
+          innerDouble = !innerDouble;
+          j++;
+          continue;
+        }
+        if (!innerSingle && !innerDouble) {
+          if (cj === "(") {
+            depth++;
+          } else if (cj === ")") {
+            depth--;
+            if (depth === 0)
+              break;
+          }
+        }
+        j++;
+      }
+      if (depth === 0) {
+        inners.push(seg.slice(i + 2, j));
+        i = j + 1;
+        continue;
+      }
+      return inners;
+    }
+    if (!inSingle && (c === "<" || c === ">") && seg[i + 1] === "(") {
       let depth = 1;
       let j = i + 2;
       let innerSingle = false;
@@ -1000,10 +1051,12 @@ function redirectsToProtected(s, opts = {}) {
   }
   return false;
 }
-function* iterRedirectTargets(s) {
+function* iterRedirectTargets(s, opts = {}) {
+  const skipSub = opts.skipSubstitutionInternal === true;
   let i = 0;
   let inSingle = false;
   let inDouble = false;
+  let subDepth = 0;
   while (i < s.length) {
     const c = s[i];
     if (!inSingle && c === "\\" && i + 1 < s.length) {
@@ -1020,12 +1073,26 @@ function* iterRedirectTargets(s) {
       i++;
       continue;
     }
+    if (!inSingle && c === "$" && s[i + 1] === "(") {
+      subDepth++;
+      i += 2;
+      continue;
+    }
+    if (!inSingle && !inDouble && c === ")" && subDepth > 0) {
+      subDepth--;
+      i++;
+      continue;
+    }
     if (inSingle || inDouble || c !== ">") {
       i++;
       continue;
     }
     if (s[i + 1] === "&") {
       i += 2;
+      continue;
+    }
+    if (skipSub && subDepth > 0) {
+      i++;
       continue;
     }
     let j = i + 1;
@@ -1111,7 +1178,9 @@ function extractEvalArg(rawSegment) {
   return null;
 }
 function redirectsOutsideSafeSinkAllowlist(rawSegment) {
-  for (const target of iterRedirectTargets(rawSegment)) {
+  for (const target of iterRedirectTargets(rawSegment, {
+    skipSubstitutionInternal: true
+  })) {
     if (target.length === 0)
       continue;
     if (isInRepoWriteTarget(target))
@@ -1201,9 +1270,15 @@ function collapsePathDoublings(s) {
   return cur;
 }
 function extractCommandVerb(segment) {
+  return extractCommandVerbInfo(segment)?.verb ?? null;
+}
+function extractCommandVerbInfo(segment) {
   let s = stripLeadingEnvAssignments(segment);
+  let consumed = segment.length - s.length;
   for (let safety = 0;safety < 32; safety++) {
+    const beforeStrip = s;
     s = stripLeadingEnvAssignments(s);
+    consumed += beforeStrip.length - s.length;
     const m = s.match(/^(\S+)/);
     if (m === null || m[0] === undefined)
       return null;
@@ -1212,26 +1287,33 @@ function extractCommandVerb(segment) {
     const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
     if (WRAPPER_VERBS.has(base)) {
       const valueOpts = WRAPPER_VALUE_OPTS[base];
-      s = s.slice(word.length).replace(/^\s+/, "");
+      const afterWord = s.slice(word.length).replace(/^\s+/, "");
+      consumed += s.length - afterWord.length;
+      s = afterWord;
       while (true) {
         const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
         if (optMatch === null || optMatch[0] === undefined)
           break;
         const opt = optMatch[0];
-        s = s.slice(opt.length).replace(/^\s+/, "");
+        const afterOpt = s.slice(opt.length).replace(/^\s+/, "");
+        consumed += s.length - afterOpt.length;
+        s = afterOpt;
         if (valueOpts !== undefined && !opt.includes("=") && valueOpts.has(opt)) {
           const valMatch = s.match(/^\S+/);
           if (valMatch !== null && valMatch[0] !== undefined) {
-            s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+            const afterVal = s.slice(valMatch[0].length).replace(/^\s+/, "");
+            consumed += s.length - afterVal.length;
+            s = afterVal;
           }
         }
       }
       continue;
     }
-    return base;
+    return { verb: base, verbEnd: consumed + word.length };
   }
   return null;
 }
+var VERB_WINDOW_TAIL_CHARS = 0;
 function stripLeadingEnvAssignments(s) {
   let i = 0;
   while (i < s.length) {
@@ -1589,4 +1671,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=DFEB78E3824DAF0264756E2164756E21
+//# debugId=CDD1328C36C8C14A64756E2164756E21

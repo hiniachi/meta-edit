@@ -35,9 +35,13 @@
 // proposed write differed from declaration — at the cost of (a)
 // client-supplied after_sha256 friction at issue time, (b) maintaining a
 // per-tool replay engine here, and (c) a NotebookEdit "UNSUPPORTED"
-// branch. The cost outweighed the benefit. NotebookEdit is now denied at
-// the policy level (out of v0.2 scope), and the staleness check on
-// before_sha256 remains the single load-bearing pre-condition.
+// branch. All three were removed. v0.2.1 then policy-denied
+// NotebookEdit at gate time as a placeholder; v0.3.0 (issue
+// 0105-notebookedit) lifts that deny because the staleness check on
+// before_sha256 operates on byte content (the .ipynb JSON file as a
+// whole) and is well-defined regardless of cell semantics.
+// NotebookEdit now routes through the same canonicalize → grant →
+// consume → before_sha256 flow as Edit / Write / MultiEdit.
 //
 // Threat model (Article 3): non-adversarial. We do NOT HMAC-sign tokens,
 // we do NOT defend against deep TOCTOU between approval and write, we do
@@ -64,10 +68,10 @@ export const RAW_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
   // NotebookEdit edits Jupyter (.ipynb) cells, which carry executable
   // code (Python, shell `!cmd`, JS). Without this entry an agent could
-  // rewrite notebook cells and bypass the typed surface entirely. Per
-  // v0.2.1 the hook denies NotebookEdit at the policy level (out of v0.2
-  // scope) before token lookup, so a misdirected token does not get
-  // partially consumed.
+  // rewrite notebook cells and bypass the typed surface entirely.
+  // v0.3.0 routes NotebookEdit through the same grant lookup +
+  // before_sha256 staleness flow as the other three raw edits; the
+  // staleness check operates on byte content of the .ipynb JSON.
   "NotebookEdit",
 ]);
 
@@ -94,7 +98,7 @@ export function evaluateRawEdit(toolName: string): HookDecision {
       decision: "deny",
       reason:
         `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` +
-        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
     };
   }
   return { decision: "allow" };
@@ -193,15 +197,19 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     return { decision: "allow" };
   }
 
-  // 3. NotebookEdit is out of v0.2 scope FOR REPO-INTERNAL WRITES.
-  // The out-of-repo branch above already let agent-state notebooks
-  // through; the deny here applies to anything inside the repo.
-  if (lcName === "notebookedit") {
-    return {
-      decision: "deny",
-      reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`,
-    };
-  }
+  // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).
+  // v0.2.0 originally denied NotebookEdit at the policy level because
+  // simulate() couldn't replay notebook-shaped cell edits to verify
+  // after_sha256. v0.2.1 dropped simulate() / after_sha256 entirely
+  // (Article 3 + Article 4: the friction outweighed the value), which
+  // made the original objection obsolete. With notebook_path extraction
+  // added in v0.2.2 and the out-of-repo branch above in v0.2.3,
+  // NotebookEdit now routes through the same canonicalize → grant
+  // lookup → consume → before_sha256 staleness flow as the other three
+  // raw edits. The staleness check on `before_sha256` remains the
+  // single load-bearing pre-condition; it operates on byte-for-byte
+  // file content, which is well-defined for `.ipynb` JSON regardless
+  // of cell semantics. (No deny here.)
 
   // 4. file_path canonicalization. The grant lookup is keyed on the
   // canonical (post-realpath, repo-relative, normalized) form produced
@@ -228,7 +236,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
       reason:
         `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` +
         `Call a typed edit_* MCP tool first. ` +
-        `If the typed_edit catalog is not in your context, run \`meta-edit -h\` from a Bash to recover it.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
     };
   }
   const { grant, binding: bound } = match;

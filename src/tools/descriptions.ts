@@ -1,4 +1,4 @@
-// The nineteen tool descriptions, copied verbatim from docs/SPEC.md §4.
+// The twenty tool descriptions, copied verbatim from docs/SPEC.md §4.
 // CLAUDE.md §4 forbids paraphrasing, summarizing, or "improving" these.
 // If you change a description here, update docs/SPEC.md §4 in the same change.
 
@@ -22,6 +22,11 @@ export const TOOL_NAMES = [
   "edit_policy_change",
   "edit_docs_only",
   "edit_create_file",
+  // 17 SQLite-derived + 3 workflow tools = 20.
+  // edit_create_planning_artifact added in v0.2.4 (issue 1104) as the
+  // honest typed surface for planning-only artifacts (issue files,
+  // ADRs, design docs, post-mortems) where no test obligation applies.
+  "edit_create_planning_artifact",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -30,7 +35,8 @@ export const TOOLS_REQUIRING_TEST_FILES: readonly ToolName[] = TOOL_NAMES.filter
   (name) =>
     name !== "edit_refactor_only" &&
     name !== "edit_test_only_change" &&
-    name !== "edit_docs_only",
+    name !== "edit_docs_only" &&
+    name !== "edit_create_planning_artifact",
 );
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
@@ -618,6 +624,28 @@ This tool MUST NOT be used when:
   (use edit_dependency_config or edit_policy_change)
 - The "documentation" change actually changes API contracts
   documented in code (use edit_api_contract)
+- The patch updates README / docs to claim functionality that has not
+  yet shipped — describing future or aspirational behavior misleads
+  every future reader (including AI agents). Land the implementation
+  in the same change set or wait
+- The patch updates a CHANGELOG entry for a release that this commit
+  does not actually cut (CHANGELOG must reflect what merged, not what
+  is queued)
+- The patch contains a code example (fenced block, inline snippet)
+  that does not compile or run as written; broken examples mislead
+  readers more than no example
+- The patch CREATES a new planning artifact (issue file, ADR, design
+  doc, post-mortem) — use edit_create_planning_artifact for the
+  planning-stage tone. Modifying an EXISTING planning artifact may use
+  this tool when the change is a documentation update; new-artifact
+  filing should not
+- The patch updates a Markdown test fixture loaded by tests at runtime
+  (use edit_test_only_change since the fixture's content is part of
+  the test contract)
+- The patch batches unrelated documentation changes across multiple
+  files in one declaration; each independent doc surface gets its own
+  edit_docs_only call so the rationale and audit trail stay tied to
+  the actual reason
 
 Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
@@ -664,7 +692,18 @@ This tool MUST NOT be used when:
   reflect the original file's deletion
 - The file is a binary payload; native Edit / Write's string-based
   parameters cannot carry non-UTF-8 bytes
-
+- The new file is a planning artifact (issue file, ADR, design doc,
+  post-mortem, dogfood report) — use edit_create_planning_artifact so
+  the audit log records the planning-stage tone instead of a
+  production-code create with placeholder test_files
+- The new file's content is a near-duplicate of an existing file (a
+  copy or near-copy is a refactor or a move, not a create — use
+  edit_refactor_only on the source if the duplication is intentional)
+- The new file is a re-export shim that simply re-emits another
+  module's exports (the underlying module is the change locus; use
+  edit_refactor_only on it instead)
+- The new file is auto-generated build output; generated files belong
+  in .gitignore, not in a typed_edit-recorded create
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
 redirects, undermining the typed-tool surface meta-edit exists to defend.
@@ -672,6 +711,66 @@ Creation has a different precondition profile (no current state to check)
 and a strong post-condition (the file did not exist; now it does), and
 the audit log records it explicitly so reviewers see new-file additions
 distinct from in-place edits.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+
+  edit_create_planning_artifact: `Create a NEW planning artifact: an issue file, an
+architecture decision record (ADR), a design document, a post-mortem,
+a dogfood report, or any other document whose purpose is to record a
+decision, observation, or plan rather than to be loaded by code.
+
+This tool is CREATE-only — the target_file MUST NOT exist on disk at
+declaration time. Modifying an EXISTING planning artifact (revising
+an ADR, updating an issue body, appending a post-mortem section) goes
+through edit_docs_only.
+
+Use this tool when:
+- Filing a new issue or bug report under issues/
+- Writing a new architecture decision record (ADR)
+- Drafting a new design document, RFC, or proposal
+- Recording a new post-mortem or incident report
+- Capturing a new dogfood observation, audit finding, or hypothesis
+
+Required tests: NONE. test_files must be empty.
+
+The artifact IS the deliverable. There is no production behavior the
+artifact is supposed to verify, and there is no test that can stand in
+for "the document captures the decision correctly". Reviewers verify by
+reading.
+
+Like edit_docs_only and edit_create_file, this tool is one of the
+workflow tools (Article 6 / §3) and accepts \`additional_files\` for
+multi-file batches (e.g. filing two related issues at once, or adding
+an ADR and updating a cross-reference index together; cap 32).
+
+This tool MUST NOT be used when:
+- The patch modifies any executable production code, including library
+  scripts run during build / CI
+- The patch modifies any test code (use edit_test_only_change)
+- The patch modifies build, CI, or meta-edit configuration files
+  (use edit_dependency_config or edit_policy_change)
+- The "planning artifact" is actually executable documentation that
+  loads or generates code (use edit_dependency_config or
+  edit_create_file as appropriate)
+- The change is renaming or moving a planning artifact across paths;
+  the modify/create shape cannot represent rename atomically
+
+Distinction from edit_docs_only: edit_docs_only is for documentation
+that ships with production code (README, inline comments, JSDoc/
+docstrings, CHANGELOG). edit_create_planning_artifact is for
+planning-stage documents that record decisions rather than ship as
+user-facing reference material. When the line is unclear, prefer
+edit_docs_only — production reference docs have a stricter contract.
+
+Rationale: planning artifacts (issues, ADRs, design docs) have no test
+obligation, but they also have a different review tone than production
+docs — reviewers care about decision quality, not about API drift or
+example correctness. Without an explicit planning-artifact tool, agents
+were forced to use edit_docs_only (production-docs framing) or
+edit_create_file with placeholder \`test_files\`, both of which
+distorted the audit log.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.

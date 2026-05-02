@@ -5,10 +5,14 @@ import {
   TOOLS_REQUIRING_TEST_FILES,
 } from "./descriptions.js";
 
-describe("nineteen tools", () => {
-  it("registers exactly nineteen tool names", () => {
-    expect<number>(TOOL_NAMES.length).toBe(19);
-    expect(new Set(TOOL_NAMES).size).toBe(19);
+describe("twenty tools", () => {
+  it("registers exactly twenty tool names", () => {
+    // v0.2.4: 17 SQLite-derived + 3 workflow tools (edit_docs_only,
+    // edit_create_file, edit_create_planning_artifact). Issue 1104
+    // added the third workflow tool for planning-only artifacts where
+    // no test obligation applies.
+    expect<number>(TOOL_NAMES.length).toBe(20);
+    expect(new Set(TOOL_NAMES).size).toBe(20);
   });
 
   it("has a non-empty description for each tool", () => {

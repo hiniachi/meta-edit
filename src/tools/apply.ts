@@ -53,10 +53,12 @@ async function issueOnce(
   grants: GrantsStore,
   ts: Date,
 ): Promise<EditToolResult> {
-  // Allocate edit_id first so even rejected requests get an audit-traceable
-  // identity (matches v0.1.x semantics — abandoning here would silently
-  // hide rejections from /meta-edit log).
-  const editId = log.nextEditId(ts);
+  // Issue 0105-rejection-counter: defer the daily edit_id allocation
+  // until AFTER validation passes. Rejected requests get a non-
+  // sequential `reject_<dayKey>_<random>` audit handle so the daily
+  // edit_id counter only advances on real issuances. Pre-fix the
+  // counter advanced on every call, leaving permanent gaps in the
+  // sequence; post-fix the sequence maps directly to "edits issued".
   const tsIso = isoTimestamp(ts);
 
   const validation = validateRequest(toolName, args, ctx);
@@ -69,8 +71,9 @@ async function issueOnce(
       validation.warnings.length === 0
         ? `${toolName}: validation rejected (no warnings)`
         : validation.warnings.join("; ");
+    const rejectId = log.nextRejectId(ts);
     const rejected: RejectedEntry = {
-      edit_id: editId,
+      edit_id: rejectId,
       ts: tsIso,
       phase: "rejected",
       kind: toolName,
@@ -81,13 +84,15 @@ async function issueOnce(
     return {
       token: "",
       expires_at: "",
-      edit_id: editId,
+      edit_id: rejectId,
       warnings: validation.warnings,
       ...(auditError !== undefined ? { audit_error: auditError } : {}),
     };
   }
 
-  // Validation passed — build the binding list and issue the grant.
+  // Validation passed — allocate the real edit_id, build the binding
+  // list, and issue the grant.
+  const editId = log.nextEditId(ts);
   const bindings: ValidatedBinding[] = [
     validation.primaryBinding,
     ...validation.additionalBindings,

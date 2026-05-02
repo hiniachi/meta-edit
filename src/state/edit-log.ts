@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
@@ -121,6 +122,27 @@ export class EditLog {
       const nnnn = String(this.todayCounter).padStart(4, "0");
       return `edit_${key}_${nnnn}`;
     });
+  }
+
+  /**
+   * Issue 0105-rejection-counter: synthesize an audit-only ID for
+   * validation-rejected entries that does NOT advance the daily
+   * `edit_<YYYYMMDD>_<NNNN>` counter. Format:
+   *   reject_<YYYYMMDD>_<8-hex-random>
+   *
+   * Properties:
+   *   - Sortable within a day by the timestamp prefix.
+   *   - Non-sequential — anyone reconciling by edit_id can filter
+   *     `^edit_` to get only successful issuances; the daily counter
+   *     finally maps to "real edits issued".
+   *   - No persistence: rejection IDs are purely log-record handles,
+   *     so we don't write a counter file or contend with the issued
+   *     counter's withFileLock path.
+   */
+  nextRejectId(now: Date = new Date()): string {
+    const key = formatDayKey(now);
+    const rand = crypto.randomBytes(4).toString("hex");
+    return `reject_${key}_${rand}`;
   }
 
   // ---------------------------------------------------------------

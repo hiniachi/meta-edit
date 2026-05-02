@@ -16555,9 +16555,10 @@ var TOOL_NAMES = [
   "edit_dependency_config",
   "edit_policy_change",
   "edit_docs_only",
-  "edit_create_file"
+  "edit_create_file",
+  "edit_create_planning_artifact"
 ];
-var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only");
+var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only" && name !== "edit_create_planning_artifact");
 var TOOL_DESCRIPTIONS = {
   edit_refactor_only: `Refactor production code without changing observable behavior.
 
@@ -17126,6 +17127,28 @@ This tool MUST NOT be used when:
   (use edit_dependency_config or edit_policy_change)
 - The "documentation" change actually changes API contracts
   documented in code (use edit_api_contract)
+- The patch updates README / docs to claim functionality that has not
+  yet shipped — describing future or aspirational behavior misleads
+  every future reader (including AI agents). Land the implementation
+  in the same change set or wait
+- The patch updates a CHANGELOG entry for a release that this commit
+  does not actually cut (CHANGELOG must reflect what merged, not what
+  is queued)
+- The patch contains a code example (fenced block, inline snippet)
+  that does not compile or run as written; broken examples mislead
+  readers more than no example
+- The patch CREATES a new planning artifact (issue file, ADR, design
+  doc, post-mortem) — use edit_create_planning_artifact for the
+  planning-stage tone. Modifying an EXISTING planning artifact may use
+  this tool when the change is a documentation update; new-artifact
+  filing should not
+- The patch updates a Markdown test fixture loaded by tests at runtime
+  (use edit_test_only_change since the fixture's content is part of
+  the test contract)
+- The patch batches unrelated documentation changes across multiple
+  files in one declaration; each independent doc surface gets its own
+  edit_docs_only call so the rationale and audit trail stay tied to
+  the actual reason
 
 Rationale: documentation changes have a different risk profile from
 code refactors. They cannot break runtime behavior, but they can
@@ -17171,7 +17194,18 @@ This tool MUST NOT be used when:
   reflect the original file's deletion
 - The file is a binary payload; native Edit / Write's string-based
   parameters cannot carry non-UTF-8 bytes
-
+- The new file is a planning artifact (issue file, ADR, design doc,
+  post-mortem, dogfood report) — use edit_create_planning_artifact so
+  the audit log records the planning-stage tone instead of a
+  production-code create with placeholder test_files
+- The new file's content is a near-duplicate of an existing file (a
+  copy or near-copy is a refactor or a move, not a create — use
+  edit_refactor_only on the source if the duplication is intentional)
+- The new file is a re-export shim that simply re-emits another
+  module's exports (the underlying module is the change locus; use
+  edit_refactor_only on it instead)
+- The new file is auto-generated build output; generated files belong
+  in .gitignore, not in a typed_edit-recorded create
 Rationale: the other modify-only edit_* tools cannot represent file
 creation. Without an explicit creation tool, agents resort to bash
 redirects, undermining the typed-tool surface meta-edit exists to defend.
@@ -17179,6 +17213,65 @@ Creation has a different precondition profile (no current state to check)
 and a strong post-condition (the file did not exist; now it does), and
 the audit log records it explicitly so reviewers see new-file additions
 distinct from in-place edits.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_create_planning_artifact: `Create a NEW planning artifact: an issue file, an
+architecture decision record (ADR), a design document, a post-mortem,
+a dogfood report, or any other document whose purpose is to record a
+decision, observation, or plan rather than to be loaded by code.
+
+This tool is CREATE-only — the target_file MUST NOT exist on disk at
+declaration time. Modifying an EXISTING planning artifact (revising
+an ADR, updating an issue body, appending a post-mortem section) goes
+through edit_docs_only.
+
+Use this tool when:
+- Filing a new issue or bug report under issues/
+- Writing a new architecture decision record (ADR)
+- Drafting a new design document, RFC, or proposal
+- Recording a new post-mortem or incident report
+- Capturing a new dogfood observation, audit finding, or hypothesis
+
+Required tests: NONE. test_files must be empty.
+
+The artifact IS the deliverable. There is no production behavior the
+artifact is supposed to verify, and there is no test that can stand in
+for "the document captures the decision correctly". Reviewers verify by
+reading.
+
+Like edit_docs_only and edit_create_file, this tool is one of the
+workflow tools (Article 6 / §3) and accepts \`additional_files\` for
+multi-file batches (e.g. filing two related issues at once, or adding
+an ADR and updating a cross-reference index together; cap 32).
+
+This tool MUST NOT be used when:
+- The patch modifies any executable production code, including library
+  scripts run during build / CI
+- The patch modifies any test code (use edit_test_only_change)
+- The patch modifies build, CI, or meta-edit configuration files
+  (use edit_dependency_config or edit_policy_change)
+- The "planning artifact" is actually executable documentation that
+  loads or generates code (use edit_dependency_config or
+  edit_create_file as appropriate)
+- The change is renaming or moving a planning artifact across paths;
+  the modify/create shape cannot represent rename atomically
+
+Distinction from edit_docs_only: edit_docs_only is for documentation
+that ships with production code (README, inline comments, JSDoc/
+docstrings, CHANGELOG). edit_create_planning_artifact is for
+planning-stage documents that record decisions rather than ship as
+user-facing reference material. When the line is unclear, prefer
+edit_docs_only — production reference docs have a stricter contract.
+
+Rationale: planning artifacts (issues, ADRs, design docs) have no test
+obligation, but they also have a different review tone than production
+docs — reviewers care about decision quality, not about API drift or
+example correctness. Without an explicit planning-artifact tool, agents
+were forced to use edit_docs_only (production-docs framing) or
+edit_create_file with placeholder \`test_files\`, both of which
+distorted the audit log.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17311,7 +17404,8 @@ var AdditionalFileSchema = exports_external.object({
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
   "edit_docs_only",
-  "edit_create_file"
+  "edit_create_file",
+  "edit_create_planning_artifact"
 ];
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
@@ -17351,7 +17445,7 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files entry "${tf}": ${c.error}`);
     }
   }
-  const isCreate = toolName === "edit_create_file";
+  const isCreate = toolName === "edit_create_file" || toolName === "edit_create_planning_artifact";
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding = null;
   if (!targetCheck.ok) {
@@ -17587,7 +17681,7 @@ var workflowToolInputSchema = {
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
-      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 3 workflow tools (edit_docs_only, edit_create_file, edit_create_planning_artifact). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
         required: ["file"],
@@ -17645,6 +17739,7 @@ function registerTools(server, options) {
 }
 
 // src/state/edit-log.ts
+import * as crypto2 from "node:crypto";
 import * as fs5 from "node:fs";
 import * as path5 from "node:path";
 var BindingEntrySchema = exports_external.object({
@@ -17712,6 +17807,11 @@ class EditLog {
       const nnnn = String(this.todayCounter).padStart(4, "0");
       return `edit_${key}_${nnnn}`;
     });
+  }
+  nextRejectId(now = new Date) {
+    const key = formatDayKey(now);
+    const rand = crypto2.randomBytes(4).toString("hex");
+    return `reject_${key}_${rand}`;
   }
   appendIssued(entry) {
     const validated = IssuedEntrySchema.parse(entry);
@@ -17947,13 +18047,13 @@ function makeIssuingHandler(deps) {
   };
 }
 async function issueOnce(toolName, args, ctx, log, grants, ts) {
-  const editId = log.nextEditId(ts);
   const tsIso = isoTimestamp(ts);
   const validation = validateRequest(toolName, args, ctx);
   if (!validation.ok) {
     const auditMessage = validation.warnings.length === 0 ? `${toolName}: validation rejected (no warnings)` : validation.warnings.join("; ");
+    const rejectId = log.nextRejectId(ts);
     const rejected = {
-      edit_id: editId,
+      edit_id: rejectId,
       ts: tsIso,
       phase: "rejected",
       kind: toolName,
@@ -17964,11 +18064,12 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     return {
       token: "",
       expires_at: "",
-      edit_id: editId,
+      edit_id: rejectId,
       warnings: validation.warnings,
       ...auditError2 !== undefined ? { audit_error: auditError2 } : {}
     };
   }
+  const editId = log.nextEditId(ts);
   const bindings = [
     validation.primaryBinding,
     ...validation.additionalBindings
@@ -18054,7 +18155,7 @@ function formatAuditError(editId, e) {
 }
 
 // src/state/grants.ts
-import * as crypto2 from "node:crypto";
+import * as crypto3 from "node:crypto";
 import * as fs6 from "node:fs/promises";
 import * as path6 from "node:path";
 var GRANT_TTL_MS = 300000;
@@ -18067,7 +18168,7 @@ function formatDayKey2(d) {
 }
 function generateTokenId(now = new Date) {
   const key = formatDayKey2(now);
-  const rand = crypto2.randomBytes(5).toString("hex");
+  const rand = crypto3.randomBytes(5).toString("hex");
   return `met_${key}_${rand}`;
 }
 var HEX64_RE = /^[0-9a-f]{64}$/;
@@ -18398,7 +18499,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.2.3",
+  version: "0.3.0",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18763,7 +18864,7 @@ function parseDate(s) {
 }
 
 // src/cli/hooks-cmd.ts
-import * as crypto3 from "node:crypto";
+import * as crypto4 from "node:crypto";
 import * as fs7 from "node:fs";
 import * as os from "node:os";
 import * as path7 from "node:path";
@@ -18935,7 +19036,7 @@ function writeSettings(filePath, settings) {
   try {
     mode = fs7.statSync(filePath).mode & 4095;
   } catch {}
-  const tempName = path7.basename(filePath) + "." + crypto3.randomBytes(8).toString("hex") + ".metaedit-tmp";
+  const tempName = path7.basename(filePath) + "." + crypto4.randomBytes(8).toString("hex") + ".metaedit-tmp";
   const tempPath = path7.join(dir, tempName);
   let fd = null;
   try {
@@ -18995,7 +19096,7 @@ function parseHooksArgs(argv) {
 // src/docs-urls.ts
 var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 var SPEC_URL = `${BASE}/docs/SPEC.md`;
-var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-twenty-tool-descriptions`;
 var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/cli/help-cmd.ts
@@ -19048,10 +19149,16 @@ Usage:
 Typed edit tools (run \`meta-edit -h <tool_name>\` for the full description):
 ${catalog}
 
-If the typed_edit catalog is missing from your AI agent's context (e.g. the
-MCP server connected late and ListTools never re-injected descriptions),
-running \`meta-edit -h <tool_name>\` from a Bash tool restores the
-load-bearing tool description text into the conversation.
+If the typed_edit tool SCHEMAS are not loaded in your AI agent's tool
+list (the harness deferred them, or the MCP server connected late),
+the harness-native recovery is to call ToolSearch — e.g. query
+\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`
+— so the schemas land in the agent's callable surface.
+
+Running \`meta-edit help <tool_name>\` from a Bash tool emits the
+verbatim description text for human inspection. It does NOT populate
+the agent's tool list; it only restores the prose into conversation
+context. For automated recovery prefer ToolSearch.
 
 See ${SPEC_URL} for the full specification.
 Tool descriptions: ${SPEC_TOOLS_URL}
@@ -19173,4 +19280,4 @@ export {
   main
 };
 
-//# debugId=472E5D3BA45CEB4F64756E2164756E21
+//# debugId=7F8248D18835542564756E2164756E21

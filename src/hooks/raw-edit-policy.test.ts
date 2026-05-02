@@ -235,11 +235,14 @@ describe("evaluateTokenedEdit — gate failures", () => {
     expect(r.reason).toMatch(/drifted/);
   });
 
-  it("denies NotebookEdit (in-repo) before grant lookup — out of v0.2 scope", async () => {
-    // 1102: NotebookEdit deny is REPO-INTERNAL only. NotebookEdit
-    // surfaces `notebook_path`, not `file_path`, in tool_input — supply
-    // a real in-repo notebook so the deny exercises the v0.2-scope
-    // branch, not the missing-key fallback.
+  it("denies NotebookEdit (in-repo) when no active grant covers the path (0105 — same as Edit/Write/MultiEdit)", async () => {
+    // 0105-notebookedit: NotebookEdit is no longer policy-denied at
+    // step 3. With no active typed_edit declaration, it denies for the
+    // same reason as Edit/Write/MultiEdit: "no active typed_edit
+    // declaration covers this file". Locks the post-unblock contract
+    // (the OLD test asserted "out of v0.2 scope" deny; that policy
+    // ended in v0.2.4 once simulate() removal made the original
+    // objection obsolete).
     fs.mkdirSync(path.join(tmpRoot, "notebooks"), { recursive: true });
     writeFile("notebooks/x.ipynb", "{}\n");
     const grants = createGrantsStore(tmpRoot);
@@ -254,8 +257,35 @@ describe("evaluateTokenedEdit — gate failures", () => {
       log,
     });
     expect(r.decision).toBe("deny");
-    expect(r.reason).toMatch(/NotebookEdit/);
-    expect(r.reason).toMatch(/out of v0.2 scope/);
+    expect(r.reason).toMatch(/no active typed_edit declaration/);
+  });
+
+  it("allows NotebookEdit (in-repo) when an active grant covers the notebook (0105 unblock)", async () => {
+    // Positive case for the v0.2.4 unblock: a typed_edit declaration
+    // against a `.ipynb` should let the deny-raw-edit hook authorize
+    // the subsequent native NotebookEdit call. The before_sha256
+    // staleness check operates on byte content (the .ipynb JSON),
+    // independent of cell semantics.
+    fs.mkdirSync(path.join(tmpRoot, "notebooks"), { recursive: true });
+    writeFile("notebooks/y.ipynb", "{}\n");
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    await issueGrant(grants, "edit_20260503_9000", [
+      {
+        file: "notebooks/y.ipynb",
+        before_sha256: sha256("{}\n"),
+      },
+    ]);
+    const r = await evaluateTokenedEdit({
+      toolName: "NotebookEdit",
+      toolInput: {
+        notebook_path: path.join(tmpRoot, "notebooks/y.ipynb"),
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
   });
 
   it("denies when file_path is missing", async () => {
