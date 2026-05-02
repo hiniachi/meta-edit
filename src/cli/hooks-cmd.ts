@@ -56,7 +56,13 @@ export type HooksCmdOptions = {
 
 export function runInstallHooks(options: HooksCmdOptions): number {
   const target = settingsPathForScope(options.scope, options);
-  const existing = readSettings(target);
+  let existing: SettingsShape;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${(e as Error).message}\n`);
+    return 1;
+  }
   const updated = installMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(
@@ -73,7 +79,13 @@ export function runUninstallHooks(options: HooksCmdOptions): number {
     );
     return 0;
   }
-  const existing = readSettings(target);
+  let existing: SettingsShape;
+  try {
+    existing = readSettings(target);
+  } catch (e) {
+    options.err.write(`meta-edit: ${(e as Error).message}\n`);
+    return 1;
+  }
   const updated = uninstallMetaEditHooks(existing);
   writeSettings(target, updated);
   options.out.write(
@@ -244,7 +256,13 @@ function readSettings(filePath: string): SettingsShape {
   if (!fs.existsSync(filePath)) return {};
   const text = fs.readFileSync(filePath, "utf8");
   if (text.trim().length === 0) return {};
-  return JSON.parse(text) as SettingsShape;
+  try {
+    return JSON.parse(text) as SettingsShape;
+  } catch (e) {
+    throw new Error(
+      `failed to parse ${filePath} as JSON: ${(e as Error).message}`,
+    );
+  }
 }
 
 function writeSettings(filePath: string, settings: SettingsShape): void {
