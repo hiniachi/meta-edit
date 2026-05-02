@@ -1,6 +1,6 @@
 ---
 created_at: 2026-05-02T18:30:00+09:00
-id: dogfood-2026-05-02-1103
+id: dogfood-2026-05-02-1108
 category: security/raw-edit-policy
 severity: high
 target_file: hooks/hooks.json
