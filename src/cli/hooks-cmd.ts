@@ -31,7 +31,15 @@ export const META_EDIT_HOOK_COMMANDS = {
 // otherwise Claude Code never invokes the hook for the missing tool and
 // the deny is silently bypassed end-to-end (the bug fixed in a3-02).
 // Keep this in lockstep with RAW_EDIT_TOOLS in raw-edit-policy.ts.
-export const META_EDIT_RAW_EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+//
+// Note on `apply_patch`: this is an opencode-only tool name added to
+// RAW_EDIT_TOOLS so the same canonical set covers both harnesses
+// (CLAUDE.md / SPEC Article 8). On Claude Code the tool does not exist,
+// so this matcher entry is a dead route that never fires; including it
+// in the matcher keeps the drift-prevention test (matcher size ===
+// RAW_EDIT_TOOLS.size) honest without forking the constant per harness.
+export const META_EDIT_RAW_EDIT_MATCHER =
+  "Edit|Write|MultiEdit|NotebookEdit|apply_patch";
 const META_EDIT_BASH_MATCHER = "Bash";
 
 export function settingsPathForScope(
