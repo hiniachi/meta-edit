@@ -31,7 +31,6 @@
 
 import * as path from "node:path";
 import { isProtectedPath } from "../state/protected-paths.js";
-import { SPEC_BASH_HOOK_URL } from "../docs-urls.js";
 // `HookDecision` (with `"warn"` member) is the canonical shape shared
 // across every hook policy in this package. The structural redirect-
 // to-outside-safe-sink check below is the only producer of `"warn"`
@@ -1011,12 +1010,7 @@ function stripQuotedContent(s: string): string {
 }
 
 function denyReason(pattern: string): string {
-  return (
-    `command matches deny pattern "${pattern}". meta-edit reserves ` +
-    `direct file writes for the nineteen edit_* tools; if a formatter ` +
-    `or codegen needs to run, route it through the allowlist ` +
-    `(${SPEC_BASH_HOOK_URL}).`
-  );
+  return `command matches deny pattern "${pattern}".`;
 }
 
 // Verbs whose `-exec ... \;` / `-execdir ... \;` argument should be

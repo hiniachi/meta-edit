@@ -101,70 +101,6 @@ function replyAllowWithWarning(reason) {
 import * as crypto2 from "node:crypto";
 import * as fs5 from "node:fs/promises";
 import * as path5 from "node:path";
-// package.json
-var package_default = {
-  name: "@hiniachi/meta-edit",
-  version: "0.2.1",
-  description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
-  license: "MIT",
-  author: "nia <nia@yukinofurumachi.com>",
-  type: "module",
-  bin: {
-    "meta-edit": "dist/cli.js",
-    "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
-    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
-  },
-  main: "./dist/server.js",
-  files: [
-    "dist/",
-    "docs/SPEC.md",
-    ".claude-plugin/",
-    "hooks/",
-    "README.md",
-    "LICENSE"
-  ],
-  scripts: {
-    build: "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts --target node --outdir dist --root src --sourcemap=external",
-    test: "bun test",
-    "test:node": "node --test --experimental-strip-types --no-warnings",
-    typecheck: "tsc --noEmit",
-    start: "bun run src/cli.ts"
-  },
-  engines: {
-    node: ">=20"
-  },
-  dependencies: {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    diff: "^9",
-    zod: "^3.23.0"
-  },
-  devDependencies: {
-    "@types/bun": "^1.3.13",
-    "@types/diff": "^8",
-    "@types/node": "^22.0.0",
-    typescript: "^5.6.0"
-  },
-  repository: {
-    type: "git",
-    url: "git+https://github.com/hiniachi/meta-edit.git"
-  },
-  keywords: [
-    "mcp",
-    "claude-code",
-    "ai-coding",
-    "edit-tools",
-    "test-obligations"
-  ]
-};
-
-// src/version.ts
-var VERSION = package_default.version;
-
-// src/docs-urls.ts
-var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
-var SPEC_URL = `${BASE}/docs/SPEC.md`;
-var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-nineteen-tool-descriptions`;
-var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/state/edit-log.ts
 import * as fs4 from "node:fs";
@@ -5416,7 +5352,7 @@ function evaluateRawEdit(toolName) {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit forbids the raw "${toolName}" tool. ` + `Choose one of the nineteen edit_* tools that match the kind of ` + `change you are making (full list: ${SPEC_TOOLS_URL}). If no ` + `edit_* tool fits, stop and ask the user before bypassing the ` + `typed surface.`
+      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool.`
     };
   }
   return { decision: "allow" };
@@ -5433,21 +5369,21 @@ async function evaluateTokenedEdit(args) {
   if (toolName.toLowerCase() === "notebookedit") {
     return {
       decision: "deny",
-      reason: `meta-edit does not support "NotebookEdit" through the token-aware flow ` + `(NotebookEdit is out of v0.2 scope). Edit the notebook's source cells ` + `via an edit_* tool that targets a regular file, or stop and ask the user.`
+      reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`
     };
   }
   const tokenId = typeof toolInput._meta_edit_token === "string" ? toolInput._meta_edit_token : "";
   if (tokenId.length === 0) {
     return {
       decision: "deny",
-      reason: `meta-edit denies "${toolName}" without a "_meta_edit_token" parameter. ` + `First call a typed_edit MCP tool (one of the nineteen edit_*; full list: ${SPEC_TOOLS_URL}) ` + `to declare the change and obtain a single-use token, then pass that token's id ` + `as the "_meta_edit_token" field of "${toolName}".`
+      reason: `meta-edit denies "${toolName}": no "_meta_edit_token" parameter (call a typed edit_* first).`
     };
   }
   const grant = await grants.lookup(tokenId);
   if (grant === null) {
     return {
       decision: "deny",
-      reason: `meta-edit token "${tokenId}" is expired or unknown. ` + `Single-use tokens have a short TTL (~5 minutes); re-issue via a fresh typed_edit call.`
+      reason: `meta-edit token "${tokenId}" is expired or unknown.`
     };
   }
   const filePathRaw = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
@@ -5912,4 +5848,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=D87261E06B442FE364756E2164756E21
+//# debugId=74ACC9A3F928173764756E2164756E21

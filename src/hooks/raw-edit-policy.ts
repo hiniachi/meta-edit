@@ -40,7 +40,6 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { SPEC_TOOLS_URL } from "../docs-urls.js";
 import type { HookDecision } from "./hook-runtime.js";
 import type { Grant, GrantsStore } from "../state/grants.js";
 import type { ConsumedEntry, EditLog } from "../state/edit-log.js";
@@ -84,12 +83,7 @@ export function evaluateRawEdit(toolName: string): HookDecision {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason:
-        `meta-edit forbids the raw "${toolName}" tool. ` +
-        `Choose one of the nineteen edit_* tools that match the kind of ` +
-        `change you are making (full list: ${SPEC_TOOLS_URL}). If no ` +
-        `edit_* tool fits, stop and ask the user before bypassing the ` +
-        `typed surface.`,
+      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool.`,
     };
   }
   return { decision: "allow" };
@@ -153,10 +147,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   if (toolName.toLowerCase() === "notebookedit") {
     return {
       decision: "deny",
-      reason:
-        `meta-edit does not support "NotebookEdit" through the token-aware flow ` +
-        `(NotebookEdit is out of v0.2 scope). Edit the notebook's source cells ` +
-        `via an edit_* tool that targets a regular file, or stop and ask the user.`,
+      reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`,
     };
   }
 
@@ -167,11 +158,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   if (tokenId.length === 0) {
     return {
       decision: "deny",
-      reason:
-        `meta-edit denies "${toolName}" without a "_meta_edit_token" parameter. ` +
-        `First call a typed_edit MCP tool (one of the nineteen edit_*; full list: ${SPEC_TOOLS_URL}) ` +
-        `to declare the change and obtain a single-use token, then pass that token's id ` +
-        `as the "_meta_edit_token" field of "${toolName}".`,
+      reason: `meta-edit denies "${toolName}": no "_meta_edit_token" parameter (call a typed edit_* first).`,
     };
   }
 
@@ -180,9 +167,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   if (grant === null) {
     return {
       decision: "deny",
-      reason:
-        `meta-edit token "${tokenId}" is expired or unknown. ` +
-        `Single-use tokens have a short TTL (~5 minutes); re-issue via a fresh typed_edit call.`,
+      reason: `meta-edit token "${tokenId}" is expired or unknown.`,
     };
   }
 
