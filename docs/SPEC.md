@@ -1159,10 +1159,12 @@ Required tests (you MUST cover):
 2. If the new file is itself a test file, it must contain at least one
    explicit assertion. The mere existence of a test file is not a test.
 
-test_files must be non-empty (you must declare which test covers the new
-code). For each entry in `changes`, `old_content` MUST be the empty
-string — the file does not yet exist. `new_content` is the full content
-to write.
+test_files must be non-empty (you must declare which test covers the
+new code). The `target_file` MUST NOT exist on disk at declaration
+time; `before_sha256` MUST be `sha256("")`. `after_sha256` is the
+sha256 of the intended file content. For multi-file scaffolding, list
+additional creates in `additional_files` (this tool is one of the two
+workflow-required tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -1233,7 +1235,7 @@ simulate(toolName, toolInput, current):
                                               toolInput.new_string, count=1)
   case "Write":        return toolInput.content
   case "MultiEdit":    apply each edit in sequence; return final
-  case "NotebookEdit": return UNSUPPORTED   # see §11 / Article 7
+  case "NotebookEdit": return UNSUPPORTED   # see Article 7
 ```
 
 The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
