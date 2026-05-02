@@ -66,13 +66,20 @@ export function parseLogArgs(argv: string[]): {
   error: string;
 } {
   const filters: LogFilters = {};
+  let toolSeen = false;
+  let riskSeen = false;
+  let sinceSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--tool") {
+      if (toolSeen) return { ok: false, error: "--tool may only appear once" };
+      toolSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--tool requires a value" };
       filters.tool = v;
     } else if (arg === "--risk") {
+      if (riskSeen) return { ok: false, error: "--risk may only appear once" };
+      riskSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--risk requires a value" };
       if (v !== "low" && v !== "medium" && v !== "high" && v !== "critical") {
@@ -80,6 +87,8 @@ export function parseLogArgs(argv: string[]): {
       }
       filters.risk = v;
     } else if (arg === "--since") {
+      if (sinceSeen) return { ok: false, error: "--since may only appear once" };
+      sinceSeen = true;
       const v = argv[++i];
       if (v === undefined) return { ok: false, error: "--since requires a date" };
       const d = parseSinceDate(v);

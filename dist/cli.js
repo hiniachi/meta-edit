@@ -18547,14 +18547,23 @@ function filterEntries(entries, filters) {
 }
 function parseLogArgs(argv) {
   const filters = {};
+  let toolSeen = false;
+  let riskSeen = false;
+  let sinceSeen = false;
   for (let i = 0;i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--tool") {
+      if (toolSeen)
+        return { ok: false, error: "--tool may only appear once" };
+      toolSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--tool requires a value" };
       filters.tool = v;
     } else if (arg === "--risk") {
+      if (riskSeen)
+        return { ok: false, error: "--risk may only appear once" };
+      riskSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--risk requires a value" };
@@ -18563,6 +18572,9 @@ function parseLogArgs(argv) {
       }
       filters.risk = v;
     } else if (arg === "--since") {
+      if (sinceSeen)
+        return { ok: false, error: "--since may only appear once" };
+      sinceSeen = true;
       const v = argv[++i];
       if (v === undefined)
         return { ok: false, error: "--since requires a date" };
@@ -19065,4 +19077,4 @@ export {
   main
 };
 
-//# debugId=3434D11901D5586664756E2164756E21
+//# debugId=99587781196FA43864756E2164756E21

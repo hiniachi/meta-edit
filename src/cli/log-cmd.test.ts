@@ -162,6 +162,26 @@ describe("parseLogArgs", () => {
     const r = parseLogArgs(["--since", "2026-04-30T12:34:56Z"]);
     expect(r.ok).toBe(true);
   });
+
+  // Closes issue 2026-05-02-1041-parse-log-args-duplicate-flags-silently-accepted.
+  // Each flag may appear at most once, matching parseSummaryArgs's behavior.
+  it("rejects duplicate --tool", () => {
+    const r = parseLogArgs(["--tool", "edit_boundary_condition", "--tool", "edit_permission_logic"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--tool may only appear once/);
+  });
+
+  it("rejects duplicate --risk", () => {
+    const r = parseLogArgs(["--risk", "low", "--risk", "high"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--risk may only appear once/);
+  });
+
+  it("rejects duplicate --since", () => {
+    const r = parseLogArgs(["--since", "2026-04-29", "--since", "2026-04-30"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/--since may only appear once/);
+  });
 });
 
 // ---------------------------------------------------------------------------
