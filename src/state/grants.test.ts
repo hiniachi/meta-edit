@@ -444,6 +444,130 @@ describe("grants.consume", () => {
   });
 });
 
+// =====================================================================
+// v0.2.2: findActiveBindingForFile (server-side file-based grant lookup)
+// =====================================================================
+
+describe("grants.findActiveBindingForFile", () => {
+  it("returns null when no grants exist", async () => {
+    const store = createGrantsStore(tmpRoot);
+    expect(await store.findActiveBindingForFile("/abs/src/foo.ts")).toBeNull();
+  });
+
+  it("returns null when no grant covers the file", async () => {
+    const store = createGrantsStore(tmpRoot);
+    await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("/abs/src/other.ts")],
+    });
+    expect(await store.findActiveBindingForFile("/abs/src/foo.ts")).toBeNull();
+  });
+
+  it("returns the unique active grant when only one matches", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("/abs/src/foo.ts")],
+    });
+    const m = await store.findActiveBindingForFile("/abs/src/foo.ts");
+    expect(m).not.toBeNull();
+    expect(m!.grant.token_id).toBe(g.token_id);
+    expect(m!.binding.file).toBe("/abs/src/foo.ts");
+  });
+
+  it("returns the most-recently-issued grant when multiple match (LIFO)", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const older = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("/abs/src/foo.ts")],
+    });
+    // Backdate the older grant by 100ms so issued_at ordering is stable.
+    const olderPath = path.join(
+      tmpRoot,
+      ".meta-edit",
+      "state",
+      "grants",
+      `${older.token_id}.json`,
+    );
+    {
+      const stored = JSON.parse(fs.readFileSync(olderPath, "utf8"));
+      stored.issued_at = new Date(Date.now() - 100).toISOString();
+      fs.writeFileSync(olderPath, JSON.stringify(stored));
+    }
+    const newer = await store.issue({
+      edit_id: "edit_20260502_0002",
+      binding: [binding("/abs/src/foo.ts")],
+    });
+    const m = await store.findActiveBindingForFile("/abs/src/foo.ts");
+    expect(m).not.toBeNull();
+    expect(m!.grant.token_id).toBe(newer.token_id);
+  });
+
+  it("skips expired grants", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("/abs/src/foo.ts")],
+    });
+    // Expire it.
+    const filePath = path.join(
+      tmpRoot,
+      ".meta-edit",
+      "state",
+      "grants",
+      `${g.token_id}.json`,
+    );
+    const stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    stored.expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(filePath, JSON.stringify(stored));
+
+    expect(await store.findActiveBindingForFile("/abs/src/foo.ts")).toBeNull();
+  });
+
+  it("skips a binding already in consumed_files", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [
+        binding("/abs/src/a.ts", HEX64_A),
+        binding("/abs/src/b.ts", HEX64_C),
+      ],
+    });
+    // Consume a.ts manually.
+    await store.consume(g.token_id, "/abs/src/a.ts");
+    // Now scanning for a.ts should return null even though the grant is
+    // still alive (b.ts is still unconsumed).
+    expect(await store.findActiveBindingForFile("/abs/src/a.ts")).toBeNull();
+    const mb = await store.findActiveBindingForFile("/abs/src/b.ts");
+    expect(mb).not.toBeNull();
+    expect(mb!.grant.token_id).toBe(g.token_id);
+  });
+
+  it("ignores corrupt and stray files in the grants dir", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("/abs/src/foo.ts")],
+    });
+    const dir = path.join(tmpRoot, ".meta-edit", "state", "grants");
+    fs.writeFileSync(path.join(dir, "stray.txt"), "hello", "utf8");
+    fs.writeFileSync(
+      path.join(dir, "met_20260502_deadbeef00.json"),
+      "{ not valid",
+      "utf8",
+    );
+
+    const m = await store.findActiveBindingForFile("/abs/src/foo.ts");
+    expect(m).not.toBeNull();
+    expect(m!.grant.token_id).toBe(g.token_id);
+  });
+
+  it("returns null for empty input", async () => {
+    const store = createGrantsStore(tmpRoot);
+    expect(await store.findActiveBindingForFile("")).toBeNull();
+  });
+});
+
 describe("grants.reapExpired", () => {
   it("removes only expired grant files", async () => {
     const store = createGrantsStore(tmpRoot);

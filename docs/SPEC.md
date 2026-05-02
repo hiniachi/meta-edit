@@ -371,10 +371,12 @@ type EditToolResult = {
                                   // edit_log directly for ground truth.
   next_action?: string;           // human-readable reminder, present iff
                                   // a token was issued. Tells the agent
-                                  // to pass the token as `_meta_edit_token`
-                                  // on its next native Edit / Write /
+                                  // that the deny-raw-edit hook will
+                                  // resolve this declaration automatically
+                                  // on the next native Edit / Write /
                                   // MultiEdit call against the bound
-                                  // file(s). Omitted on rejection.
+                                  // file(s); the agent passes no extra
+                                  // parameters. Omitted on rejection.
 };
 ```
 
@@ -397,7 +399,9 @@ Validation failures result in a rejected request with a non-empty `warnings` arr
 A successful declaration produces a token bound to the set of
 `(file, before_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The server computes each `before_sha256` from disk at declaration time; agents do not supply hashes. The token expires 5 minutes after issuance — operational hygiene only; the single-use binding is the actual integrity guarantee, so the TTL is purely garbage-collection (it keeps the grants/ dir from accumulating abandoned files). The 5-minute window absorbs realistic agent thinking time between the typed_edit call and the native Edit / Write call without weakening the model. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
-The result also carries a `next_action` field whenever a token is issued — a one-line reminder that the agent's next native `Edit` / `Write` / `MultiEdit` call must carry the token as the `_meta_edit_token` field. Per Article 4, the agent should only have to declare intent; the server takes care of the bookkeeping (and of telling the agent what comes next). On rejection, `next_action` is omitted.
+The result also carries a `next_action` field whenever a token is issued — a one-line reminder that the agent's next native `Edit` / `Write` / `MultiEdit` call against the bound file(s) will be authorized automatically by the deny-raw-edit hook; the agent passes no extra parameters. Per Article 4, the agent should only have to declare intent; the server takes care of the bookkeeping (and of telling the agent what comes next). On rejection, `next_action` is omitted.
+
+> **v0.2.2 fix.** Earlier (v0.2.0 / v0.2.1) revisions of this spec asked the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook ever sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check server-side: the hook scans `.meta-edit/state/grants/` on disk, finds the most-recently-issued unconsumed binding matching the call's canonical `file_path`, and consumes it. The agent never thinks about tokens.
 
 > **v0.2.1 thinning.** Earlier (v0.2.0) revisions of this spec required the agent to supply `before_sha256` and `after_sha256` per binding. Both fields were dropped: under Article 3 (non-adversarial threat model) and Article 4 (descriptions read as a comfortable tool, not a hashing chore), the client-supplied digests added friction without proportional protective value. The server reads disk itself; the hook re-reads disk to detect staleness only.
 
@@ -1206,40 +1210,46 @@ General principles (apply to every edit):
 
 Two PreToolUse hooks, both shipped under `hooks/` in this repo.
 
-### 5.1. deny-raw-edit (token-aware)
+### 5.1. deny-raw-edit (server-side declaration lookup)
 
-Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit` tools. Validates that each call carries a `_meta_edit_token` parameter referencing a fresh declaration in `.meta-edit/state/grants/`.
+Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit` tools. The hook reads no extra field from `tool_input`; it canonicalizes the call's `file_path` and looks up the most-recently-issued unconsumed binding in `.meta-edit/state/grants/` matching that file.
 
 ```
 on_pre_tool_use(toolName, toolInput):
+  if toolName not in {Edit, Write, MultiEdit, NotebookEdit}:
+    return deny("not a raw edit tool")
   if toolName == "NotebookEdit":
     return deny("NotebookEdit is out of v0.2 scope")
 
-  token_id = toolInput["_meta_edit_token"]
-  if not token_id:
-    return deny("untyped raw edit")
-
-  token = grants.lookup(token_id)
-  if token is None or token.expired():
-    return deny("token expired or unknown")
-
   file_path = realpath(toolInput["file_path"])
-  bound = token.find_binding(file_path)
-  if bound is None:
-    return deny("file_path not bound by this token")
+  if file_path is None:
+    return deny("missing or non-canonical file_path")
+
+  match = grants.findActiveBindingForFile(file_path)
+  if match is None:
+    return deny("no active typed_edit declaration covers this file")
 
   # Pre-condition: declared starting state matches disk.
   disk_content = read(file_path) if exists(file_path) else b""
-  if sha256(disk_content) != bound.before_sha256:
+  if sha256(disk_content) != match.binding.before_sha256:
     return deny("disk has drifted from declaration (staleness)")
 
-  grants.consume(token_id, file_path)
+  grants.consume(match.grant.token_id, file_path)
+  appendConsumed(edit_log, {
+    edit_id: match.grant.edit_id,
+    consuming_tool: toolName,
+    ts: now(),
+  })
   return allow()
 ```
 
+`findActiveBindingForFile` scans every grant file in `.meta-edit/state/grants/`, skips expired entries, skips bindings already in `consumed_files`, and returns the most-recently-issued match (LIFO on `issued_at`). If multiple grants cover the same file, the agent's freshest intent wins.
+
 The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
 
-> **v0.2.1 thinning.** A v0.2.0 draft of this hook also performed a `simulate(toolName, toolInput, disk_content)` replay and compared `sha256(proposed) == bound.after_sha256`. Per Article 3 (non-adversarial) and Article 4 (descriptions as comfortable tools), the post-condition check was friction without proportional value: it required client-supplied `after_sha256`, a per-tool replay engine in the hook, and a `NotebookEdit` UNSUPPORTED branch. All three were removed. NotebookEdit is now denied at the policy level before token lookup; the staleness check on `before_sha256` is the single load-bearing pre-condition.
+> **v0.2.2 fix.** The v0.2.0 / v0.2.1 hook required the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check entirely server-side: the agent makes a normal native call after `typed_edit`, and the hook resolves the active declaration on its own by file path. The constitutional principles (Article 5: declaration → presence-check → consume) are unchanged; only the implementation of the presence-check changed.
+
+> **v0.2.1 thinning.** A v0.2.0 draft of this hook also performed a `simulate(toolName, toolInput, disk_content)` replay and compared `sha256(proposed) == bound.after_sha256`. Per Article 3 (non-adversarial) and Article 4 (descriptions as comfortable tools), the post-condition check was friction without proportional value: it required client-supplied `after_sha256`, a per-tool replay engine in the hook, and a `NotebookEdit` UNSUPPORTED branch. All three were removed. NotebookEdit is now denied at the policy level before grant lookup; the staleness check on `before_sha256` is the single load-bearing pre-condition.
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 

@@ -94,10 +94,13 @@ export type EditToolResult = {
   audit_error?: string;
   /**
    * Human-readable reminder, present IFF a token was issued. Tells the agent
-   * to pass the token as `_meta_edit_token` on its next native Edit / Write /
-   * MultiEdit call against the bound file(s). Per SPEC §3 / Article 4: the
-   * server takes care of bookkeeping; the agent only declares intent and is
-   * told what comes next. Omitted on rejection.
+   * that the deny-raw-edit hook will resolve this declaration automatically
+   * on the next native Edit / Write / MultiEdit call against the bound
+   * file(s); the agent passes no extra parameters. (v0.2.2: replaces the
+   * v0.2.0/v0.2.1 message that asked the agent to pass `_meta_edit_token`,
+   * which Claude Code's strict input schema rejected.) Per SPEC §3 /
+   * Article 4: the server takes care of bookkeeping; the agent only
+   * declares intent and is told what comes next. Omitted on rejection.
    */
   next_action?: string;
 };

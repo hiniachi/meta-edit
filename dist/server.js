@@ -17982,7 +17982,9 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
   const auditError = appendIssuedSafely(log, issued);
   const sanitize = (p) => p.replace(/[\x00-\x1f\x7f]/g, "?");
   const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
-  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `pass _meta_edit_token: "${grant.token_id}". The token is single-use ` + `per binding and expires at ${grant.expires_at}.`;
+  const nFiles = bindings.length;
+  const fileNoun = nFiles === 1 ? "file" : "files";
+  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.`;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,
@@ -18258,6 +18260,57 @@ class GrantsStoreImpl {
     }
     return { consumed: true, fully_consumed: fullyConsumed };
   }
+  async findActiveBindingForFile(canonicalFile) {
+    if (typeof canonicalFile !== "string" || canonicalFile.length === 0) {
+      return null;
+    }
+    let names;
+    try {
+      names = await fs5.readdir(this.grantsDir);
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return null;
+      throw e;
+    }
+    const now = Date.now();
+    let best = null;
+    let bestIssuedMs = -Infinity;
+    for (const name of names) {
+      if (!name.endsWith(".json"))
+        continue;
+      const filePath = path5.join(this.grantsDir, name);
+      let text;
+      try {
+        text = await fs5.readFile(filePath, "utf8");
+      } catch (e) {
+        if (e.code === "ENOENT")
+          continue;
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      if (!isGrant(parsed))
+        continue;
+      if (Date.parse(parsed.expires_at) <= now)
+        continue;
+      if (parsed.consumed_files.includes(canonicalFile))
+        continue;
+      const binding = parsed.binding.find((b) => b.file === canonicalFile);
+      if (!binding)
+        continue;
+      const issuedMs = Date.parse(parsed.issued_at);
+      const issuedScore = Number.isFinite(issuedMs) ? issuedMs : -Infinity;
+      if (issuedScore > bestIssuedMs) {
+        bestIssuedMs = issuedScore;
+        best = { grant: parsed, binding };
+      }
+    }
+    return best;
+  }
   async reapExpired() {
     let names;
     try {
@@ -18308,7 +18361,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.2.1",
+  version: "0.2.2",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18414,4 +18467,4 @@ export {
   createServer
 };
 
-//# debugId=0BEA351453EF56A164756E2164756E21
+//# debugId=E7E0A561EC7013D164756E2164756E21

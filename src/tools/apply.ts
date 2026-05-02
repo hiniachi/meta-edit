@@ -152,10 +152,17 @@ async function issueOnce(
   // eslint-disable-next-line no-control-regex
   const sanitize = (p: string) => p.replace(/[\x00-\x1f\x7f]/g, "?");
   const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
+  // v0.2.2: agent passes nothing extra to native Edit / Write / MultiEdit.
+  // Claude Code's strict input schema strips additional fields, so the
+  // hook resolves the active declaration server-side by file path. This
+  // message tells the agent it can just call the native tool normally.
+  const nFiles = bindings.length;
+  const fileNoun = nFiles === 1 ? "file" : "files";
   const nextAction =
     `On your next native Edit / Write / MultiEdit call against ${fileList}, ` +
-    `pass _meta_edit_token: "${grant.token_id}". The token is single-use ` +
-    `per binding and expires at ${grant.expires_at}.`;
+    `the deny-raw-edit hook will resolve this declaration automatically (no ` +
+    `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` +
+    `and expires at ${grant.expires_at}.`;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,

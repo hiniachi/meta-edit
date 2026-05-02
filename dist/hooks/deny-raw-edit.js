@@ -5372,25 +5372,11 @@ async function evaluateTokenedEdit(args) {
       reason: `meta-edit denies "NotebookEdit" (out of v0.2 scope).`
     };
   }
-  const tokenId = typeof toolInput._meta_edit_token === "string" ? toolInput._meta_edit_token : "";
-  if (tokenId.length === 0) {
-    return {
-      decision: "deny",
-      reason: `meta-edit denies "${toolName}": no "_meta_edit_token" parameter (call a typed edit_* first).`
-    };
-  }
-  const grant = await grants.lookup(tokenId);
-  if (grant === null) {
-    return {
-      decision: "deny",
-      reason: `meta-edit token "${tokenId}" is expired or unknown.`
-    };
-  }
   const filePathRaw = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
   if (filePathRaw.length === 0) {
     return {
       decision: "deny",
-      reason: `${toolName} call missing "file_path"; the token-aware hook requires a file path to match the binding.`
+      reason: `${toolName} call missing "file_path"; the deny-raw-edit hook needs a file path to look up the active typed_edit declaration.`
     };
   }
   const canonical = canonicalizeForBinding(filePathRaw, repoRoot);
@@ -5400,19 +5386,14 @@ async function evaluateTokenedEdit(args) {
       reason: `meta-edit could not canonicalize "${filePathRaw}" to a repository-relative path; failing closed.`
     };
   }
-  const bound = findBinding(grant, canonical);
-  if (bound === null) {
+  const match = await grants.findActiveBindingForFile(canonical);
+  if (match === null) {
     return {
       decision: "deny",
-      reason: `${toolName} targets "${canonical}" but token "${tokenId}" does not bind that file. ` + `Re-issue a typed_edit declaration for this file, or use the token whose binding lists it.`
+      reason: `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` + `Call a typed edit_* MCP tool first.`
     };
   }
-  if (grant.consumed_files.includes(canonical)) {
-    return {
-      decision: "deny",
-      reason: `${toolName}'s binding for "${canonical}" has already been consumed by an earlier write. ` + `Re-issue a typed_edit declaration to obtain a fresh token.`
-    };
-  }
+  const { grant, binding: bound } = match;
   const diskRead = await readFileForBinding(repoRoot, canonical);
   if (!diskRead.ok) {
     return {
@@ -5428,11 +5409,11 @@ async function evaluateTokenedEdit(args) {
       reason: `disk content of "${canonical}" has drifted from the typed_edit declaration ` + `(declared before_sha256=${shortHash(bound.before_sha256)}, actual ${shortHash(diskSha)}). ` + `Re-read the file and issue a fresh typed_edit declaration.`
     };
   }
-  const consumeRes = await grants.consume(tokenId, canonical);
+  const consumeRes = await grants.consume(grant.token_id, canonical);
   if (!consumeRes.consumed) {
     return {
       decision: "deny",
-      reason: `meta-edit could not consume token "${tokenId}" for "${canonical}": ${consumeRes.error ?? "unknown error"}.`
+      reason: `meta-edit could not consume the typed_edit declaration for "${canonical}": ${consumeRes.error ?? "unknown error"}.`
     };
   }
   const consumed = {
@@ -5448,13 +5429,6 @@ async function evaluateTokenedEdit(args) {
 `);
   }
   return { decision: "allow" };
-}
-function findBinding(grant, canonical) {
-  for (const b of grant.binding) {
-    if (b.file === canonical)
-      return b;
-  }
-  return null;
 }
 function canonicalizeForBinding(inputPath, repoRoot) {
   if (typeof inputPath !== "string" || inputPath.length === 0)
@@ -5749,6 +5723,57 @@ class GrantsStoreImpl {
     }
     return { consumed: true, fully_consumed: fullyConsumed };
   }
+  async findActiveBindingForFile(canonicalFile) {
+    if (typeof canonicalFile !== "string" || canonicalFile.length === 0) {
+      return null;
+    }
+    let names;
+    try {
+      names = await fs6.readdir(this.grantsDir);
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return null;
+      throw e;
+    }
+    const now = Date.now();
+    let best = null;
+    let bestIssuedMs = -Infinity;
+    for (const name of names) {
+      if (!name.endsWith(".json"))
+        continue;
+      const filePath = path6.join(this.grantsDir, name);
+      let text;
+      try {
+        text = await fs6.readFile(filePath, "utf8");
+      } catch (e) {
+        if (e.code === "ENOENT")
+          continue;
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      if (!isGrant(parsed))
+        continue;
+      if (Date.parse(parsed.expires_at) <= now)
+        continue;
+      if (parsed.consumed_files.includes(canonicalFile))
+        continue;
+      const binding = parsed.binding.find((b) => b.file === canonicalFile);
+      if (!binding)
+        continue;
+      const issuedMs = Date.parse(parsed.issued_at);
+      const issuedScore = Number.isFinite(issuedMs) ? issuedMs : -Infinity;
+      if (issuedScore > bestIssuedMs) {
+        bestIssuedMs = issuedScore;
+        best = { grant: parsed, binding };
+      }
+    }
+    return best;
+  }
   async reapExpired() {
     let names;
     try {
@@ -5848,4 +5873,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=74ACC9A3F928173764756E2164756E21
+//# debugId=54B7F60137539AFF64756E2164756E21

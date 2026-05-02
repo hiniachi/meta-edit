@@ -413,38 +413,54 @@ Write call carrying the token.
 
 ### Token validation (PreToolUse on Edit/Write/MultiEdit/NotebookEdit)
 
-Pseudocode:
+Pseudocode (v0.2.2):
 
 ```
 on_pre_tool_use(toolName, toolInput):
+  if toolName not in {Edit, Write, MultiEdit, NotebookEdit}:
+    return deny("not a raw edit tool")
   if toolName == "NotebookEdit":
     return deny("NotebookEdit is out of v0.2 scope")
 
-  token_id = toolInput["_meta_edit_token"]
-  if not token_id:
-    return deny("untyped raw edit")
-
-  token = grants.lookup(token_id)
-  if token is None or token.expired():
-    return deny("token expired or unknown")
-
   file_path = realpath(toolInput["file_path"])
-  bound = token.find_binding(file_path)
-  if bound is None:
-    return deny("file_path not bound by this token")
+  if file_path is None:
+    return deny("missing or non-canonical file_path")
+
+  match = grants.findActiveBindingForFile(file_path)
+  if match is None:
+    return deny("no active typed_edit declaration covers this file")
 
   # Pre-condition: declared starting state matches disk.
   disk_content = read(file_path) if exists(file_path) else b""
-  if sha256(disk_content) != bound.before_sha256:
+  if sha256(disk_content) != match.binding.before_sha256:
     return deny("disk has drifted from declaration (staleness)")
 
-  grants.consume(token_id, file_path)
+  grants.consume(match.grant.token_id, file_path)
+  appendConsumed(edit_log, {
+    edit_id: match.grant.edit_id,
+    consuming_tool: toolName,
+    ts: now(),
+  })
   return allow()
 ```
 
+> **v0.2.2 fix.** v0.2.0 / v0.2.1 of this pseudocode read a
+> `_meta_edit_token` field out of `tool_input` to address the grant
+> store. Dogfood discovery (May 2026): Claude Code's native Edit /
+> Write / MultiEdit tools have strict input schemas that reject extra
+> fields, so the framework strips `_meta_edit_token` before the hook
+> sees it — the typed-edit → token-issued → native Edit pipeline was
+> end-to-end unusable. v0.2.2 replaces the agent-passed token with a
+> server-side scan of `.meta-edit/state/grants/` keyed on the call's
+> canonical `file_path`. `findActiveBindingForFile` returns the
+> most-recently-issued unconsumed binding for that file (LIFO), or
+> `None`. Article 5 is unchanged — the binding still satisfies (a)
+> presence-check, (b) file-targeting, (c) before-state agreement; only
+> the implementation of (a) moved from agent-passed to server-resolved.
+
 (v0.2.1: the post-condition `simulate()` replay was removed — see the
 v0.2.1 note above. NotebookEdit denies at the policy level before
-token lookup.)
+grant lookup.)
 
 The pre-condition check is **staleness detection**, not a TOCTOU
 defense: it catches declarations made against a prior disk state, but
