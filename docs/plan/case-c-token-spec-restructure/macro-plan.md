@@ -148,6 +148,45 @@ the sense that the spec does not constrain their wording — they are
 free to evolve as observation accumulates, provided every change keeps
 spec and code in sync in the same change.
 
+**Description style (constitutional principle).** Each tool's
+description should read as **a safe, convenient, comfortable tool
+that helps the agent organize its thinking as it works** — not as a
+gatekeeper's prohibition list. Per Article 3's friendly-but-friction-
+driven actor, ergonomic framing is what keeps the typed path easier
+than shell-redirect bypasses. Restriction-heavy framing creates
+friction that pushes the agent off-path; positive framing turns the
+declaration step into a momentary pause that organizes intent before
+the edit lands.
+
+**Easy-to-grab tools carry fallback obligations.** The tools whose
+descriptions feel low-stakes (`edit_refactor_only`,
+`edit_dependency_config`, `edit_policy_change`) are the ones the
+agent will reach for under friction. Their descriptions therefore
+include explicit obligations that fire if the choice was wrong:
+
+- `edit_refactor_only`: if the patch turns out to contain logic
+  changes (boundary, boolean, state, error-handling, etc.), the
+  agent OWES the user a follow-up explanation in the next message —
+  what slipped in, why the typed surface didn't catch it earlier.
+- `edit_policy_change`: SPEC / configuration changes are
+  user-impacting. The agent MUST ask the user a clarifying question
+  about intended scope before applying, even when the change feels
+  obvious. A single confirmation message is the cost of the safer
+  path.
+- `edit_dependency_config`: environment changes affect everyone
+  running the project. The agent MUST summarize the change in
+  user-facing terms before applying, so the user can intercept
+  surprises.
+
+These obligations are part of the tool descriptions in §4 (and
+mirrored in `src/tools/descriptions.ts`). They are not detection
+machinery — selecting the right tool remains the agent's
+responsibility, but the description ensures that if the agent slips
+into one of these tools incorrectly, the *next* message visibly
+acknowledges the slip. Ergonomic rephrasing of the other 16 tools'
+descriptions is downstream work; only the three obligations above
+land in this restructure.
+
 ### Article 5 — Mechanism (binding principles)
 
 Three principles, no implementation. The current best implementation
