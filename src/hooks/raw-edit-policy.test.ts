@@ -8,12 +8,17 @@
 //
 //   2. evaluateTokenedEdit — the SPEC §5.1 flow. Untyped → deny;
 //      expired/unknown token → deny; binding mismatch → deny;
-//      before_sha256 staleness → deny; simulate() failure → deny;
-//      after_sha256 mismatch → deny; happy path → allow + consume +
+//      before_sha256 staleness → deny; happy path → allow + consume +
 //      consumed-record append.
 //
-//   3. simulate — the pure replay function for Edit / Write / MultiEdit,
-//      including the Edit uniqueness rule and NotebookEdit UNSUPPORTED.
+//   3. canonicalizeForBinding — parity with the issuer's path canonical form.
+//
+// v0.2.1 thinning: simulate() and the after_sha256 post-condition check
+// were removed from the hook. Per Article 3, the post-condition check
+// added cost (client-supplied after_sha256, per-tool replay engine,
+// NotebookEdit UNSUPPORTED branch) without proportional protective
+// value. NotebookEdit is now denied at the policy level (out of v0.2
+// scope) before token lookup. Tests below reflect the simplified flow.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as crypto from "node:crypto";
@@ -26,7 +31,6 @@ import {
   evaluateRawEdit,
   evaluateTokenedEdit,
   RAW_EDIT_TOOLS,
-  simulate,
 } from "./raw-edit-policy.js";
 import { EditLog } from "../state/edit-log.js";
 import {
@@ -155,7 +159,6 @@ describe("evaluateTokenedEdit — gate failures", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("before\n"),
-        after_sha256: sha256("after\n"),
       },
     ]);
 
@@ -195,7 +198,6 @@ describe("evaluateTokenedEdit — gate failures", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("before\n"),
-        after_sha256: sha256("after\n"),
       },
     ]);
 
@@ -224,7 +226,6 @@ describe("evaluateTokenedEdit — gate failures", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("before\n"),
-        after_sha256: sha256("after\n"),
       },
     ]);
 
@@ -247,112 +248,15 @@ describe("evaluateTokenedEdit — gate failures", () => {
     expect(r.reason).toMatch(/drifted/);
   });
 
-  it("denies when simulate(Edit) cannot find old_string", async () => {
+  it("denies NotebookEdit explicitly (out of v0.2 scope) before token lookup", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
-    writeFile("src/foo.ts", "before\n");
-
-    const grant = await issueGrant(grants, "edit_20260502_0004", [
-      {
-        file: "src/foo.ts",
-        before_sha256: sha256("before\n"),
-        after_sha256: sha256("after\n"),
-      },
-    ]);
-
-    const r = await evaluateTokenedEdit({
-      toolName: "Edit",
-      toolInput: {
-        file_path: path.join(tmpRoot, "src/foo.ts"),
-        old_string: "NOT_PRESENT",
-        new_string: "after",
-        _meta_edit_token: grant.token_id,
-      },
-      repoRoot: tmpRoot,
-      grants,
-      log,
-    });
-    expect(r.decision).toBe("deny");
-    expect(r.reason).toMatch(/old_string was not found/);
-  });
-
-  it("denies when simulate(Edit) finds old_string at multiple offsets", async () => {
-    const grants = createGrantsStore(tmpRoot);
-    const log = new EditLog(tmpRoot);
-    writeFile("src/foo.ts", "AAA AAA\n");
-
-    const grant = await issueGrant(grants, "edit_20260502_0005", [
-      {
-        file: "src/foo.ts",
-        before_sha256: sha256("AAA AAA\n"),
-        after_sha256: sha256("BBB AAA\n"),
-      },
-    ]);
-
-    const r = await evaluateTokenedEdit({
-      toolName: "Edit",
-      toolInput: {
-        file_path: path.join(tmpRoot, "src/foo.ts"),
-        old_string: "AAA",
-        new_string: "BBB",
-        _meta_edit_token: grant.token_id,
-      },
-      repoRoot: tmpRoot,
-      grants,
-      log,
-    });
-    expect(r.decision).toBe("deny");
-    expect(r.reason).toMatch(/uniquely matched/);
-  });
-
-  it("denies when simulate produces content whose sha != after_sha256", async () => {
-    const grants = createGrantsStore(tmpRoot);
-    const log = new EditLog(tmpRoot);
-    writeFile("src/foo.ts", "before\n");
-
-    const grant = await issueGrant(grants, "edit_20260502_0006", [
-      {
-        file: "src/foo.ts",
-        before_sha256: sha256("before\n"),
-        // Declared after_sha256 is "after\n" but we'll send "WRONG\n".
-        after_sha256: sha256("after\n"),
-      },
-    ]);
-
-    const r = await evaluateTokenedEdit({
-      toolName: "Edit",
-      toolInput: {
-        file_path: path.join(tmpRoot, "src/foo.ts"),
-        old_string: "before",
-        new_string: "WRONG",
-        _meta_edit_token: grant.token_id,
-      },
-      repoRoot: tmpRoot,
-      grants,
-      log,
-    });
-    expect(r.decision).toBe("deny");
-    expect(r.reason).toMatch(/does not match the declared after_sha256/);
-  });
-
-  it("denies NotebookEdit explicitly (UNSUPPORTED)", async () => {
-    const grants = createGrantsStore(tmpRoot);
-    const log = new EditLog(tmpRoot);
-    writeFile("notebooks/x.ipynb", "{}");
-
-    const grant = await issueGrant(grants, "edit_20260502_0007", [
-      {
-        file: "notebooks/x.ipynb",
-        before_sha256: sha256("{}"),
-        after_sha256: sha256("{}"),
-      },
-    ]);
-
+    // No grant required — the deny fires before lookup.
     const r = await evaluateTokenedEdit({
       toolName: "NotebookEdit",
       toolInput: {
         file_path: path.join(tmpRoot, "notebooks/x.ipynb"),
-        _meta_edit_token: grant.token_id,
+        _meta_edit_token: "met_20260502_0000000000",
       },
       repoRoot: tmpRoot,
       grants,
@@ -360,17 +264,17 @@ describe("evaluateTokenedEdit — gate failures", () => {
     });
     expect(r.decision).toBe("deny");
     expect(r.reason).toMatch(/NotebookEdit/);
-    expect(r.reason).toMatch(/UNSUPPORTED/);
+    expect(r.reason).toMatch(/out of v0.2 scope/);
   });
 
   it("denies when file_path is missing", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "x\n");
     const grant = await issueGrant(grants, "edit_20260502_0008", [
       {
         file: "src/foo.ts",
-        before_sha256: sha256(""),
-        after_sha256: sha256("x"),
+        before_sha256: sha256("x\n"),
       },
     ]);
     const r = await evaluateTokenedEdit({
@@ -392,7 +296,6 @@ describe("evaluateTokenedEdit — gate failures", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("x\n"),
-        after_sha256: sha256("y\n"),
       },
     ]);
 
@@ -413,10 +316,8 @@ describe("evaluateTokenedEdit — gate failures", () => {
 
   it("denies (fail-closed) when target path is a directory (EISDIR)", async () => {
     // A binding whose `file` resolves to a directory cannot be checked.
-    // The pre-codex implementation hashed "" which (because the binding's
-    // before_sha256 != sha256("")) would have produced a "drift" deny —
-    // but only by accident. The fail-closed path returns a specific deny
-    // reason. (Codex review medium #1.)
+    // The fail-closed path returns a specific deny reason. (Codex review
+    // medium #1, retained from v0.2.0.)
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
     fs.mkdirSync(path.join(tmpRoot, "src/dir-not-file"), { recursive: true });
@@ -424,7 +325,6 @@ describe("evaluateTokenedEdit — gate failures", () => {
       {
         file: "src/dir-not-file",
         before_sha256: sha256(""),
-        after_sha256: sha256("x\n"),
       },
     ]);
     const r = await evaluateTokenedEdit({
@@ -468,7 +368,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("hello\n"),
-        after_sha256: sha256("hello world\n"),
       },
     ]);
 
@@ -500,7 +399,7 @@ describe("evaluateTokenedEdit — happy path", () => {
     }
   });
 
-  it("allows + consumes a Write call when after_sha256 matches content", async () => {
+  it("allows + consumes a Write call when before_sha256 matches disk", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
     writeFile("src/foo.ts", "old\n");
@@ -509,7 +408,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("old\n"),
-        after_sha256: sha256("brand new\n"),
       },
     ]);
 
@@ -517,7 +415,10 @@ describe("evaluateTokenedEdit — happy path", () => {
       toolName: "Write",
       toolInput: {
         file_path: path.join(tmpRoot, "src/foo.ts"),
-        content: "brand new\n",
+        // v0.2.1: the hook does NOT replay this content — only staleness
+        // is checked. The agent's actual write goes through native Write
+        // after the hook allows.
+        content: "anything the agent wants to write\n",
         _meta_edit_token: grant.token_id,
       },
       repoRoot: tmpRoot,
@@ -532,18 +433,16 @@ describe("evaluateTokenedEdit — happy path", () => {
     }
   });
 
-  it("allows MultiEdit when sequential edits land the declared sha", async () => {
+  it("allows MultiEdit when before_sha256 matches disk (no replay)", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
     const initial = "alpha\nbeta\ngamma\n";
-    const final = "ALPHA\nbeta\nGAMMA\n";
     writeFile("src/foo.ts", initial);
 
     const grant = await issueGrant(grants, "edit_20260502_0102", [
       {
         file: "src/foo.ts",
         before_sha256: sha256(initial),
-        after_sha256: sha256(final),
       },
     ]);
 
@@ -564,42 +463,6 @@ describe("evaluateTokenedEdit — happy path", () => {
     expect(r.decision).toBe("allow");
   });
 
-  it("denies MultiEdit when one edit's old_string is non-unique in the running buffer", async () => {
-    const grants = createGrantsStore(tmpRoot);
-    const log = new EditLog(tmpRoot);
-    // After the first edit there are two "AA" substrings. Second edit
-    // tries to replace "AA" — ambiguous, must deny.
-    const initial = "AA-BB\n";
-    writeFile("src/foo.ts", initial);
-
-    // The post-condition is irrelevant; we expect deny before sha check.
-    const grant = await issueGrant(grants, "edit_20260502_0103", [
-      {
-        file: "src/foo.ts",
-        before_sha256: sha256(initial),
-        after_sha256: sha256("zzz"),
-      },
-    ]);
-
-    const r = await evaluateTokenedEdit({
-      toolName: "MultiEdit",
-      toolInput: {
-        file_path: path.join(tmpRoot, "src/foo.ts"),
-        edits: [
-          // After this, buffer is "AA-AA\n" — two matches for "AA".
-          { old_string: "BB", new_string: "AA" },
-          { old_string: "AA", new_string: "ZZ" },
-        ],
-        _meta_edit_token: grant.token_id,
-      },
-      repoRoot: tmpRoot,
-      grants,
-      log,
-    });
-    expect(r.decision).toBe("deny");
-    expect(r.reason).toMatch(/uniquely matched/);
-  });
-
   it("partially consumes a multi-binding grant (workflow tool semantics)", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
@@ -610,12 +473,10 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "docs/a.md",
         before_sha256: sha256("alpha\n"),
-        after_sha256: sha256("ALPHA\n"),
       },
       {
         file: "docs/b.md",
         before_sha256: sha256("beta\n"),
-        after_sha256: sha256("BETA\n"),
       },
     ]);
 
@@ -674,7 +535,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("x\n"),
-        after_sha256: sha256("y\n"),
       },
     ]);
     const ok = await evaluateTokenedEdit({
@@ -722,7 +582,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "real/foo.ts",
         before_sha256: sha256("before\n"),
-        after_sha256: sha256("after\n"),
       },
     ]);
 
@@ -751,7 +610,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "src/foo.ts",
         before_sha256: sha256("x\n"),
-        after_sha256: sha256("y\n"),
       },
     ]);
     const r = await evaluateTokenedEdit({
@@ -769,6 +627,47 @@ describe("evaluateTokenedEdit — happy path", () => {
     expect(r.decision).toBe("allow");
   });
 
+  // Codex review v0.2.1, MEDIUM (documented as accepted ambiguity in
+  // src/hooks/raw-edit-policy.ts): a binding with before_sha256 ==
+  // sha256("") could match either an edit_create_file against an absent
+  // target OR a modify-only declaration whose file was deleted between
+  // issuance and consumption. The hook does not distinguish — Article 3's
+  // non-adversarial threat model means deletion-then-write is not the
+  // hook's responsibility to catch. This test pins the behavior so a
+  // future reviewer does not "fix" it without reopening the constitution.
+  it("accepts a sha256(\"\") binding even if the target was deleted post-issuance (accepted ambiguity)", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    // The binding looks identical to an edit_create_file binding because
+    // the file was empty at issue time (server computes sha256("")).
+    writeFile("src/foo.ts", "");
+    const grant = await issueGrant(grants, "edit_20260502_0109", [
+      {
+        file: "src/foo.ts",
+        before_sha256: sha256(""),
+      },
+    ]);
+
+    // Agent deletes the file before issuing the native write — the hook
+    // cannot tell this from the legitimate create-file path.
+    fs.unlinkSync(path.join(tmpRoot, "src/foo.ts"));
+
+    const r = await evaluateTokenedEdit({
+      toolName: "Write",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        content: "anything\n",
+        _meta_edit_token: grant.token_id,
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    // Allowed — see comment above. If this assertion ever changes to
+    // "deny", revisit Article 3 + the binding-shape decision in v0.2.1.
+    expect(r.decision).toBe("allow");
+  });
+
   it("supports edit_create_file: file does not exist, before is sha256(\"\")", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
@@ -777,7 +676,6 @@ describe("evaluateTokenedEdit — happy path", () => {
       {
         file: "src/new.ts",
         before_sha256: sha256(""),
-        after_sha256: sha256("export const x = 1;\n"),
       },
     ]);
 
@@ -797,109 +695,7 @@ describe("evaluateTokenedEdit — happy path", () => {
 });
 
 // =====================================================================
-// Layer 3: simulate (pure function)
-// =====================================================================
-
-describe("simulate", () => {
-  it("Edit replaces a unique substring", () => {
-    const r = simulate("Edit", { old_string: "foo", new_string: "bar" }, "x foo y");
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.content).toBe("x bar y");
-  });
-
-  it("Edit rejects an empty old_string", () => {
-    const r = simulate("Edit", { old_string: "", new_string: "bar" }, "abc");
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/empty/);
-  });
-
-  it("Edit rejects when old_string not found", () => {
-    const r = simulate("Edit", { old_string: "zzz", new_string: "Q" }, "abc");
-    expect(r.ok).toBe(false);
-  });
-
-  it("Edit rejects multiple matches", () => {
-    const r = simulate("Edit", { old_string: "AA", new_string: "B" }, "AA AA");
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/uniquely matched/);
-  });
-
-  it("Edit requires string old_string and new_string", () => {
-    expect(simulate("Edit", { new_string: "B" }, "abc").ok).toBe(false);
-    expect(simulate("Edit", { old_string: "a" }, "abc").ok).toBe(false);
-  });
-
-  it("Write returns content as-is", () => {
-    const r = simulate("Write", { content: "complete file\n" }, "anything");
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.content).toBe("complete file\n");
-  });
-
-  it("Write requires content as a string", () => {
-    expect(simulate("Write", {}, "anything").ok).toBe(false);
-    expect(simulate("Write", { content: 42 }, "anything").ok).toBe(false);
-  });
-
-  it("MultiEdit applies each edit in sequence", () => {
-    const r = simulate(
-      "MultiEdit",
-      {
-        edits: [
-          { old_string: "alpha", new_string: "ALPHA" },
-          { old_string: "gamma", new_string: "GAMMA" },
-        ],
-      },
-      "alpha\nbeta\ngamma\n",
-    );
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.content).toBe("ALPHA\nbeta\nGAMMA\n");
-  });
-
-  it("MultiEdit rejects when edits is missing", () => {
-    expect(simulate("MultiEdit", {}, "x").ok).toBe(false);
-  });
-
-  it("MultiEdit rejects when an earlier edit makes a later old_string non-unique", () => {
-    // Initial buffer "AA-BB" has unique "AA" and unique "BB".
-    // First edit replaces "BB" with "AA" → buffer becomes "AA-AA".
-    // Second edit tries to replace "AA" → ambiguous in the running
-    // buffer, must fail per native MultiEdit contract.
-    const r = simulate(
-      "MultiEdit",
-      {
-        edits: [
-          { old_string: "BB", new_string: "AA" },
-          { old_string: "AA", new_string: "ZZ" },
-        ],
-      },
-      "AA-BB",
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/uniquely matched/);
-  });
-
-  it("MultiEdit rejects an edit step with non-string fields", () => {
-    const r = simulate(
-      "MultiEdit",
-      { edits: [{ old_string: 42, new_string: "Y" }] },
-      "abc",
-    );
-    expect(r.ok).toBe(false);
-  });
-
-  it("NotebookEdit is UNSUPPORTED", () => {
-    const r = simulate("NotebookEdit", {}, "x");
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/UNSUPPORTED|not simulatable/);
-  });
-
-  it("rejects unknown tool names", () => {
-    expect(simulate("FooTool", {}, "").ok).toBe(false);
-  });
-});
-
-// =====================================================================
-// Layer 4: canonicalizeForBinding (parity with Task A/B issuer)
+// Layer 3: canonicalizeForBinding (parity with the issuer)
 // =====================================================================
 
 describe("canonicalizeForBinding", () => {

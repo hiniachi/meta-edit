@@ -1,7 +1,11 @@
 // Schema-level tests for the v0.2 / Case C EditToolRequest. The handler-
 // level integration tests (handler.test.ts) exercise the full pipeline; this
 // file covers validateRequest in isolation so a regression in the schema
-// surface (sha256 format, cardinality, path safety) lights up here first.
+// surface (cardinality, path safety, server-computed before_sha256) lights
+// up here first.
+//
+// v0.2.1: client-supplied sha256 fields were removed. The server now reads
+// disk and computes before_sha256 itself; there is no after_sha256 anywhere.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
@@ -38,9 +42,6 @@ function ctx(): ValidationContext {
   return { repoRoot: tmpRoot };
 }
 
-const HEX64 = "a".repeat(64);
-const HEX64_B = "b".repeat(64);
-
 describe("EditToolRequestSchema — zod surface", () => {
   it("accepts a well-formed request without additional_files", () => {
     const r = EditToolRequestSchema.safeParse({
@@ -48,39 +49,43 @@ describe("EditToolRequestSchema — zod surface", () => {
       rationale: "ok",
       risk_level: "medium",
       test_files: ["t.test.ts"],
-      before_sha256: HEX64,
-      after_sha256: HEX64_B,
     });
     expect(r.success).toBe(true);
   });
 
-  it("rejects sha256 that is not exactly 64 lowercase hex", () => {
-    const tries = ["short", "A".repeat(64), "z".repeat(64), "a".repeat(63)];
-    for (const bad of tries) {
-      const r = EditToolRequestSchema.safeParse({
-        target_file: "src/foo.ts",
-        rationale: "ok",
-        risk_level: "medium",
-        test_files: [],
-        before_sha256: bad,
-        after_sha256: HEX64_B,
-      });
-      expect(r.success).toBe(false);
-    }
+  it("rejects unknown extra fields (strict)", () => {
+    // v0.2.1: before_sha256 / after_sha256 must NOT be accepted any longer.
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      test_files: [],
+      before_sha256: "a".repeat(64),
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects after_sha256 even when target shape is otherwise valid", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      test_files: [],
+      after_sha256: "b".repeat(64),
+    });
+    expect(r.success).toBe(false);
   });
 
   it("rejects additional_files with > MAX_ADDITIONAL_FILES entries", () => {
     const af = [];
     for (let i = 0; i <= MAX_ADDITIONAL_FILES; i++) {
-      af.push({ file: `f${i}`, before_sha256: HEX64, after_sha256: HEX64_B });
+      af.push({ file: `f${i}` });
     }
     const r = EditToolRequestSchema.safeParse({
       target_file: "src/foo.ts",
       rationale: "ok",
       risk_level: "low",
       test_files: [],
-      before_sha256: HEX64,
-      after_sha256: HEX64_B,
       additional_files: af,
     });
     expect(r.success).toBe(false);
@@ -92,8 +97,22 @@ describe("EditToolRequestSchema — zod surface", () => {
       rationale: "ok",
       risk_level: "extreme",
       test_files: [],
-      before_sha256: HEX64,
-      after_sha256: HEX64_B,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects additional_files entries carrying sha256 fields (strict)", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "docs/a.md",
+      rationale: "ok",
+      risk_level: "low",
+      test_files: [],
+      additional_files: [
+        {
+          file: "docs/b.md",
+          before_sha256: "a".repeat(64),
+        },
+      ],
     });
     expect(r.success).toBe(false);
   });
@@ -106,8 +125,6 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "fix",
       risk_level: "medium",
       test_files: ["tests/foo.test.ts"],
-      before_sha256: sha256Hex("hello\n"),
-      after_sha256: sha256Hex("hello world\n"),
       ...overrides,
     };
   }
@@ -136,7 +153,6 @@ describe("validateRequest — disk + path-safety", () => {
     const r = validateRequest("edit_boundary_condition",
       modifyReq({
         target_file: ".meta-edit/state/x.txt",
-        before_sha256: SHA256_EMPTY,
       }), ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -155,20 +171,17 @@ describe("validateRequest — disk + path-safety", () => {
 
   it("rejects edit_create_file when target_file already exists", () => {
     writeFile("src/foo.ts", "x\n");
-    const r = validateRequest("edit_create_file",
-      modifyReq({ before_sha256: SHA256_EMPTY }), ctx());
+    const r = validateRequest("edit_create_file", modifyReq(), ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.warnings.some((w) => w.includes("already exists"))).toBe(true);
     }
   });
 
-  it("succeeds on a valid edit_create_file declaration", () => {
+  it("succeeds on a valid edit_create_file declaration with sha256(\"\") binding", () => {
     const r = validateRequest("edit_create_file",
       modifyReq({
         target_file: "src/new.ts",
-        before_sha256: SHA256_EMPTY,
-        after_sha256: sha256Hex("x\n"),
       }), ctx());
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -178,19 +191,40 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
+  // v0.2.1 regression-guard: server-computed before_sha256 must fail closed
+  // on disk read failures (EISDIR / EACCES / ELOOP). Hook side has the same
+  // guarantee covered in raw-edit-policy.test.ts; this pins the issuer side.
+  it("rejects modify-only call when target_file is a directory (EISDIR)", () => {
+    fs.mkdirSync(path.join(tmpRoot, "src/foo.ts"), { recursive: true });
+    const r = validateRequest("edit_boundary_condition", modifyReq(), ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      // The server's read-and-sha256 path fails closed; the warning should
+      // mention either the read failure or "must exist as a regular file".
+      expect(
+        r.warnings.some(
+          (w) => /read|EISDIR|directory|regular file/i.test(w),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("computes before_sha256 from disk content for a modify-only tool", () => {
+    writeFile("src/foo.ts", "hello\n");
+    const r = validateRequest("edit_boundary_condition", modifyReq(), ctx());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.canonical).toBe("src/foo.ts");
+      expect(r.primaryBinding.before_sha256).toBe(sha256Hex("hello\n"));
+    }
+  });
+
   it("rejects additional_files for an SQLite-derived tool", () => {
     writeFile("src/foo.ts", "hello\n");
     writeFile("src/bar.ts", "world\n");
     const r = validateRequest("edit_boundary_condition",
       modifyReq({
-        before_sha256: sha256Hex("hello\n"),
-        additional_files: [
-          {
-            file: "src/bar.ts",
-            before_sha256: sha256Hex("world\n"),
-            after_sha256: sha256Hex("changed\n"),
-          },
-        ],
+        additional_files: [{ file: "src/bar.ts" }],
       }), ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -206,19 +240,9 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       test_files: [],
-      before_sha256: sha256Hex("alpha\n"),
-      after_sha256: sha256Hex("alpha2\n"),
       additional_files: [
-        {
-          file: "docs/b.md",
-          before_sha256: sha256Hex("beta\n"),
-          after_sha256: sha256Hex("beta2\n"),
-        },
-        {
-          file: "docs/b.md",
-          before_sha256: sha256Hex("beta\n"),
-          after_sha256: sha256Hex("beta3\n"),
-        },
+        { file: "docs/b.md" },
+        { file: "docs/b.md" },
       ],
     }, ctx());
     expect(r.ok).toBe(false);
@@ -234,15 +258,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       test_files: [],
-      before_sha256: sha256Hex("alpha\n"),
-      after_sha256: sha256Hex("alpha2\n"),
-      additional_files: [
-        {
-          file: "docs/a.md",
-          before_sha256: sha256Hex("alpha\n"),
-          after_sha256: sha256Hex("alpha-other\n"),
-        },
-      ],
+      additional_files: [{ file: "docs/a.md" }],
     }, ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -257,10 +273,13 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "tighten the assertion",
       risk_level: "low",
       test_files: [],
-      before_sha256: sha256Hex("describe('foo', ()=>{})\n"),
-      after_sha256: sha256Hex("describe('foo', () => { it('x',()=>{})})\n"),
     }, ctx());
     expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.before_sha256).toBe(
+        sha256Hex("describe('foo', ()=>{})\n"),
+      );
+    }
   });
 
   it("rejects edit_test_only_change with non-empty test_files", () => {
@@ -270,12 +289,32 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       test_files: ["tests/foo.test.ts"],
-      before_sha256: sha256Hex("x\n"),
-      after_sha256: sha256Hex("y\n"),
     }, ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
+    }
+  });
+
+  it("computes before_sha256 server-side for each additional_files entry", () => {
+    writeFile("docs/a.md", "alpha\n");
+    writeFile("docs/b.md", "beta\n");
+    writeFile("docs/c.md", "gamma\n");
+    const r = validateRequest("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "rename product across the docs",
+      risk_level: "low",
+      test_files: [],
+      additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
+    }, ctx());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.before_sha256).toBe(sha256Hex("alpha\n"));
+      const byFile = new Map(
+        r.additionalBindings.map((b) => [b.canonical, b.before_sha256]),
+      );
+      expect(byFile.get("docs/b.md")).toBe(sha256Hex("beta\n"));
+      expect(byFile.get("docs/c.md")).toBe(sha256Hex("gamma\n"));
     }
   });
 });

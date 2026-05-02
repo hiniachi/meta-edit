@@ -27,10 +27,15 @@
 //      for any other tool that somehow lands here.)
 //   2. Otherwise run the token-aware policy. The hook denies on
 //      missing/expired token, file-not-bound, before_sha256 staleness,
-//      after_sha256 mismatch, or NotebookEdit (UNSUPPORTED). On allow
-//      we ALSO consume the binding and append a `consumed` record to
-//      the edit log — this is the PreToolUse choice (Option A in the
-//      Task C brief). Audit consumers reconcile by edit_id.
+//      or NotebookEdit (out of v0.2 scope). On allow we ALSO consume
+//      the binding and append a `consumed` record to the edit log —
+//      this is the PreToolUse choice (Option A in the Task C brief).
+//      Audit consumers reconcile by edit_id.
+//
+// v0.2.1: the v0.2.0 `simulate()` post-condition check (after_sha256
+// replay) was removed. Per Article 3 the friction outweighed the
+// value; staleness on before_sha256 is the single load-bearing
+// pre-condition.
 //
 // The Option A choice means a `consumed` record is written BEFORE the
 // native write completes. If the actual write fails (disk full,

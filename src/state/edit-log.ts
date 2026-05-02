@@ -37,7 +37,6 @@ import { RiskLevelSchema } from "../tools/common.js";
 const BindingEntrySchema = z.object({
   file: z.string(),
   before_sha256: z.string(),
-  after_sha256: z.string(),
 });
 export type BindingEntry = z.infer<typeof BindingEntrySchema>;
 

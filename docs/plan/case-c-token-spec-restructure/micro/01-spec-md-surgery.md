@@ -1,5 +1,14 @@
 # SPEC.md Constitutional Surgery — Implementation Plan
 
+> **Historical document.** This plan landed as part of v0.2.0. Schema
+> snippets below still show the v0.2.0 shape (with client-supplied
+> `before_sha256` / `after_sha256` and a 30s-then-5min TTL). The
+> v0.2.1 thinning later removed both client-supplied digests and the
+> hook's `simulate()` post-condition — see `IMPLEMENTATION-LOG.md`'s
+> v0.2.1 section, `docs/SPEC.md` §3 / §5.1, and the v0.2.1 note in
+> `../macro-plan.md` Part III. Do not treat the schema fragments here
+> as current.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Restructure `docs/SPEC.md` per the disposition map in `../macro-plan.md`: insert Part I (8 articles) at the top, slim Part II sections, delete sections absorbed into the constitution, and update external cross-references — all in a single PR landing on `main`.
@@ -236,7 +245,7 @@ type EditToolRequest = {
 
 type EditToolResult = {
   token: string;                  // e.g. "met_20260502_a3f9b2..."
-  expires_at: string;             // ISO-8601, declaration_time + 30s
+  expires_at: string;             // ISO-8601, declaration_time + 5m
   edit_id: string;                // e.g. "edit_20260502_0001"
   warnings: string[];
   audit_error?: string;           // present whenever an audit-log write
@@ -262,7 +271,7 @@ Validation failures result in a rejected request with a non-empty `warnings` arr
 ### Token issuance
 
 A successful declaration produces a token bound to the set of
-`(file, before_sha256, after_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The token expires 30 seconds after issuance. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
+`(file, before_sha256, after_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The token expires 5 minutes after issuance. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
 The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 

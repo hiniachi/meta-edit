@@ -199,7 +199,7 @@ function isProtectedPath(p, options = {}) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -1611,4 +1611,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=3A1AB60835413A4064756E2164756E21
+//# debugId=F0863E47475E992264756E2164756E21

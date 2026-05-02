@@ -104,7 +104,7 @@ import * as path5 from "node:path";
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -4769,10 +4769,10 @@ Required tests (you MUST cover):
 
 test_files must be non-empty (you must declare which test covers the
 new code). The \`target_file\` MUST NOT exist on disk at declaration
-time; \`before_sha256\` MUST be \`sha256("")\`. \`after_sha256\` is the
-sha256 of the intended file content. For multi-file scaffolding, list
-additional creates in \`additional_files\` (this tool is one of the two
-workflow-required tools per Article 6 / §3).
+time; the server binds \`before_sha256\` to \`sha256("")\` automatically.
+For multi-file scaffolding, list additional creates in
+\`additional_files\` (this tool is one of the two workflow-required
+tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -4900,12 +4900,8 @@ function isProtectedPath(p, options = {}) {
 
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
-var HEX64_RE = /^[0-9a-f]{64}$/;
-var Sha256HexSchema = exports_external.string().regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
 var AdditionalFileSchema = exports_external.object({
-  file: exports_external.string().min(1),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema
+  file: exports_external.string().min(1)
 }).strict();
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
@@ -4917,8 +4913,6 @@ var EditToolRequestSchema = exports_external.object({
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   test_files: exports_external.array(exports_external.string()),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema,
   additional_files: exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES).optional()
 }).strict();
 function sha256Hex(content) {
@@ -4954,14 +4948,13 @@ function validateRequest(toolName, request, ctx) {
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeCheck = verifyBeforeSha256(targetCheck.canonical, request.before_sha256, ctx.repoRoot, isCreate, "target_file");
-    if (!beforeCheck.ok) {
-      warnings.push(beforeCheck.error);
+    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, isCreate, "target_file");
+    if (!beforeRead.ok) {
+      warnings.push(beforeRead.error);
     } else {
       primaryBinding = {
         canonical: targetCheck.canonical,
-        before_sha256: request.before_sha256,
-        after_sha256: request.after_sha256
+        before_sha256: beforeRead.before_sha256
       };
     }
   }
@@ -4982,15 +4975,14 @@ function validateRequest(toolName, request, ctx) {
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      const beforeCheck = verifyBeforeSha256(safe.canonical, af.before_sha256, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
-      if (!beforeCheck.ok) {
-        warnings.push(beforeCheck.error);
+      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      if (!beforeRead.ok) {
+        warnings.push(beforeRead.error);
         continue;
       }
       additionalBindings.push({
         canonical: safe.canonical,
-        before_sha256: af.before_sha256,
-        after_sha256: af.after_sha256
+        before_sha256: beforeRead.before_sha256
       });
     }
   }
@@ -5069,7 +5061,7 @@ function containsParentTraversal(p) {
   }
   return false;
 }
-function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, fieldLabel) {
+function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
   const absolute = path3.join(repoRoot, canonical);
   let onDisk = null;
   try {
@@ -5083,17 +5075,11 @@ function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, field
           error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
         };
       }
-      if (declaredBefore !== SHA256_EMPTY) {
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}": before_sha256 must equal sha256("") for edit_create_file because the file does not yet exist on disk`
-        };
-      }
-      return { ok: true };
+      return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
       ok: false,
-      error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 verification (${code ?? "ERR"})`
+      error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`
     };
   }
   if (isCreate) {
@@ -5102,17 +5088,7 @@ function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, field
       error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
     };
   }
-  const actual = sha256Hex(onDisk);
-  if (actual !== declaredBefore) {
-    return {
-      ok: false,
-      error: `${fieldLabel} "${canonical}": before_sha256 mismatch — declared ${shortHash(declaredBefore)} ` + `but disk content hashes to ${shortHash(actual)}. Re-read the file and recompute the digest before retrying.`
-    };
-  }
-  return { ok: true };
-}
-function shortHash(h) {
-  return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
+  return { ok: true, before_sha256: sha256Hex(onDisk) };
 }
 function makeStubHandler(ctx) {
   return async (toolName, args) => {
@@ -5139,8 +5115,7 @@ function makeStubHandler(ctx) {
 // src/state/edit-log.ts
 var BindingEntrySchema = exports_external.object({
   file: exports_external.string(),
-  before_sha256: exports_external.string(),
-  after_sha256: exports_external.string()
+  before_sha256: exports_external.string()
 });
 var IssuedEntrySchema = exports_external.object({
   edit_id: exports_external.string(),
@@ -5455,6 +5430,12 @@ async function evaluateTokenedEdit(args) {
       reason: `deny-raw-edit invoked for non-raw tool "${toolName}"; check hook matcher`
     };
   }
+  if (toolName.toLowerCase() === "notebookedit") {
+    return {
+      decision: "deny",
+      reason: `meta-edit does not support "NotebookEdit" through the token-aware flow ` + `(NotebookEdit is out of v0.2 scope). Edit the notebook's source cells ` + `via an edit_* tool that targets a regular file, or stop and ask the user.`
+    };
+  }
   const tokenId = typeof toolInput._meta_edit_token === "string" ? toolInput._meta_edit_token : "";
   if (tokenId.length === 0) {
     return {
@@ -5462,17 +5443,11 @@ async function evaluateTokenedEdit(args) {
       reason: `meta-edit denies "${toolName}" without a "_meta_edit_token" parameter. ` + `First call a typed_edit MCP tool (one of the nineteen edit_*; full list: ${SPEC_TOOLS_URL}) ` + `to declare the change and obtain a single-use token, then pass that token's id ` + `as the "_meta_edit_token" field of "${toolName}".`
     };
   }
-  if (toolName.toLowerCase() === "notebookedit") {
-    return {
-      decision: "deny",
-      reason: `meta-edit does not support "NotebookEdit" through the token-aware flow ` + `(SPEC §5.1: simulate(NotebookEdit) is UNSUPPORTED). Edit the notebook's ` + `source cells via an edit_* tool that targets a regular file, or stop and ask the user.`
-    };
-  }
   const grant = await grants.lookup(tokenId);
   if (grant === null) {
     return {
       decision: "deny",
-      reason: `meta-edit token "${tokenId}" is expired or unknown. ` + `Single-use tokens have a short TTL (~30s); re-issue via a fresh typed_edit call.`
+      reason: `meta-edit token "${tokenId}" is expired or unknown. ` + `Single-use tokens have a short TTL (~5 minutes); re-issue via a fresh typed_edit call.`
     };
   }
   const filePathRaw = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
@@ -5514,21 +5489,7 @@ async function evaluateTokenedEdit(args) {
   if (diskSha !== bound.before_sha256) {
     return {
       decision: "deny",
-      reason: `disk content of "${canonical}" has drifted from the typed_edit declaration ` + `(declared before_sha256=${shortHash2(bound.before_sha256)}, actual ${shortHash2(diskSha)}). ` + `Re-read the file and issue a fresh typed_edit declaration.`
-    };
-  }
-  const sim = simulate(toolName, toolInput, diskContent);
-  if (!sim.ok) {
-    return {
-      decision: "deny",
-      reason: `${toolName} simulate() failed: ${sim.error}`
-    };
-  }
-  const simSha = sha256Hex2(sim.content);
-  if (simSha !== bound.after_sha256) {
-    return {
-      decision: "deny",
-      reason: `${toolName}'s simulated result for "${canonical}" does not match the declared after_sha256 ` + `(declared ${shortHash2(bound.after_sha256)}, would land ${shortHash2(simSha)}). ` + `Either fix the tool input to land the declared bytes, or re-issue a typed_edit with the new after_sha256.`
+      reason: `disk content of "${canonical}" has drifted from the typed_edit declaration ` + `(declared before_sha256=${shortHash(bound.before_sha256)}, actual ${shortHash(diskSha)}). ` + `Re-read the file and issue a fresh typed_edit declaration.`
     };
   }
   const consumeRes = await grants.consume(tokenId, canonical);
@@ -5551,93 +5512,6 @@ async function evaluateTokenedEdit(args) {
 `);
   }
   return { decision: "allow" };
-}
-function simulate(toolName, toolInput, current) {
-  switch (toolName.toLowerCase()) {
-    case "edit":
-      return simulateEdit(toolInput, current);
-    case "write":
-      return simulateWrite(toolInput);
-    case "multiedit":
-      return simulateMultiEdit(toolInput, current);
-    case "notebookedit":
-      return {
-        ok: false,
-        error: "NotebookEdit is not simulatable in v0.2 (SPEC §5.1)"
-      };
-    default:
-      return { ok: false, error: `simulate() does not support tool "${toolName}"` };
-  }
-}
-function simulateEdit(toolInput, current) {
-  const oldStr = typeof toolInput.old_string === "string" ? toolInput.old_string : null;
-  const newStr = typeof toolInput.new_string === "string" ? toolInput.new_string : null;
-  if (oldStr === null) {
-    return { ok: false, error: 'Edit requires "old_string" (string)' };
-  }
-  if (newStr === null) {
-    return { ok: false, error: 'Edit requires "new_string" (string)' };
-  }
-  return applyUniqueReplace(current, oldStr, newStr, "Edit");
-}
-function simulateWrite(toolInput) {
-  const content = typeof toolInput.content === "string" ? toolInput.content : null;
-  if (content === null) {
-    return { ok: false, error: 'Write requires "content" (string)' };
-  }
-  return { ok: true, content };
-}
-function simulateMultiEdit(toolInput, current) {
-  if (!Array.isArray(toolInput.edits)) {
-    return { ok: false, error: 'MultiEdit requires "edits" (array)' };
-  }
-  let buf = current;
-  for (let i = 0;i < toolInput.edits.length; i++) {
-    const e = toolInput.edits[i];
-    if (typeof e !== "object" || e === null) {
-      return { ok: false, error: `MultiEdit edits[${i}] is not an object` };
-    }
-    const er = e;
-    const oldStr = typeof er.old_string === "string" ? er.old_string : null;
-    const newStr = typeof er.new_string === "string" ? er.new_string : null;
-    if (oldStr === null) {
-      return { ok: false, error: `MultiEdit edits[${i}] requires "old_string" (string)` };
-    }
-    if (newStr === null) {
-      return { ok: false, error: `MultiEdit edits[${i}] requires "new_string" (string)` };
-    }
-    const step = applyUniqueReplace(buf, oldStr, newStr, `MultiEdit edits[${i}]`);
-    if (!step.ok)
-      return step;
-    buf = step.content;
-  }
-  return { ok: true, content: buf };
-}
-function applyUniqueReplace(current, oldStr, newStr, label) {
-  if (oldStr.length === 0) {
-    return {
-      ok: false,
-      error: `${label}'s old_string is empty; native Edit requires a non-empty unique anchor`
-    };
-  }
-  const first = current.indexOf(oldStr);
-  if (first === -1) {
-    return {
-      ok: false,
-      error: `${label}'s old_string was not found in the current file content`
-    };
-  }
-  const second = current.indexOf(oldStr, first + 1);
-  if (second !== -1) {
-    return {
-      ok: false,
-      error: `${label}'s old_string is not uniquely matched in the current file content (matches at offset ${first} and ${second}); native Edit requires a unique anchor`
-    };
-  }
-  return {
-    ok: true,
-    content: current.slice(0, first) + newStr + current.slice(first + oldStr.length)
-  };
 }
 function findBinding(grant, canonical) {
   for (const b of grant.binding) {
@@ -5691,7 +5565,7 @@ async function readFileForBinding(repoRoot, canonical) {
 function sha256Hex2(content) {
   return crypto2.createHash("sha256").update(content, "utf8").digest("hex");
 }
-function shortHash2(h) {
+function shortHash(h) {
   return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
 }
 
@@ -5699,7 +5573,7 @@ function shortHash2(h) {
 import * as crypto3 from "node:crypto";
 import * as fs6 from "node:fs/promises";
 import * as path6 from "node:path";
-var GRANT_TTL_MS = 30000;
+var GRANT_TTL_MS = 300000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
   const y = d.getFullYear();
@@ -5712,7 +5586,7 @@ function generateTokenId(now = new Date) {
   const rand = crypto3.randomBytes(5).toString("hex");
   return `met_${key}_${rand}`;
 }
-var HEX64_RE2 = /^[0-9a-f]{64}$/;
+var HEX64_RE = /^[0-9a-f]{64}$/;
 function isGrant(value) {
   if (typeof value !== "object" || value === null)
     return false;
@@ -5734,10 +5608,7 @@ function isGrant(value) {
     const bb = b;
     if (typeof bb.file !== "string" || bb.file.length === 0)
       return false;
-    if (typeof bb.before_sha256 !== "string" || !HEX64_RE2.test(bb.before_sha256)) {
-      return false;
-    }
-    if (typeof bb.after_sha256 !== "string" || !HEX64_RE2.test(bb.after_sha256)) {
+    if (typeof bb.before_sha256 !== "string" || !HEX64_RE.test(bb.before_sha256)) {
       return false;
     }
   }
@@ -5801,14 +5672,14 @@ class GrantsStoreImpl {
         throw new Error(`grants.issue: duplicate binding file "${b.file}" — each grant must bind each file at most once`);
       }
       seenFiles.add(b.file);
-      if (!HEX64_RE2.test(b.before_sha256)) {
+      if (!HEX64_RE.test(b.before_sha256)) {
         throw new Error(`grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`);
-      }
-      if (!HEX64_RE2.test(b.after_sha256)) {
-        throw new Error(`grants.issue: binding[].after_sha256 must be 64 lowercase hex chars (file=${b.file})`);
       }
     }
     await this.ensureDir();
+    try {
+      await this.reapExpired();
+    } catch {}
     const now = new Date;
     const issuedAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + GRANT_TTL_MS).toISOString();
@@ -6041,4 +5912,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=E03754B3F8836AA764756E2164756E21
+//# debugId=D87261E06B442FE364756E2164756E21

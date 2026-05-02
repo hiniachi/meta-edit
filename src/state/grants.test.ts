@@ -20,12 +20,10 @@ afterEach(() => {
 });
 
 const HEX64_A = "a".repeat(64);
-const HEX64_B = "b".repeat(64);
 const HEX64_C = "c".repeat(64);
-const HEX64_D = "d".repeat(64);
 
-function binding(file: string, before = HEX64_A, after = HEX64_B): GrantBinding {
-  return { file, before_sha256: before, after_sha256: after };
+function binding(file: string, before = HEX64_A): GrantBinding {
+  return { file, before_sha256: before };
 }
 
 describe("grants.issue", () => {
@@ -115,8 +113,8 @@ describe("grants.issue", () => {
       store.issue({
         edit_id: "edit_20260502_0001",
         binding: [
-          binding("/abs/src/dup.ts", HEX64_A, HEX64_B),
-          binding("/abs/src/dup.ts", HEX64_C, HEX64_D),
+          binding("/abs/src/dup.ts", HEX64_A),
+          binding("/abs/src/dup.ts", HEX64_C),
         ],
       }),
     ).rejects.toThrow(/duplicate binding file/);
@@ -129,12 +127,12 @@ describe("grants.issue", () => {
     await expect(
       store.issue({
         edit_id: "edit_20260502_0001",
-        binding: [{ file: "/abs/src/foo.ts", before_sha256: "abc", after_sha256: HEX64_B }],
+        binding: [{ file: "/abs/src/foo.ts", before_sha256: "abc" }],
       }),
     ).rejects.toThrow(/before_sha256/);
   });
 
-  it("rejects a malformed after_sha256 (uppercase hex)", async () => {
+  it("rejects a malformed before_sha256 (uppercase hex)", async () => {
     const store = createGrantsStore(tmpRoot);
     await expect(
       store.issue({
@@ -142,12 +140,11 @@ describe("grants.issue", () => {
         binding: [
           {
             file: "/abs/src/foo.ts",
-            before_sha256: HEX64_A,
-            after_sha256: "A".repeat(64),
+            before_sha256: "A".repeat(64),
           },
         ],
       }),
-    ).rejects.toThrow(/after_sha256/);
+    ).rejects.toThrow(/before_sha256/);
   });
 
   it("rejects an empty file path in a binding", async () => {
@@ -155,7 +152,7 @@ describe("grants.issue", () => {
     await expect(
       store.issue({
         edit_id: "edit_20260502_0001",
-        binding: [{ file: "", before_sha256: HEX64_A, after_sha256: HEX64_B }],
+        binding: [{ file: "", before_sha256: HEX64_A }],
       }),
     ).rejects.toThrow(/file/);
   });
@@ -267,8 +264,8 @@ describe("grants.consume", () => {
     const g = await store.issue({
       edit_id: "edit_20260502_0001",
       binding: [
-        binding("/abs/src/a.ts", HEX64_A, HEX64_B),
-        binding("/abs/src/b.ts", HEX64_C, HEX64_D),
+        binding("/abs/src/a.ts", HEX64_A),
+        binding("/abs/src/b.ts", HEX64_C),
       ],
     });
     const filePath = path.join(
@@ -310,8 +307,8 @@ describe("grants.consume", () => {
     const g = await store.issue({
       edit_id: "edit_20260502_0001",
       binding: [
-        binding("/abs/src/a.ts", HEX64_A, HEX64_B),
-        binding("/abs/src/b.ts", HEX64_C, HEX64_D),
+        binding("/abs/src/a.ts", HEX64_A),
+        binding("/abs/src/b.ts", HEX64_C),
       ],
     });
     const r1 = await store.consume(g.token_id, "/abs/src/a.ts");
@@ -370,8 +367,8 @@ describe("grants.consume", () => {
     const g = await store.issue({
       edit_id: "edit_20260502_0001",
       binding: [
-        binding("/abs/src/a.ts", HEX64_A, HEX64_B),
-        binding("/abs/src/b.ts", HEX64_C, HEX64_D),
+        binding("/abs/src/a.ts", HEX64_A),
+        binding("/abs/src/b.ts", HEX64_C),
       ],
     });
 
@@ -406,8 +403,8 @@ describe("grants.consume", () => {
     const g = await a.issue({
       edit_id: "edit_20260502_0001",
       binding: [
-        binding("/abs/src/a.ts", HEX64_A, HEX64_B),
-        binding("/abs/src/b.ts", HEX64_C, HEX64_D),
+        binding("/abs/src/a.ts", HEX64_A),
+        binding("/abs/src/b.ts", HEX64_C),
       ],
     });
 

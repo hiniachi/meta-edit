@@ -17159,10 +17159,10 @@ Required tests (you MUST cover):
 
 test_files must be non-empty (you must declare which test covers the
 new code). The \`target_file\` MUST NOT exist on disk at declaration
-time; \`before_sha256\` MUST be \`sha256("")\`. \`after_sha256\` is the
-sha256 of the intended file content. For multi-file scaffolding, list
-additional creates in \`additional_files\` (this tool is one of the two
-workflow-required tools per Article 6 / §3).
+time; the server binds \`before_sha256\` to \`sha256("")\` automatically.
+For multi-file scaffolding, list additional creates in
+\`additional_files\` (this tool is one of the two workflow-required
+tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -17294,12 +17294,8 @@ function isProtectedPath(p, options = {}) {
 
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
-var HEX64_RE = /^[0-9a-f]{64}$/;
-var Sha256HexSchema = exports_external.string().regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
 var AdditionalFileSchema = exports_external.object({
-  file: exports_external.string().min(1),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema
+  file: exports_external.string().min(1)
 }).strict();
 var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
@@ -17311,8 +17307,6 @@ var EditToolRequestSchema = exports_external.object({
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   test_files: exports_external.array(exports_external.string()),
-  before_sha256: Sha256HexSchema,
-  after_sha256: Sha256HexSchema,
   additional_files: exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES).optional()
 }).strict();
 function sha256Hex(content) {
@@ -17348,14 +17342,13 @@ function validateRequest(toolName, request, ctx) {
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeCheck = verifyBeforeSha256(targetCheck.canonical, request.before_sha256, ctx.repoRoot, isCreate, "target_file");
-    if (!beforeCheck.ok) {
-      warnings.push(beforeCheck.error);
+    const beforeRead = computeBeforeSha256(targetCheck.canonical, ctx.repoRoot, isCreate, "target_file");
+    if (!beforeRead.ok) {
+      warnings.push(beforeRead.error);
     } else {
       primaryBinding = {
         canonical: targetCheck.canonical,
-        before_sha256: request.before_sha256,
-        after_sha256: request.after_sha256
+        before_sha256: beforeRead.before_sha256
       };
     }
   }
@@ -17376,15 +17369,14 @@ function validateRequest(toolName, request, ctx) {
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      const beforeCheck = verifyBeforeSha256(safe.canonical, af.before_sha256, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
-      if (!beforeCheck.ok) {
-        warnings.push(beforeCheck.error);
+      const beforeRead = computeBeforeSha256(safe.canonical, ctx.repoRoot, isCreate, `additional_files entry "${af.file}"`);
+      if (!beforeRead.ok) {
+        warnings.push(beforeRead.error);
         continue;
       }
       additionalBindings.push({
         canonical: safe.canonical,
-        before_sha256: af.before_sha256,
-        after_sha256: af.after_sha256
+        before_sha256: beforeRead.before_sha256
       });
     }
   }
@@ -17463,7 +17455,7 @@ function containsParentTraversal(p) {
   }
   return false;
 }
-function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, fieldLabel) {
+function computeBeforeSha256(canonical, repoRoot, isCreate, fieldLabel) {
   const absolute = path3.join(repoRoot, canonical);
   let onDisk = null;
   try {
@@ -17477,17 +17469,11 @@ function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, field
           error: `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`
         };
       }
-      if (declaredBefore !== SHA256_EMPTY) {
-        return {
-          ok: false,
-          error: `${fieldLabel} "${canonical}": before_sha256 must equal sha256("") for edit_create_file because the file does not yet exist on disk`
-        };
-      }
-      return { ok: true };
+      return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
       ok: false,
-      error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 verification (${code ?? "ERR"})`
+      error: `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`
     };
   }
   if (isCreate) {
@@ -17496,17 +17482,7 @@ function verifyBeforeSha256(canonical, declaredBefore, repoRoot, isCreate, field
       error: `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`
     };
   }
-  const actual = sha256Hex(onDisk);
-  if (actual !== declaredBefore) {
-    return {
-      ok: false,
-      error: `${fieldLabel} "${canonical}": before_sha256 mismatch — declared ${shortHash(declaredBefore)} ` + `but disk content hashes to ${shortHash(actual)}. Re-read the file and recompute the digest before retrying.`
-    };
-  }
-  return { ok: true };
-}
-function shortHash(h) {
-  return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
+  return { ok: true, before_sha256: sha256Hex(onDisk) };
 }
 function makeStubHandler(ctx) {
   return async (toolName, args) => {
@@ -17537,9 +17513,7 @@ var sqliteToolInputSchema = {
     "target_file",
     "rationale",
     "risk_level",
-    "test_files",
-    "before_sha256",
-    "after_sha256"
+    "test_files"
   ],
   properties: {
     target_file: {
@@ -17559,16 +17533,6 @@ var sqliteToolInputSchema = {
       type: "array",
       items: { type: "string" },
       description: "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. Test edits are made via separate edit_test_only_change calls. Required (non-empty) for SQLite-derived production tools; must be empty for edit_test_only_change."
-    },
-    before_sha256: {
-      type: "string",
-      pattern: "^[0-9a-f]{64}$",
-      description: 'Lowercase hex sha256 (64 chars) of the current disk content of target_file. The MCP server reads disk and refuses if the digest does not match. For edit_create_file, pass sha256("") and the file MUST NOT yet exist.'
-    },
-    after_sha256: {
-      type: "string",
-      pattern: "^[0-9a-f]{64}$",
-      description: "Lowercase hex sha256 (64 chars) of the content the agent declares it will write. The deny-raw-edit hook compares this to the bytes the native Edit/Write call would land before allowing the write."
     }
   },
   additionalProperties: false
@@ -17579,33 +17543,21 @@ var workflowToolInputSchema = {
     "target_file",
     "rationale",
     "risk_level",
-    "test_files",
-    "before_sha256",
-    "after_sha256"
+    "test_files"
   ],
   properties: {
     ...sqliteToolInputSchema.properties,
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
-      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry carries its own (file, before_sha256, after_sha256) tuple; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 2 workflow tools (edit_docs_only, edit_create_file). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
-        required: ["file", "before_sha256", "after_sha256"],
+        required: ["file"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path. Same path-safety rules as target_file."
-          },
-          before_sha256: {
-            type: "string",
-            pattern: "^[0-9a-f]{64}$",
-            description: 'sha256 of the current disk content. For edit_create_file entries, sha256("").'
-          },
-          after_sha256: {
-            type: "string",
-            pattern: "^[0-9a-f]{64}$",
-            description: "sha256 of the content to be written."
+            description: "Repository-relative path. Same path-safety rules as target_file. For edit_create_file the file MUST NOT exist on disk; for edit_docs_only it MUST exist."
           }
         },
         additionalProperties: false
@@ -17660,8 +17612,7 @@ import * as fs4 from "node:fs";
 import * as path4 from "node:path";
 var BindingEntrySchema = exports_external.object({
   file: exports_external.string(),
-  before_sha256: exports_external.string(),
-  after_sha256: exports_external.string()
+  before_sha256: exports_external.string()
 });
 var IssuedEntrySchema = exports_external.object({
   edit_id: exports_external.string(),
@@ -17991,8 +17942,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       edit_id: editId,
       binding: bindings.map((b) => ({
         file: b.canonical,
-        before_sha256: b.before_sha256,
-        after_sha256: b.after_sha256
+        before_sha256: b.before_sha256
       }))
     });
   } catch (e) {
@@ -18025,17 +17975,20 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     test_files: args.test_files,
     binding: bindings.map((b) => ({
       file: b.canonical,
-      before_sha256: b.before_sha256,
-      after_sha256: b.after_sha256
+      before_sha256: b.before_sha256
     })),
     token: grant.token_id
   };
   const auditError = appendIssuedSafely(log, issued);
+  const sanitize = (p) => p.replace(/[\x00-\x1f\x7f]/g, "?");
+  const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
+  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `pass _meta_edit_token: "${grant.token_id}". The token is single-use ` + `per binding and expires at ${grant.expires_at}.`;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,
     edit_id: editId,
     warnings: [],
+    next_action: nextAction,
     ...auditError !== undefined ? { audit_error: auditError } : {}
   };
 }
@@ -18065,7 +18018,7 @@ function formatAuditError(editId, e) {
 import * as crypto2 from "node:crypto";
 import * as fs5 from "node:fs/promises";
 import * as path5 from "node:path";
-var GRANT_TTL_MS = 30000;
+var GRANT_TTL_MS = 300000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
   const y = d.getFullYear();
@@ -18078,7 +18031,7 @@ function generateTokenId(now = new Date) {
   const rand = crypto2.randomBytes(5).toString("hex");
   return `met_${key}_${rand}`;
 }
-var HEX64_RE2 = /^[0-9a-f]{64}$/;
+var HEX64_RE = /^[0-9a-f]{64}$/;
 function isGrant(value) {
   if (typeof value !== "object" || value === null)
     return false;
@@ -18100,10 +18053,7 @@ function isGrant(value) {
     const bb = b;
     if (typeof bb.file !== "string" || bb.file.length === 0)
       return false;
-    if (typeof bb.before_sha256 !== "string" || !HEX64_RE2.test(bb.before_sha256)) {
-      return false;
-    }
-    if (typeof bb.after_sha256 !== "string" || !HEX64_RE2.test(bb.after_sha256)) {
+    if (typeof bb.before_sha256 !== "string" || !HEX64_RE.test(bb.before_sha256)) {
       return false;
     }
   }
@@ -18167,14 +18117,14 @@ class GrantsStoreImpl {
         throw new Error(`grants.issue: duplicate binding file "${b.file}" — each grant must bind each file at most once`);
       }
       seenFiles.add(b.file);
-      if (!HEX64_RE2.test(b.before_sha256)) {
+      if (!HEX64_RE.test(b.before_sha256)) {
         throw new Error(`grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`);
-      }
-      if (!HEX64_RE2.test(b.after_sha256)) {
-        throw new Error(`grants.issue: binding[].after_sha256 must be 64 lowercase hex chars (file=${b.file})`);
       }
     }
     await this.ensureDir();
+    try {
+      await this.reapExpired();
+    } catch {}
     const now = new Date;
     const issuedAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + GRANT_TTL_MS).toISOString();
@@ -18358,7 +18308,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18464,4 +18414,4 @@ export {
   createServer
 };
 
-//# debugId=224038402674BB9664756E2164756E21
+//# debugId=0BEA351453EF56A164756E2164756E21

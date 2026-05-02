@@ -7,7 +7,6 @@ import { EditLog, type IssuedEntry } from "../state/edit-log.js";
 import type { EditLogEntry } from "../state/edit-log.js";
 
 const HEX64_A = "a".repeat(64);
-const HEX64_B = "b".repeat(64);
 
 function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
   return {
@@ -20,7 +19,7 @@ function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
     risk_level: "medium",
     test_files: ["tests/foo.test.ts"],
     binding: [
-      { file: "src/foo.ts", before_sha256: HEX64_A, after_sha256: HEX64_B },
+      { file: "src/foo.ts", before_sha256: HEX64_A },
     ],
     token: "met_20260430_0123456789",
     ...overrides,

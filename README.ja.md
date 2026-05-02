@@ -136,13 +136,13 @@ meta-edit install-hooks --scope user
 1. **`issued`** — MCP サーバが宣言を受理してトークンを発行した時点で書き込みます：
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
    ```
 
 2. **`consumed`** — `deny-raw-edit` フックが対応する標準 Edit / Write の書き込みを認可した時点で書き込みます（PreToolUse、書き込み実行前）：
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:02:43+09:00","phase":"consumed","consuming_tool":"Edit"}
    ```
 
 バリデーション失敗は `phase: "rejected"` 1 行で記録され、`audit_error` を非空で持ちます。パッチ本体は記録**しません** — 必要なら VCS 履歴が真の出所です。`issued` だけあって `consumed` のない記録は、宣言が放棄/期限切れになった証拠です。
