@@ -7,19 +7,19 @@
 
 **语言:** [English](./README.md) · [日本語](./README.ja.md) · **简体中文**
 
-> 一个 MCP 服务器，把编程 AI 代理的通用文件编辑工具替换成 **十九个按编辑类别拆分的专用工具**，并把每类编辑必须满足的测试义务直接写进工具说明里。
+> 一个 MCP 服务器，把编程 AI 代理的通用文件编辑工具替换成 **十八个按编辑类别拆分的专用工具**，并把每类编辑必须满足的测试义务直接写进工具说明里。
 
 ## 为什么要做"带类型的编辑"
 
 `CLAUDE.md` 里写下的指令会随着对话轮次的增加慢慢被遗忘。Skill 只在 AI 自己决定调用时才会生效。两者都依赖"模型 *也许* 会再读一遍"的文本，在真正动作的那一刻并没有结构性的强制力。
 
-工具定义不会被遗忘。AI 即将调用的工具，其 schema 与说明文都会在每一次调用时被加载。`meta-edit` 把单一的 `Edit` 原语拆成十九个按类别区分的工具，让每个工具的说明文自身承载"什么时候用""什么时候不能用""必须伴随哪些测试""什么时候停下来询问用户"。不需要再指望 AI"还记得要补一个边界值测试"。
+工具定义不会被遗忘。AI 即将调用的工具，其 schema 与说明文都会在每一次调用时被加载。`meta-edit` 把单一的 `Edit` 原语拆成十八个按类别区分的工具，让每个工具的说明文自身承载"什么时候用""什么时候不能用""必须伴随哪些测试""什么时候停下来询问用户"。不需要再指望 AI"还记得要补一个边界值测试"。
 
 这个项目押的是这样一个判断：**改变 AI 编辑行为的，是工具表面的形状本身**——而不是检测或事后验证。设计灵感来自 [SQLite 的测试策略](https://sqlite.org/testing.html)（边界值、MC/DC 条件覆盖、异常路径测试、按变更逐项核对清单），把 C 库级别的质量纪律翻译成应用层的编辑类别。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)（Part I 宪法 + Part II 派生规范），v0.2 之后的检测待办清单见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
 
-状态：`0.2.0` 预发布版。v0.2 把机制重塑为 **声明 + 令牌绑定**（参见 `SPEC.md` Article 5）：MCP 服务器只校验声明并发放短期令牌；真正的写入由 Claude Code 内置的 `Edit` / `Write` 在 `deny-raw-edit` 钩子的绑定校验门下完成。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
+状态：`0.3.1` 预发布版。v0.2 把机制重塑为 **声明 + 令牌绑定**（参见 `SPEC.md` Article 5）：MCP 服务器只校验声明并发放短期令牌；真正的写入由 Claude Code 内置的 `Edit` / `Write` 在 `deny-raw-edit` 钩子的绑定校验门下完成。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
 
-## 十九个工具
+## 十八个工具
 
 ```
 edit_refactor_only            edit_test_only_change
@@ -31,7 +31,6 @@ edit_retry_timeout            edit_concurrency
 edit_external_side_effect     edit_cache_invalidation
 edit_permission_logic         edit_dependency_config
 edit_policy_change            edit_docs_only
-edit_create_file
 ```
 
 每个工具的说明都明确给出了下面四点：
@@ -66,7 +65,7 @@ edit_create_file
 /plugin install meta-edit@meta-edit
 ```
 
-这样 MCP 服务器（19 个 `edit_*` 工具）和两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）会一起被自动注册。插件运行的是仓库 `dist/` 目录中预先打包好的 JavaScript（通过 `node` 启动），**唯一的运行时要求是 Node 20+**。无需 Bun，无需 `npm install`，使用者侧也不需要任何构建步骤。
+这样 MCP 服务器（18 个 `edit_*` 工具）和两个安全 Hook（`deny-raw-edit` 与 `deny-bash-write-bypass`）会一起被自动注册。插件运行的是仓库 `dist/` 目录中预先打包好的 JavaScript（通过 `node` 启动），**唯一的运行时要求是 Node 20+**。无需 Bun，无需 `npm install`，使用者侧也不需要任何构建步骤。
 
 ### 方式 B：npm 包
 

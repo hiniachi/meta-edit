@@ -4880,7 +4880,7 @@ function validateRequest(toolName, request, ctx) {
     }
   }
   if (request.additional_files !== undefined && !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
-    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the 2 workflow tools (edit_docs_only, edit_create_file). Submit each ` + `file as its own typed_edit call.`);
+    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the workflow tool (edit_docs_only). Submit each ` + `file as its own typed_edit call.`);
   }
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
@@ -5909,4 +5909,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=FA54BD21F8A8D6FE64756E2164756E21
+//# debugId=9B6A81EC632CFAFF64756E2164756E21
