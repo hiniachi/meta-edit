@@ -434,6 +434,33 @@ describe("runInstallHooks (effectful)", () => {
     expect(code).toBe(0);
     expect(collectedOut.join("")).toContain("nothing to uninstall");
   });
+
+  // Issue 2026-05-02-1300: readSettings calls JSON.parse without try/catch; a
+  // hand-edited settings.json with a typo crashes the CLI with an unhandled
+  // SyntaxError instead of writing a user-facing error and returning non-zero.
+  it("does not throw and returns non-zero when settings.json contains malformed JSON", () => {
+    const target = settingsPathForScope("project", { cwd: tmpRoot });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "{ invalid json }", "utf8");
+    let code = -1;
+    expect(() => {
+      code = runInstallHooks({ scope: "project", cwd: tmpRoot, out, err });
+    }).not.toThrow();
+    expect(code).not.toBe(0);
+    expect(collectedErr.join("")).toMatch(/parse|JSON/i);
+  });
+
+  it("runUninstallHooks: does not throw and returns non-zero when settings.json is malformed", () => {
+    const target = settingsPathForScope("project", { cwd: tmpRoot });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "{ invalid json }", "utf8");
+    let code = -1;
+    expect(() => {
+      code = runUninstallHooks({ scope: "project", cwd: tmpRoot, out, err });
+    }).not.toThrow();
+    expect(code).not.toBe(0);
+    expect(collectedErr.join("")).toMatch(/parse|JSON/i);
+  });
 });
 
 describe("parseHooksArgs", () => {
