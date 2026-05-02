@@ -217,6 +217,7 @@ describe("makeIssuingHandler — validation rejection", () => {
   });
 
   it("accepts edit_create_file when target does not exist (server binds sha256(\"\"))", async () => {
+    fs.mkdirSync(path.join(tmpRoot, "src")); // parent dir required (v0.2.2 issue 1101)
     const { handler, log, grants } = makeHandler();
     const result = await handler(
       "edit_create_file",

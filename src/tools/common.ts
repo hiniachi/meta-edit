@@ -408,6 +408,35 @@ function computeBeforeSha256(
             `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`,
         };
       }
+      // edit_create_file: target must not exist (good) AND parent dir must
+      // exist on disk. Without this check, validation passes but the
+      // eventual native Write fails with ENOENT, leaving an issued+consumed
+      // audit pair without a corresponding file. Per issue 2026-05-02-1101.
+      const parent = path.dirname(absolute);
+      try {
+        const parentStat = fs.statSync(parent);
+        if (!parentStat.isDirectory()) {
+          return {
+            ok: false,
+            error:
+              `${fieldLabel} "${canonical}": parent path "${path.dirname(canonical)}" exists but is not a directory`,
+          };
+        }
+      } catch (parentErr) {
+        const parentCode = (parentErr as NodeJS.ErrnoException | undefined)?.code;
+        if (parentCode === "ENOENT") {
+          return {
+            ok: false,
+            error:
+              `${fieldLabel} "${canonical}": parent directory "${path.dirname(canonical)}" does not exist; create it before declaring (mkdir -p), then re-declare`,
+          };
+        }
+        return {
+          ok: false,
+          error:
+            `${fieldLabel} "${canonical}": failed to stat parent directory (${parentCode ?? "ERR"})`,
+        };
+      }
       return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
