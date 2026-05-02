@@ -1,4 +1,9 @@
-# Issues — meta-edit v0.1.2
+# Issues — meta-edit
+
+Living catalog. Updated 2026-05-02 to integrate post-sweep findings (030–032,
+v0.1.6 dogfood 1000–1108) and 4 pending review PRs.
+
+## v0.1.2 — 7-agent parallel sweep (001–029)
 
 Filed 2026-05-01 by a 7-agent parallel sweep. Every issue includes a TypeScript test code block that, when added to the indicated `*.test.ts` file, exercises the behaviour under review. **Most are reproducing failing tests** (real defects → fail today; fix makes them pass). **A few are regression-guard tests** (current behaviour is correct → pass today; the test prevents future regression). Each issue body indicates which framing applies — examples of regression-guards include a1-07 and a6-01.
 
@@ -69,6 +74,72 @@ Each issue file is self-contained: front-matter (`id`, `category`, `severity`, `
 | 027 | a7-02 | MEDIUM | `cli.ts` unknown-subcommand path untested | [027-unknown-subcommand-exit-code-untested.md](027-unknown-subcommand-exit-code-untested.md) |
 | 028 | a7-03 | HIGH   | `server.ts` accepts any cwd as repoRoot | [028-server-no-repo-root-validation.md](028-server-no-repo-root-validation.md) |
 | 029 | a7-04 | HIGH   | `appendLogSafely` swallows audit-log failures | [029-append-log-safely-swallows-failure.md](029-append-log-safely-swallows-failure.md) |
+
+---
+
+## v0.1.3 follow-up — automated review session a8 (030–032)
+
+Filed 2026-05-01 from session a8 review. Continues the integer-prefix
+convention before the v0.1.6 switch to date-prefix.
+
+| ID | Sev | Title | File |
+|----|--------|-----------------------------------------------|------|
+| 030 | MEDIUM | counter-file day-boundary duplicate `edit_id` | [030-counter-file-day-boundary-duplicate-id.md](030-counter-file-day-boundary-duplicate-id.md) |
+| 031 | LOW    | raw-edit-policy stale defect comments | [031-raw-edit-policy-stale-defect-comments.md](031-raw-edit-policy-stale-defect-comments.md) |
+| 032 | MEDIUM | `readStdin` silently resolves on JSON `null` | [032-readstdin-null-json-not-rejected.md](032-readstdin-null-json-not-rejected.md) |
+
+## v0.1.6 self-application — apply/edit-log dogfood (1000–1002)
+
+Filed 2026-05-02 during v0.1.6 cleanup work. Switches to
+`YYYY-MM-DD-HHMM-<slug>.md` for chronological clarity and PR back-references.
+
+| ID | Sev | Title | Status |
+|----|--------|-----------------------------------------------|--------|
+| 1000 | HIGH | applyCreates partial-file no cleanup on write failure | ✅ resolved (commit `46562ec`) |
+| 1001 | MEDIUM | apply: EACCES root unconditional assert | open |
+| 1002 | MEDIUM | edit-log readAll TOCTOU ENOENT crash | open |
+
+## v0.1.6 self-application — bash hook & raw-edit dogfood (1100–1108)
+
+Filed 2026-05-02 during sustained dogfood; cluster spans hook scope, UX,
+and tool-surface design. Cross-cutting theme: **"hook scope = repository"**
+unification across 1102 / 1106 / 1108.
+
+| ID | Sev | Title |
+|----|--------|-----------------------------------------------|
+| 1100 | MEDIUM | `cat <file> > <in-repo>` is functionally `cp`; verb-deny misses it |
+| 1101 | LOW    | `edit_create_file` does not implicitly mkdir parent |
+| 1102 | MEDIUM | `deny-raw-edit` blocks out-of-repo Write (over-deny) |
+| 1103 | DESIGN | typed `edit_*` as thin Edit wrapper via grant-token (v0.2 candidate) |
+| 1104 | DESIGN | 20th tool candidate `edit_create_planning_artifact` |
+| 1105 | LOW    | hook deny reason text too verbose (URL + 一般論) |
+| 1106 | LOW    | safe-sink allowlist: add `/.claude/` (Claude Code agent state) |
+| 1107 | MEDIUM | bash deny patterns: position-aware verb vs argument |
+| 1108 | HIGH   | `deny-raw-edit` MCP tool scope gap (e.g. `ctx_execute` bypasses) |
+
+## Automated review consolidation — formerly PRs #48–#51 (8 issues)
+
+Four `claude/modest-fermat-*` review PRs (#48 / #49 / #50 / #51) were
+consolidated into a single integration branch on 2026-05-02 and the
+originals closed. Two of #51's three filings were dropped as duplicates
+(see Drops below). Names normalized to `YYYY-MM-DD-HHMM-<slug>.md` so
+that #49 and #50 no longer collide on `033`/`034`.
+
+| ID prefix | Sev | Title | Origin |
+|-----------|--------|-----------------------------------------------|--------|
+| 2026-05-01-0912-strip-ansi-st-osc-content-leak | HIGH | ST-terminated OSC content leaks past `stripAnsi` (sub-case of 026) | #51 |
+| 2026-05-02-0428-patch-dry-run-glued-o-bypass | HIGH | `patch --dry-run -osrc/new.ts` glued POSIX short-option bypass | #48 |
+| 2026-05-02-0428-log-cmd-since-exact-match-untested | MEDIUM | `--since` exact-match boundary regression test | #48 |
+| 2026-05-02-1041-reply-deny-stdout-shape-untested | MEDIUM | hook protocol stdout JSON shape untested | #49 |
+| 2026-05-02-1041-parse-log-args-duplicate-flags-silently-accepted | MEDIUM | `parseLogArgs` accepts duplicate `--since`/`--tool`/`--risk` (last-wins) | #49 |
+| 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter | MEDIUM | `filterEntries` silently drops unparseable timestamps when `--since` is set | #49 |
+| 2026-05-02-1042-tee-fd-redirect-false-deny | MEDIUM | `matchesDangerousTee` false-positive on fd-redirect (`2>&1`, `2>/dev/null`) | #50 |
+| 2026-05-02-1042-rsync-unicode-whitespace-bypass | MEDIUM | rsync Unicode-whitespace bypass (not in `DENY_VERBS`) | #50 |
+
+### Drops (PR #51)
+
+- `apply-creates-orphaned-file` — duplicate of issue 1000, resolved by commit `46562ec` (PR #46).
+- `readstdin-null-resolves-misnamed` — duplicate of issue 032.
 
 ---
 
