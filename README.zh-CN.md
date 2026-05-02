@@ -136,13 +136,13 @@ meta-edit install-hooks --scope user
 1. **`issued`** — MCP 服务器接受声明并发放令牌时写入：
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
    ```
 
 2. **`consumed`** — `deny-raw-edit` 钩子授权对应的内置 Edit / Write 写入时写入（PreToolUse、写入执行前）：
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:02:43+09:00","phase":"consumed","consuming_tool":"Edit"}
    ```
 
 校验拒绝以 `phase: "rejected"` 单条记录写入，并附带非空的 `audit_error`。补丁本身**不会**被存储——如需原始内容请以 VCS 历史为准。只有 `issued` 而没有 `consumed` 兄弟记录，意味着声明被放弃或令牌已过期。

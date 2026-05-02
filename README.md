@@ -163,13 +163,13 @@ Each typed_edit call produces up to two JSONL lines in `.meta-edit/state/edits.j
 1. **`issued`** — written when the MCP server accepts the declaration and issues a token:
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
    ```
 
 2. **`consumed`** — written when the `deny-raw-edit` hook authorizes the corresponding native Edit / Write call (PreToolUse, before the write executes):
 
    ```json
-   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:02:43+09:00","phase":"consumed","consuming_tool":"Edit"}
    ```
 
 Validation rejections produce a single `phase: "rejected"` entry with a non-empty `audit_error`. The patch body is **not** stored — your VCS history is the source of truth. An `issued` record without a `consumed` sibling is evidence of an abandoned or expired declaration.

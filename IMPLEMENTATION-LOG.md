@@ -894,3 +894,39 @@ suite: **336 pass, 0 fail**. typecheck clean. build clean.
     alignment.
 - Tests added: none (docs-only change). Existing 581 tests still pass.
 - Spec deviations: none — this commit IS the spec.
+
+## v0.2.1: thin token schema (drop client-supplied sha256)
+
+- Completed: 2026-05-02
+- Motivation: dogfooding v0.2.0 surfaced that agent-supplied
+  `before_sha256` and `after_sha256` were heavy friction (a node/python
+  shell-out per typed_edit). Per Articles 3 (non-adversarial) and 4
+  (descriptions read as a comfortable tool, not a hashing chore), the
+  client-supplied digests added cost without proportional protective
+  value. Codex's earlier "after_sha256 not enforced" finding is
+  RESOLVED by removal.
+- What changed:
+  - Schema: `EditToolRequest` and `additional_files[]` no longer carry
+    `before_sha256` / `after_sha256`. The server reads disk and
+    computes `before_sha256` itself; there is no `after_sha256`
+    anywhere.
+  - Hook: `simulate()` and the post-condition replay were removed
+    from `src/hooks/raw-edit-policy.ts`. Staleness detection
+    (current disk sha256 vs binding `before_sha256`) is the single
+    load-bearing pre-condition. NotebookEdit denies at the policy
+    level (out of v0.2 scope) before token lookup.
+  - Result: added `next_action` field to `EditToolResult`. Per SPEC §3
+    / Article 4 the server tells the agent what to do next so the
+    `_meta_edit_token` contract doesn't have to be re-derived from
+    outside the tool surface.
+  - TTL: extended `GRANT_TTL_MS` from 30s → 5min — the single-use
+    binding is the integrity guarantee; the TTL is purely
+    garbage-collection. 5min absorbs realistic agent thinking time
+    without weakening the model.
+  - SPEC §3 / §5 / §6 updated; macro-plan Part III updated; READMEs'
+    edit-log JSON example updated; package.json + plugin.json bumped
+    to 0.2.1.
+- Tests: 563 (was 576 in v0.2.0; reduction reflects removed simulate()
+  test layer and dropped hash-format zod tests). Typecheck clean,
+  dist/ rebuilt.
+- Spec deviations: none.

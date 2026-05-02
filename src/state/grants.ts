@@ -1,8 +1,14 @@
 // Token-binding grants store (Case C / v0.2). Per docs/SPEC.md Article 5
 // and §3, the MCP server does not write file content; it issues a single-
 // use, time-bounded grant whose binding is a list of
-// (file, before_sha256, after_sha256) tuples. The deny-raw-edit hook
-// consumes those bindings as native Edit / Write / MultiEdit calls land.
+// (file, before_sha256) tuples. The deny-raw-edit hook consumes those
+// bindings as native Edit / Write / MultiEdit calls land.
+//
+// v0.2.1 thinning: `after_sha256` removed from GrantBinding. The post-
+// condition simulate() check has been dropped from the hook (Article 3:
+// non-adversarial threat model — friction without proportional value).
+// before_sha256 is now computed by the server from disk at declaration
+// time; the hook re-reads disk to detect staleness only.
 //
 // Storage: `<repoRoot>/.meta-edit/state/grants/<token_id>.json`. The
 // state directory is a protected path (see protected-paths.ts). Each
@@ -24,15 +30,23 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-export const GRANT_TTL_MS = 30_000;
+/**
+ * Grant time-to-live: 5 minutes — operational hygiene; single-use binding
+ * is the actual integrity guarantee. Tokens are consumed exactly once per
+ * binding, so the TTL is purely garbage-collection (keeps the grants/ dir
+ * from accumulating abandoned files), not a defensive boundary. Agent
+ * thinking time between typed_edit and the native Edit / Write call can
+ * comfortably exceed 30 seconds — especially during multi-step reasoning
+ * or when the user pauses — and a 5-minute window absorbs that without
+ * weakening the model. (v0.2.1: extended from 30s.)
+ */
+export const GRANT_TTL_MS = 300_000;
 
 export type GrantBinding = {
   /** Absolute path (post-realpath) of the file this binding governs. */
   file: string;
   /** Lowercase hex sha256(64) of the disk content at declaration time. */
   before_sha256: string;
-  /** Lowercase hex sha256(64) of the content the agent declares it will write. */
-  after_sha256: string;
 };
 
 export type Grant = {
@@ -118,12 +132,6 @@ function isGrant(value: unknown): value is Grant {
     if (
       typeof bb.before_sha256 !== "string" ||
       !HEX64_RE.test(bb.before_sha256)
-    ) {
-      return false;
-    }
-    if (
-      typeof bb.after_sha256 !== "string" ||
-      !HEX64_RE.test(bb.after_sha256)
     ) {
       return false;
     }
@@ -245,13 +253,19 @@ class GrantsStoreImpl implements GrantsStore {
           `grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`,
         );
       }
-      if (!HEX64_RE.test(b.after_sha256)) {
-        throw new Error(
-          `grants.issue: binding[].after_sha256 must be 64 lowercase hex chars (file=${b.file})`,
-        );
-      }
     }
     await this.ensureDir();
+
+    // v0.2.1: lazy cleanup — before issuing a fresh grant, reap any
+    // expired siblings so the grants/ directory does not accumulate
+    // indefinitely under the new 5-minute TTL. Best-effort: an exception
+    // here is logged via the throw chain but does not block the new
+    // issuance, since stale files do not impact correctness.
+    try {
+      await this.reapExpired();
+    } catch {
+      // swallow — reaper is hygiene, not correctness
+    }
 
     // Token id collision is astronomically unlikely (40-bit random per
     // day), but we still loop a small number of times if O_EXCL fires.

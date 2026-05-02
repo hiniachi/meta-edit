@@ -1,19 +1,23 @@
 // Case C / v0.2 typed_edit common schema. Per docs/SPEC.md §3:
 //
 //   A typed_edit MCP call is a *declaration of intent*. The server validates
-//   the request, issues a single-use token bound to one or more sha256
-//   tuples, and returns. It does not write. Native Edit / Write / MultiEdit
-//   performs the write under hook validation.
+//   the request, reads disk to compute before_sha256 itself, issues a single-
+//   use token bound to one or more (file, before_sha256) tuples, and returns.
+//   It does not write. Native Edit / Write / MultiEdit performs the write
+//   under hook validation.
 //
 // This module owns:
 //   - the zod schema for EditToolRequest,
 //   - the EditToolResult shape returned by the issuer,
-//   - validateRequest(...): path-safety, sha256 format, cardinality, and the
-//     before_sha256 ↔ disk content invariant.
+//   - validateRequest(...): path-safety, cardinality, server-side
+//     before_sha256 computation, and the create/modify-disk invariant.
 //
-// Apply-time mechanics (sibling-temp, parent-fsync, TOCTOU walks) belonged to
-// v0.1.x and are intentionally removed: native Edit / Write owns those per
-// Article 5 (binding principles) and Article 7 (out of scope).
+// v0.2.1 thinning: client-supplied before_sha256 / after_sha256 fields are
+// removed. The server reads disk and computes before_sha256 itself; there is
+// no after_sha256 anywhere. Per Articles 3 (non-adversarial threat model) and
+// 4 (descriptions read as a comfortable tool, not a hashing chore), the
+// client-supplied digests added friction without proportional protective
+// value. The hook re-reads disk to verify staleness only.
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -32,20 +36,9 @@ import { realpathOfDeepestExisting } from "../utils/realpath.js";
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
-// SHA-256 hex digest: exactly 64 lowercase hex characters. The grants store
-// validates the same shape; we re-validate at the request boundary so a
-// malformed digest never reaches the issuer.
-export const HEX64_RE = /^[0-9a-f]{64}$/;
-
-const Sha256HexSchema = z
-  .string()
-  .regex(HEX64_RE, "must be 64 lowercase hex characters (sha256)");
-
 const AdditionalFileSchema = z
   .object({
     file: z.string().min(1),
-    before_sha256: Sha256HexSchema,
-    after_sha256: Sha256HexSchema,
   })
   .strict();
 export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
@@ -69,8 +62,6 @@ export const EditToolRequestSchema = z
     rationale: z.string(),
     risk_level: RiskLevelSchema,
     test_files: z.array(z.string()),
-    before_sha256: Sha256HexSchema,
-    after_sha256: Sha256HexSchema,
     additional_files: z
       .array(AdditionalFileSchema)
       .max(MAX_ADDITIONAL_FILES)
@@ -101,25 +92,36 @@ export type EditToolResult = {
    * truth.
    */
   audit_error?: string;
+  /**
+   * Human-readable reminder, present IFF a token was issued. Tells the agent
+   * to pass the token as `_meta_edit_token` on its next native Edit / Write /
+   * MultiEdit call against the bound file(s). Per SPEC §3 / Article 4: the
+   * server takes care of bookkeeping; the agent only declares intent and is
+   * told what comes next. Omitted on rejection.
+   */
+  next_action?: string;
 };
 
 export type ValidationContext = {
   repoRoot: string;
 };
 
-// A single file binding distilled from the request after path safety,
-// sha256 format, and disk-content checks. The issuer hands these directly
-// to grants.issue().
+// A single file binding distilled from the request after path safety and
+// disk-content read. The issuer hands these directly to grants.issue().
+//
+// v0.2.1: only `before_sha256` is bound; the server reads disk to compute it.
+// `after_sha256` was removed — under the non-adversarial threat model, the
+// post-condition simulate() check was friction without proportional value.
 export type ValidatedBinding = {
   /**
    * Repository-relative canonical path (post-realpath, normalized). This is
    * also what the IssuedEntry's `binding[i].file` field carries — so the
-   * deny-raw-edit hook (Task C) can match a native Edit/Write canonical
-   * against the same form.
+   * deny-raw-edit hook can match a native Edit/Write canonical against the
+   * same form.
    */
   canonical: string;
+  /** Lowercase hex sha256(64) of the disk content at declaration time. */
   before_sha256: string;
-  after_sha256: string;
 };
 
 export type ValidationFailure = {
@@ -194,32 +196,30 @@ export function validateRequest(
     }
   }
 
-  // ---- 5. target_file path-safety + binding shape ----------------------
+  // ---- 5. target_file path-safety + disk read -------------------------
   const isCreate = toolName === "edit_create_file";
   const targetCheck = checkPathSafety(request.target_file, ctx.repoRoot);
   let primaryBinding: ValidatedBinding | null = null;
   if (!targetCheck.ok) {
     warnings.push(`target_file: ${targetCheck.error}`);
   } else {
-    const beforeCheck = verifyBeforeSha256(
+    const beforeRead = computeBeforeSha256(
       targetCheck.canonical,
-      request.before_sha256,
       ctx.repoRoot,
       isCreate,
       "target_file",
     );
-    if (!beforeCheck.ok) {
-      warnings.push(beforeCheck.error);
+    if (!beforeRead.ok) {
+      warnings.push(beforeRead.error);
     } else {
       primaryBinding = {
         canonical: targetCheck.canonical,
-        before_sha256: request.before_sha256,
-        after_sha256: request.after_sha256,
+        before_sha256: beforeRead.before_sha256,
       };
     }
   }
 
-  // ---- 6. additional_files path-safety + binding shape ----------------
+  // ---- 6. additional_files path-safety + disk read --------------------
   const additionalBindings: ValidatedBinding[] = [];
   if (
     request.additional_files !== undefined &&
@@ -243,25 +243,22 @@ export function validateRequest(
         continue;
       }
       seenCanonicals.add(safe.canonical);
-      // For edit_create_file, ALL bindings are create entries: before_sha256
-      // MUST be sha256("") and the file MUST NOT exist. For edit_docs_only,
-      // each entry is a modify (the file MUST exist and before_sha256 MUST
-      // match disk).
-      const beforeCheck = verifyBeforeSha256(
+      // For edit_create_file, ALL bindings are create entries: the file MUST
+      // NOT exist; before_sha256 := sha256(""). For edit_docs_only, each
+      // entry is a modify (the file MUST exist).
+      const beforeRead = computeBeforeSha256(
         safe.canonical,
-        af.before_sha256,
         ctx.repoRoot,
         isCreate,
         `additional_files entry "${af.file}"`,
       );
-      if (!beforeCheck.ok) {
-        warnings.push(beforeCheck.error);
+      if (!beforeRead.ok) {
+        warnings.push(beforeRead.error);
         continue;
       }
       additionalBindings.push({
         canonical: safe.canonical,
-        before_sha256: af.before_sha256,
-        after_sha256: af.after_sha256,
+        before_sha256: beforeRead.before_sha256,
       });
     }
   }
@@ -364,30 +361,36 @@ function containsParentTraversal(p: string): boolean {
 }
 
 // ---------------------------------------------------------------------
-// before_sha256 ↔ disk reconciliation
+// before_sha256 computation (server-side disk read)
 // ---------------------------------------------------------------------
 
 /**
- * Verify the declared before_sha256 against disk:
- *   - For edit_create_file: the file MUST NOT exist AND before_sha256 MUST
- *     equal sha256("").
- *   - For modify-only tools: the file MUST exist AND before_sha256 MUST
- *     equal sha256(disk_content_utf8).
+ * Read disk and compute before_sha256 for a binding entry.
+ *   - For edit_create_file: the file MUST NOT exist; before_sha256 :=
+ *     sha256("").
+ *   - For modify-only tools: the file MUST exist; before_sha256 :=
+ *     sha256(disk_content_utf8).
  *
  * Per Article 3 (non-adversarial threat model): we hash UTF-8 content. A
- * binary file or non-UTF-8 file is not in the threat model — the agent
- * either picks it up via the same encoding or the hashes diverge.
+ * binary or non-UTF-8 file is not in the threat model — the hook re-reads
+ * with the same encoding so the digests align.
+ *
+ * v0.2.1: this replaces the v0.2.0 verifyBeforeSha256() which compared a
+ * client-supplied digest against disk. Removing the client-supplied digest
+ * removes the agent friction (no more node/python sha256 invocation per
+ * call) without weakening protection: the hook re-reads disk to detect
+ * staleness regardless of who computed the issue-time digest.
  */
-function verifyBeforeSha256(
+function computeBeforeSha256(
   canonical: string,
-  declaredBefore: string,
   repoRoot: string,
   isCreate: boolean,
   fieldLabel: string,
-): { ok: true } | { ok: false; error: string } {
+):
+  | { ok: true; before_sha256: string }
+  | { ok: false; error: string } {
   const absolute = path.join(repoRoot, canonical);
 
-  // Try to read disk content. ENOENT distinguishes create vs modify.
   let onDisk: string | null = null;
   try {
     onDisk = fs.readFileSync(absolute, "utf8");
@@ -402,19 +405,12 @@ function verifyBeforeSha256(
             `${fieldLabel} "${canonical}" does not exist on disk; modify-only tools require the file to already exist`,
         };
       }
-      if (declaredBefore !== SHA256_EMPTY) {
-        return {
-          ok: false,
-          error:
-            `${fieldLabel} "${canonical}": before_sha256 must equal sha256("") for edit_create_file because the file does not yet exist on disk`,
-        };
-      }
-      return { ok: true };
+      return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
       ok: false,
       error:
-        `${fieldLabel} "${canonical}": failed to read disk content for sha256 verification (${code ?? "ERR"})`,
+        `${fieldLabel} "${canonical}": failed to read disk content for sha256 computation (${code ?? "ERR"})`,
     };
   }
 
@@ -426,20 +422,7 @@ function verifyBeforeSha256(
         `${fieldLabel} "${canonical}" already exists on disk; edit_create_file refuses to overwrite an existing file (use a modify-only edit_* tool instead)`,
     };
   }
-  const actual = sha256Hex(onDisk);
-  if (actual !== declaredBefore) {
-    return {
-      ok: false,
-      error:
-        `${fieldLabel} "${canonical}": before_sha256 mismatch — declared ${shortHash(declaredBefore)} ` +
-        `but disk content hashes to ${shortHash(actual)}. Re-read the file and recompute the digest before retrying.`,
-    };
-  }
-  return { ok: true };
-}
-
-function shortHash(h: string): string {
-  return h.length >= 12 ? `${h.slice(0, 12)}…` : h;
+  return { ok: true, before_sha256: sha256Hex(onDisk) };
 }
 
 // ---------------------------------------------------------------------

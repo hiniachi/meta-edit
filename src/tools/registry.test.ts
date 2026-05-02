@@ -38,8 +38,11 @@ describe("nineteen tools", () => {
     expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
       "the binding fails if any path already exists on disk",
     );
+    // v0.2.1: the server binds before_sha256 to sha256("") itself; the
+    // description tells the agent the file must not exist on disk and that
+    // the binding is server-computed.
     expect(TOOL_DESCRIPTIONS.edit_create_file).toContain(
-      'before_sha256` MUST be `sha256("")',
+      'the server binds `before_sha256` to `sha256("")`',
     );
   });
 

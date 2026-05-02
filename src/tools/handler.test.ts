@@ -7,12 +7,15 @@
 //     -> appendIssued / appendRejected   (state/edit-log.ts)
 //     -> EditToolResult { token, expires_at, edit_id, warnings, audit_error? }
 //
-// The deny-raw-edit hook (Task C) consumes the token; that flow is exercised
+// The deny-raw-edit hook consumes the token; that flow is exercised
 // elsewhere. Here we only check that a successful declaration leaves the
 // system in the shape the hook expects.
+//
+// v0.2.1: client-supplied sha256 fields removed. The server reads disk and
+// computes before_sha256 itself; tests below verify that the binding's
+// before_sha256 matches the on-disk content at declaration time.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,14 +50,6 @@ function writeFile(rel: string, content: string): void {
   fs.writeFileSync(abs, content, "utf8");
 }
 
-function diskSha(rel: string): string {
-  const abs = path.join(tmpRoot, rel);
-  return crypto
-    .createHash("sha256")
-    .update(fs.readFileSync(abs))
-    .digest("hex");
-}
-
 function makeHandler(): {
   handler: ReturnType<typeof makeIssuingHandler>;
   log: EditLog;
@@ -73,8 +68,6 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
     test_files: ["tests/foo.test.ts"],
-    before_sha256: sha256Hex("hello\n"),
-    after_sha256: sha256Hex("hello world\n"),
     ...overrides,
   };
 }
@@ -86,7 +79,7 @@ describe("makeIssuingHandler — successful declaration", () => {
 
     const result = await handler(
       "edit_boundary_condition",
-      modifyRequest({ before_sha256: diskSha("src/foo.ts") }),
+      modifyRequest(),
     );
 
     expect(result.warnings).toEqual([]);
@@ -96,11 +89,22 @@ describe("makeIssuingHandler — successful declaration", () => {
     expect(typeof result.expires_at).toBe("string");
     expect(result.expires_at.length).toBeGreaterThan(0);
 
+    // v0.2.1: next_action is populated whenever a token is issued so the
+    // agent doesn't have to know the _meta_edit_token contract from
+    // outside the tool surface (SPEC §3 / Article 4 — server-handled
+    // bookkeeping).
+    expect(typeof result.next_action).toBe("string");
+    expect(result.next_action!.length).toBeGreaterThan(0);
+    expect(result.next_action).toContain("_meta_edit_token");
+    expect(result.next_action).toContain(result.expires_at);
+
     // Grant is queryable.
     const grant = await grants.lookup(result.token);
     expect(grant).not.toBeNull();
     expect(grant?.binding.length).toBe(1);
     expect(grant?.binding[0]?.file).toBe("src/foo.ts");
+    // Server computed before_sha256 from disk.
+    expect(grant?.binding[0]?.before_sha256).toBe(sha256Hex("hello\n"));
 
     // Edit log carries the matching `issued` entry.
     const entries = log.readAll();
@@ -112,7 +116,24 @@ describe("makeIssuingHandler — successful declaration", () => {
       expect(entry.kind).toBe("edit_boundary_condition");
       expect(entry.token).toBe(result.token);
       expect(entry.binding[0]?.file).toBe("src/foo.ts");
+      expect(entry.binding[0]?.before_sha256).toBe(sha256Hex("hello\n"));
     }
+  });
+
+  it("writes binding[].before_sha256 reflecting the disk state at declaration time", async () => {
+    writeFile("src/foo.ts", "INITIAL CONTENT\n");
+    const { handler, grants } = makeHandler();
+    const result = await handler("edit_boundary_condition", modifyRequest());
+    const grant = await grants.lookup(result.token);
+    expect(grant?.binding[0]?.before_sha256).toBe(sha256Hex("INITIAL CONTENT\n"));
+
+    // Mutate disk after issuance — the grant's recorded before_sha256 must
+    // remain the issue-time value (the hook re-reads disk to detect drift).
+    writeFile("src/foo.ts", "DRIFTED\n");
+    const grant2 = await grants.lookup(result.token);
+    expect(grant2?.binding[0]?.before_sha256).toBe(
+      sha256Hex("INITIAL CONTENT\n"),
+    );
   });
 });
 
@@ -122,12 +143,14 @@ describe("makeIssuingHandler — validation rejection", () => {
     request: EditToolRequest,
     matcher: (warnings: string[]) => boolean,
   ): Promise<void> {
-    const { handler, log, grants } = makeHandler();
+    const { handler, log } = makeHandler();
     const result = await handler(tool, request);
     expect(result.token).toBe("");
     expect(result.expires_at).toBe("");
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(matcher(result.warnings)).toBe(true);
+    // v0.2.1: rejection MUST omit next_action — there is no token to bind.
+    expect(result.next_action).toBeUndefined();
 
     // No grant persisted.
     const grantsDir = path.join(tmpRoot, ".meta-edit", "state", "grants");
@@ -151,10 +174,7 @@ describe("makeIssuingHandler — validation rejection", () => {
     writeFile("src/foo.ts", "hello\n");
     await expectRejection(
       "edit_boundary_condition",
-      modifyRequest({
-        rationale: "   ",
-        before_sha256: diskSha("src/foo.ts"),
-      }),
+      modifyRequest({ rationale: "   " }),
       (w) => w.some((s) => s.includes("rationale")),
     );
   });
@@ -163,10 +183,7 @@ describe("makeIssuingHandler — validation rejection", () => {
     writeFile("src/foo.ts", "hello\n");
     await expectRejection(
       "edit_boundary_condition",
-      modifyRequest({
-        test_files: [],
-        before_sha256: diskSha("src/foo.ts"),
-      }),
+      modifyRequest({ test_files: [] }),
       (w) => w.some((s) => s.includes("test_files")),
     );
   });
@@ -175,22 +192,16 @@ describe("makeIssuingHandler — validation rejection", () => {
     writeFile("src/foo.ts", "hello\n");
     await expectRejection(
       "edit_test_only_change",
-      modifyRequest({
-        test_files: ["tests/foo.test.ts"],
-        before_sha256: diskSha("src/foo.ts"),
-      }),
+      modifyRequest({ test_files: ["tests/foo.test.ts"] }),
       (w) => w.some((s) => s.includes("test_files")),
     );
   });
 
-  it("rejects before_sha256 mismatch with disk", async () => {
-    writeFile("src/foo.ts", "hello\n");
+  it("rejects modify-only call when target file does not exist on disk", async () => {
     await expectRejection(
       "edit_boundary_condition",
-      modifyRequest({
-        before_sha256: sha256Hex("DIFFERENT CONTENT\n"),
-      }),
-      (w) => w.some((s) => s.includes("before_sha256 mismatch")),
+      modifyRequest({ target_file: "src/missing.ts" }),
+      (w) => w.some((s) => s.includes("does not exist")),
     );
   });
 
@@ -198,15 +209,13 @@ describe("makeIssuingHandler — validation rejection", () => {
     writeFile("src/foo.ts", "hello\n");
     await expectRejection(
       "edit_create_file",
-      modifyRequest({
-        before_sha256: SHA256_EMPTY,
-      }),
+      modifyRequest(),
       (w) => w.some((s) => s.includes("already exists")),
     );
   });
 
-  it("accepts edit_create_file when target does not exist and before_sha256 = sha256(\"\")", async () => {
-    const { handler, log } = makeHandler();
+  it("accepts edit_create_file when target does not exist (server binds sha256(\"\"))", async () => {
+    const { handler, log, grants } = makeHandler();
     const result = await handler(
       "edit_create_file",
       {
@@ -214,41 +223,23 @@ describe("makeIssuingHandler — validation rejection", () => {
         rationale: "scaffold a new module",
         risk_level: "low",
         test_files: ["tests/new.test.ts"],
-        before_sha256: SHA256_EMPTY,
-        after_sha256: sha256Hex("export const x = 1;\n"),
       },
     );
     expect(result.warnings).toEqual([]);
     expect(result.token.length).toBeGreaterThan(0);
+    const grant = await grants.lookup(result.token);
+    expect(grant?.binding[0]?.before_sha256).toBe(SHA256_EMPTY);
 
     const entries = log.readAll();
     expect(entries.length).toBe(1);
     expect(entries[0]?.phase).toBe("issued");
   });
 
-  it("rejects edit_create_file with non-empty before_sha256 when file is absent", async () => {
-    await expectRejection(
-      "edit_create_file",
-      {
-        target_file: "src/new.ts",
-        rationale: "scaffold a new module",
-        risk_level: "low",
-        test_files: ["tests/new.test.ts"],
-        before_sha256: sha256Hex("anything"),
-        after_sha256: sha256Hex("export const x = 1;\n"),
-      },
-      (w) => w.some((s) => s.includes("must equal sha256(\"\")")),
-    );
-  });
-
   it("rejects target_file outside the repo", async () => {
     writeFile("src/foo.ts", "hello\n");
     await expectRejection(
       "edit_boundary_condition",
-      modifyRequest({
-        target_file: "../escape.ts",
-        before_sha256: diskSha("src/foo.ts"),
-      }),
+      modifyRequest({ target_file: "../escape.ts" }),
       (w) => w.some((s) => /traversal|escapes|invalid/i.test(s)),
     );
   });
@@ -258,10 +249,7 @@ describe("makeIssuingHandler — validation rejection", () => {
     writeFile(".meta-edit/state/garbage.txt", "x");
     await expectRejection(
       "edit_boundary_condition",
-      modifyRequest({
-        target_file: ".meta-edit/state/garbage.txt",
-        before_sha256: diskSha(".meta-edit/state/garbage.txt"),
-      }),
+      modifyRequest({ target_file: ".meta-edit/state/garbage.txt" }),
       (w) => w.some((s) => /protected/.test(s)),
     );
   });
@@ -275,14 +263,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     const result = await handler(
       "edit_boundary_condition",
       modifyRequest({
-        before_sha256: diskSha("src/foo.ts"),
-        additional_files: [
-          {
-            file: "src/bar.ts",
-            before_sha256: diskSha("src/bar.ts"),
-            after_sha256: sha256Hex("new content\n"),
-          },
-        ],
+        additional_files: [{ file: "src/bar.ts" }],
       }),
     );
     expect(result.token).toBe("");
@@ -303,20 +284,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
         rationale: "rename product across the docs",
         risk_level: "low",
         test_files: [],
-        before_sha256: diskSha("docs/a.md"),
-        after_sha256: sha256Hex("alpha (renamed)\n"),
-        additional_files: [
-          {
-            file: "docs/b.md",
-            before_sha256: diskSha("docs/b.md"),
-            after_sha256: sha256Hex("beta (renamed)\n"),
-          },
-          {
-            file: "docs/c.md",
-            before_sha256: diskSha("docs/c.md"),
-            after_sha256: sha256Hex("gamma (renamed)\n"),
-          },
-        ],
+        additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
       },
     );
     expect(result.warnings).toEqual([]);
@@ -325,40 +293,29 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(grant?.binding.map((b) => b.file).sort()).toEqual(
       ["docs/a.md", "docs/b.md", "docs/c.md"],
     );
+    // Each binding's before_sha256 reflects per-file disk content.
+    const byFile = new Map(grant!.binding.map((b) => [b.file, b.before_sha256]));
+    expect(byFile.get("docs/a.md")).toBe(sha256Hex("alpha\n"));
+    expect(byFile.get("docs/b.md")).toBe(sha256Hex("beta\n"));
+    expect(byFile.get("docs/c.md")).toBe(sha256Hex("gamma\n"));
   });
 
-  it("rejects additional_files cardinality > 32 at the zod boundary", async () => {
+  it("rejects edit_docs_only when an additional_files entry does not exist", async () => {
     writeFile("docs/a.md", "alpha\n");
     const { handler } = makeHandler();
     const additional = [];
-    for (let i = 0; i < 33; i++) {
-      additional.push({
-        file: `docs/extra${i}.md`,
-        before_sha256: SHA256_EMPTY,
-        after_sha256: sha256Hex(`content ${i}\n`),
-      });
+    for (let i = 0; i < 32; i++) {
+      additional.push({ file: `docs/extra${i}.md` });
     }
-    // Zod schema enforces .max(32) before the issuer is even called. We
-    // exercise the zod boundary indirectly by feeding the issuer through the
-    // common.ts validator: a present-but-overlength additional_files array is
-    // refused upstream by the registry's per-tool input schema (.max). At
-    // the issuer layer we still handle the 32-cap path safely by treating
-    // the request as well-formed (the registry's MCP wrapper would have
-    // rejected this earlier). We assert the issuer simply does not crash and
-    // returns warnings or a successful result — never an exception.
-    const safeRequest: EditToolRequest = {
+    const result = await handler("edit_docs_only", {
       target_file: "docs/a.md",
       rationale: "...",
       risk_level: "low",
       test_files: [],
-      before_sha256: diskSha("docs/a.md"),
-      after_sha256: sha256Hex("alpha (renamed)\n"),
-      additional_files: additional.slice(0, 32),
-    };
-    const result = await handler("edit_docs_only", safeRequest);
-    // 32 entries plus target = 33 total bindings. 32 of those entries do
-    // not exist on disk; for edit_docs_only that's a modify-only target so
-    // each missing file produces a warning.
+      additional_files: additional,
+    });
+    // 32 entries do not exist on disk; for edit_docs_only that's a modify-
+    // only target so each missing file produces a warning.
     expect(result.token).toBe("");
     expect(result.warnings.length).toBeGreaterThan(0);
   });

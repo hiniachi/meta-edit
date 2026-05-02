@@ -649,10 +649,10 @@ Required tests (you MUST cover):
 
 test_files must be non-empty (you must declare which test covers the
 new code). The \`target_file\` MUST NOT exist on disk at declaration
-time; \`before_sha256\` MUST be \`sha256("")\`. \`after_sha256\` is the
-sha256 of the intended file content. For multi-file scaffolding, list
-additional creates in \`additional_files\` (this tool is one of the two
-workflow-required tools per Article 6 / §3).
+time; the server binds \`before_sha256\` to \`sha256("")\` automatically.
+For multi-file scaffolding, list additional creates in
+\`additional_files\` (this tool is one of the two workflow-required
+tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job

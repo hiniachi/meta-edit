@@ -209,8 +209,12 @@ replace it without amending the constitution.
    in Article 3 means the gap shows up as honest workflow misses, not
    as adversarial bypasses.
 
-The current implementation choice is a single-use, TTL-bound,
-HMAC-signed token (Part III). It satisfies all three principles. If a
+The current implementation choice is a single-use, TTL-bound token
+backed by a per-token JSON file under `.meta-edit/state/grants/`
+(Part III). It satisfies all three principles. The token is **not**
+HMAC-signed: under Article 3's non-adversarial threat model, signing
+adds no protective value (an honest agent does not forge tokens), and
+under Article 7 it is forbidden as a deep adversarial defense. If a
 future proposal — capability-based addressing, signed manifests,
 content-addressed declarations, etc. — satisfies the same three
 principles with better ergonomics or smaller surface, it can replace
@@ -340,7 +344,7 @@ That is the entire system.
 
 ## 3. The nineteen tools: common schema
 
-A typed_edit MCP call is a **declaration of intent**. The server validates the request, issues a single-use token bound to one or more sha256 tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
+A typed_edit MCP call is a **declaration of intent**. The server validates the request, reads disk to compute `before_sha256` itself, issues a single-use token bound to one or more `(file, before_sha256)` tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
 
 ```typescript
 type EditToolRequest = {
@@ -349,28 +353,28 @@ type EditToolRequest = {
   risk_level: "low" | "medium" | "high" | "critical";
   test_files: string[];           // forward declaration; not bound by token
 
-  before_sha256: string;          // hex(64). For edit_create_file's
-                                  // target_file, sha256("").
-  after_sha256: string;           // hex(64).
-
   // ONLY accepted by the 2 workflow tools (edit_docs_only,
   // edit_create_file). The 17 SQLite-derived tools MUST omit this
   // field; validation rejects its presence elsewhere.
   additional_files?: Array<{
     file: string;
-    before_sha256: string;        // sha256("") for create entries
-    after_sha256: string;
   }>;
 };
 
 type EditToolResult = {
   token: string;                  // e.g. "met_20260502_a3f9b2..."
-  expires_at: string;             // ISO-8601, declaration_time + 30s
+  expires_at: string;             // ISO-8601, declaration_time + 5m
   edit_id: string;                // e.g. "edit_20260502_0001"
   warnings: string[];
   audit_error?: string;           // present whenever an audit-log write
                                   // fails. The caller MUST check the
                                   // edit_log directly for ground truth.
+  next_action?: string;           // human-readable reminder, present iff
+                                  // a token was issued. Tells the agent
+                                  // to pass the token as `_meta_edit_token`
+                                  // on its next native Edit / Write /
+                                  // MultiEdit call against the bound
+                                  // file(s). Omitted on rejection.
 };
 ```
 
@@ -381,8 +385,8 @@ The MCP server enforces:
 - `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
 - `rationale` is non-empty after trim.
 - `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only`.
-- `before_sha256` and `after_sha256` are exactly 64 hex chars.
-- `before_sha256` matches the current disk content of `target_file` at declaration time (sha256(disk_content), or sha256("") when `edit_create_file` and the file does not yet exist).
+- For modify-only tools, `target_file` MUST exist on disk; the server reads it and binds `before_sha256 := sha256(disk_content_utf8)`.
+- For `edit_create_file`, `target_file` MUST NOT exist on disk; the server binds `before_sha256 := sha256("")`. Each entry in `additional_files` is treated as a create the same way.
 - `additional_files` is accepted only for the 2 workflow tools, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
@@ -391,7 +395,11 @@ Validation failures result in a rejected request with a non-empty `warnings` arr
 ### Token issuance
 
 A successful declaration produces a token bound to the set of
-`(file, before_sha256, after_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The token expires 30 seconds after issuance. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
+`(file, before_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The server computes each `before_sha256` from disk at declaration time; agents do not supply hashes. The token expires 5 minutes after issuance — operational hygiene only; the single-use binding is the actual integrity guarantee, so the TTL is purely garbage-collection (it keeps the grants/ dir from accumulating abandoned files). The 5-minute window absorbs realistic agent thinking time between the typed_edit call and the native Edit / Write call without weakening the model. Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
+
+The result also carries a `next_action` field whenever a token is issued — a one-line reminder that the agent's next native `Edit` / `Write` / `MultiEdit` call must carry the token as the `_meta_edit_token` field. Per Article 4, the agent should only have to declare intent; the server takes care of the bookkeeping (and of telling the agent what comes next). On rejection, `next_action` is omitted.
+
+> **v0.2.1 thinning.** Earlier (v0.2.0) revisions of this spec required the agent to supply `before_sha256` and `after_sha256` per binding. Both fields were dropped: under Article 3 (non-adversarial threat model) and Article 4 (descriptions read as a comfortable tool, not a hashing chore), the client-supplied digests added friction without proportional protective value. The server reads disk itself; the hook re-reads disk to detect staleness only.
 
 The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 
@@ -1163,10 +1171,10 @@ Required tests (you MUST cover):
 
 test_files must be non-empty (you must declare which test covers the
 new code). The `target_file` MUST NOT exist on disk at declaration
-time; `before_sha256` MUST be `sha256("")`. `after_sha256` is the
-sha256 of the intended file content. For multi-file scaffolding, list
-additional creates in `additional_files` (this tool is one of the two
-workflow-required tools per Article 6 / §3).
+time; the server binds `before_sha256` to `sha256("")` automatically.
+For multi-file scaffolding, list additional creates in
+`additional_files` (this tool is one of the two workflow-required
+tools per Article 6 / §3).
 
 This tool MUST NOT be used when:
 - The target path already exists; modifying an existing file is the job
@@ -1204,6 +1212,9 @@ Fires on Claude Code's built-in `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`
 
 ```
 on_pre_tool_use(toolName, toolInput):
+  if toolName == "NotebookEdit":
+    return deny("NotebookEdit is out of v0.2 scope")
+
   token_id = toolInput["_meta_edit_token"]
   if not token_id:
     return deny("untyped raw edit")
@@ -1217,30 +1228,18 @@ on_pre_tool_use(toolName, toolInput):
   if bound is None:
     return deny("file_path not bound by this token")
 
-  # Pre-condition: declared starting state matches disk
+  # Pre-condition: declared starting state matches disk.
   disk_content = read(file_path) if exists(file_path) else b""
   if sha256(disk_content) != bound.before_sha256:
     return deny("disk has drifted from declaration (staleness)")
 
-  # Post-condition: simulated write produces declared content.
-  # Catches honest mistakes where toolInput would produce content
-  # differing from the declared after_sha256.
-  proposed = simulate(toolName, toolInput, disk_content)
-  if sha256(proposed) != bound.after_sha256:
-    return deny("simulated write does not match declared after_sha256")
-
   grants.consume(token_id, file_path)
   return allow()
-
-simulate(toolName, toolInput, current):
-  case "Edit":         return current.replace(toolInput.old_string,
-                                              toolInput.new_string, count=1)
-  case "Write":        return toolInput.content
-  case "MultiEdit":    apply each edit in sequence; return final
-  case "NotebookEdit": return UNSUPPORTED   # see Article 7
 ```
 
 The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
+
+> **v0.2.1 thinning.** A v0.2.0 draft of this hook also performed a `simulate(toolName, toolInput, disk_content)` replay and compared `sha256(proposed) == bound.after_sha256`. Per Article 3 (non-adversarial) and Article 4 (descriptions as comfortable tools), the post-condition check was friction without proportional value: it required client-supplied `after_sha256`, a per-tool replay engine in the hook, and a `NotebookEdit` UNSUPPORTED branch. All three were removed. NotebookEdit is now denied at the policy level before token lookup; the staleness check on `before_sha256` is the single load-bearing pre-condition.
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
@@ -1280,7 +1279,7 @@ Each declaration produces two records:
  "rationale":"...",
  "risk_level":"medium",
  "test_files":["tests/foo.test.ts"],
- "binding":[{"file":"src/foo.ts","before_sha256":"...","after_sha256":"..."}],
+ "binding":[{"file":"src/foo.ts","before_sha256":"..."}],
  "token":"met_20260502_a3f9b2..."}
 ```
 

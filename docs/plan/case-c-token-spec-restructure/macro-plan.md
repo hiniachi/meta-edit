@@ -224,12 +224,16 @@ replace it without amending the constitution.
    in Article 3 means the gap shows up as honest workflow misses, not
    as adversarial bypasses.
 
-The current implementation choice is a single-use, TTL-bound,
-HMAC-signed token (Part III). It satisfies all three principles. If a
-future proposal — capability-based addressing, signed manifests,
-content-addressed declarations, etc. — satisfies the same three
-principles with better ergonomics or smaller surface, it can replace
-the token mechanism without re-opening the constitution.
+The current implementation choice is a single-use, TTL-bound token
+backed by a per-token JSON file under `.meta-edit/state/grants/`
+(Part III). It satisfies all three principles. The token is **not**
+HMAC-signed: under Article 3's non-adversarial threat model, signing
+adds no protective value, and under Article 7 it is forbidden as a
+deep adversarial defense. If a future proposal — capability-based
+addressing, signed manifests, content-addressed declarations, etc. —
+satisfies the same three principles with better ergonomics or
+smaller surface, it can replace the token mechanism without
+re-opening the constitution.
 
 ### Article 6 — Granularity rules
 
@@ -370,37 +374,42 @@ type EditToolRequest = {
                                     // enforced per Article 6 + tool
                                     // description.
 
-  before_sha256: string;            // hex(64), sha256 of disk content
-                                    // at declaration time. For
-                                    // edit_create_file's target_file,
-                                    // sha256("").
-  after_sha256: string;             // hex(64), sha256 of intended
-                                    // post-edit content.
+  // v0.2.1: client-supplied sha256 fields (before_sha256 / after_sha256)
+  // were dropped here. The server reads disk and computes before_sha256
+  // itself; there is no after_sha256 anywhere — see the Token mechanics
+  // section below and the v0.2.1 note at the end of Part III.
 
   // ONLY accepted by the 2 workflow tools (edit_docs_only,
   // edit_create_file). The 17 SQLite-derived tools MUST omit this
   // field (validation rejects its presence). See Article 6.
   additional_files?: Array<{
     file: string;
-    before_sha256: string;          // sha256("") for create entries
-    after_sha256: string;
   }>;
 };
 
 type EditToolResult = {
   token: string;                    // e.g. "met_20260502_a3f9b2…"
-  expires_at: string;               // ISO-8601, declaration_time + 30s
+  expires_at: string;               // ISO-8601, declaration_time + 5m
   edit_id: string;                  // e.g. "edit_20260502_0001"
   warnings: string[];
   audit_error?: string;
+  next_action?: string;             // present iff a token was issued
 };
 ```
 
 Token binding set: SQLite-derived tools bind exactly one tuple
-`(target_file, before_sha256, after_sha256)`. Workflow tools bind
-that plus every entry in `additional_files`. The TTL applies to the
-whole binding set; each tuple is consumed independently by a matching
-native Edit / Write call carrying the token.
+`(target_file, before_sha256)`. Workflow tools bind that plus every
+entry in `additional_files`. The TTL applies to the whole binding
+set; each tuple is consumed independently by a matching native Edit /
+Write call carrying the token.
+
+> **v0.2.1 thinning.** The schema above was simplified in v0.2.1: the
+> client-supplied `before_sha256` and `after_sha256` fields were
+> removed. The server reads disk to compute `before_sha256`; there is
+> no `after_sha256` anywhere. The hook re-reads disk to detect
+> staleness (the only load-bearing pre-condition). The post-condition
+> `simulate()` replay was removed for the same reason — friction
+> without proportional value under Article 3.
 
 ### Token validation (PreToolUse on Edit/Write/MultiEdit/NotebookEdit)
 
@@ -408,6 +417,9 @@ Pseudocode:
 
 ```
 on_pre_tool_use(toolName, toolInput):
+  if toolName == "NotebookEdit":
+    return deny("NotebookEdit is out of v0.2 scope")
+
   token_id = toolInput["_meta_edit_token"]
   if not token_id:
     return deny("untyped raw edit")
@@ -421,32 +433,18 @@ on_pre_tool_use(toolName, toolInput):
   if bound is None:
     return deny("file_path not bound by this token")
 
-  # Pre-condition: declared starting state matches disk
+  # Pre-condition: declared starting state matches disk.
   disk_content = read(file_path) if exists(file_path) else b""
   if sha256(disk_content) != bound.before_sha256:
     return deny("disk has drifted from declaration (staleness)")
 
-  # Post-condition: simulated write produces declared content.
-  # Catches honest mistakes where the agent's tool_input would
-  # produce content differing from the declared after_sha256.
-  proposed = simulate(toolName, toolInput, disk_content)
-  if sha256(proposed) != bound.after_sha256:
-    return deny("simulated write does not match declared after_sha256")
-
   grants.consume(token_id, file_path)
   return allow()
-
-simulate(toolName, toolInput, current):
-  case "Edit":       return current.replace(toolInput.old_string,
-                                            toolInput.new_string, count=1)
-  case "Write":      return toolInput.content
-  case "MultiEdit":  result = current
-                     for e in toolInput.edits:
-                       result = result.replace(e.old_string,
-                                               e.new_string, count=1)
-                     return result
-  case "NotebookEdit": return UNSUPPORTED   # see open decisions
 ```
+
+(v0.2.1: the post-condition `simulate()` replay was removed — see the
+v0.2.1 note above. NotebookEdit denies at the policy level before
+token lookup.)
 
 The pre-condition check is **staleness detection**, not a TOCTOU
 defense: it catches declarations made against a prior disk state, but
@@ -460,32 +458,48 @@ do NOT consume tokens. The hook fires only on
 interleave reads between declaration and consumption, bounded only by
 the token's TTL.
 
-After the Edit completes, a PostToolUse hook (or the MCP server
-polling on grant consumption) appends to `.meta-edit/state/edits.jsonl`
-with `applied: true` and the consuming tool's name.
+When the deny-raw-edit hook authorizes a native Edit/Write call (the
+PreToolUse `allow` branch, just before the actual write), it appends
+a `consumed` record to `.meta-edit/state/edits.jsonl`. v0.2 chose
+PreToolUse over PostToolUse so the audit log records hook
+authorization (the meta-edit-controlled event), not write success
+(git's job).
 
 ### Edit log shape (replaces current §6)
 
-Each declaration produces two log records:
+Each declaration produces up to two log records:
 
 1. **Issued.** Written when the typed_edit handler returns success.
    ```json
    {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00",
+    "phase":"issued",
     "kind":"edit_boundary_condition","target_file":"src/foo.ts",
-    "rationale":"…","test_files":["tests/foo.test.ts"],
-    "before_sha256":"…","after_sha256":"…",
-    "token":"met_…","applied":false}
+    "rationale":"…","risk_level":"medium",
+    "test_files":["tests/foo.test.ts"],
+    "binding":[{"file":"src/foo.ts","before_sha256":"…"}],
+    "token":"met_…"}
    ```
 
-2. **Consumed.** Written when the token is consumed by an Edit hook.
+2. **Consumed.** Written when the deny-raw-edit hook authorizes a
+   native Edit/Write call carrying the token (PreToolUse, before the
+   write executes).
    ```json
    {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00",
-    "consuming_tool":"Edit","applied":true}
+    "phase":"consumed",
+    "consuming_tool":"Edit"}
    ```
 
 Records that never reach a "consumed" entry (token expired, declaration
 without follow-through) remain in the log as evidence of a half-finished
-declaration. Audit consumers reconcile by `edit_id`.
+declaration. Audit consumers reconcile by `edit_id`. Validation failures
+record one `phase: "rejected"` entry with a non-empty `audit_error`.
+
+> **v0.2.1 thinning.** Earlier drafts had `before_sha256` /
+> `after_sha256` as flat top-level fields and an `applied: bool` flag
+> on each record. The current shape — discriminated `phase` and a
+> `binding[]` carrying only `(file, before_sha256)` — is what
+> `src/state/edit-log.ts` writes today. `after_sha256` was dropped
+> from the binding in v0.2.1; see the v0.2.1 note above.
 
 ### Open mechanics decisions
 

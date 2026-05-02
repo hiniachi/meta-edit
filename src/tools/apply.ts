@@ -99,7 +99,6 @@ async function issueOnce(
       binding: bindings.map((b) => ({
         file: b.canonical,
         before_sha256: b.before_sha256,
-        after_sha256: b.after_sha256,
       })),
     });
   } catch (e) {
@@ -140,16 +139,29 @@ async function issueOnce(
     binding: bindings.map((b) => ({
       file: b.canonical,
       before_sha256: b.before_sha256,
-      after_sha256: b.after_sha256,
     })),
     token: grant.token_id,
   };
   const auditError = appendIssuedSafely(log, issued);
+  // Sanitize bound file paths for embedding in the human-readable
+  // next_action string: replace ASCII control characters (including
+  // newline / carriage return / tab) with '?' so a pathological
+  // filename cannot corrupt the multi-line message rendered to the
+  // agent's transcript. NUL is already rejected by checkPathSafety;
+  // this guards the remaining 0x01-0x1f / 0x7f range.
+  // eslint-disable-next-line no-control-regex
+  const sanitize = (p: string) => p.replace(/[\x00-\x1f\x7f]/g, "?");
+  const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
+  const nextAction =
+    `On your next native Edit / Write / MultiEdit call against ${fileList}, ` +
+    `pass _meta_edit_token: "${grant.token_id}". The token is single-use ` +
+    `per binding and expires at ${grant.expires_at}.`;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,
     edit_id: editId,
     warnings: [],
+    next_action: nextAction,
     ...(auditError !== undefined ? { audit_error: auditError } : {}),
   };
 }
