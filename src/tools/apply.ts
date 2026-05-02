@@ -668,6 +668,19 @@ export function applyCreates(
       fs.fsyncSync(fd);
     } catch (e) {
       const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      // Issue 2026-05-02-1000: openSync may have created the file before
+      // writeFileSync / fsyncSync threw (e.g. ENOSPC after open).
+      // Without cleanup the partial file stays on disk and a retry hits
+      // EEXIST forever. EEXIST/ELOOP are open-time errors — the file was
+      // never created on those paths — so skip unlink there to avoid
+      // destroying a sibling/raced file.
+      if (fd !== null && code !== "EEXIST" && code !== "ELOOP") {
+        try {
+          fs.unlinkSync(w.absolute);
+        } catch {
+          // best-effort cleanup; secondary errors are not actionable.
+        }
+      }
       const reason =
         code === "EEXIST"
           ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)`

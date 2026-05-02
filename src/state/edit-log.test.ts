@@ -403,6 +403,62 @@ describe("EditLog.append / readAll", () => {
     expect(log.readAll()).toEqual([]);
   });
 
+  // Regression for issue 2026-05-02-1002: previously readAll did
+  // existsSync + readFileSync. ENOENT thrown by readFileSync after
+  // existsSync had said the file existed propagated as an uncaught
+  // error and crashed `meta-edit log` / `meta-edit summary`. The fix
+  // drops existsSync and catches ENOENT directly in readAll.
+  it("readAll catches ENOENT from readFileSync and returns [] (TOCTOU regression for issue 1002)", () => {
+    const log = new EditLog(tmpRoot);
+    log.append(entry()); // ensure the log exists on disk
+
+    const original = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync");
+    spy.mockImplementation(((p: unknown, opts: unknown) => {
+      if (typeof p === "string" && p.endsWith("edits.jsonl")) {
+        const err = new Error(
+          `ENOENT: no such file or directory, open '${p}'`,
+        ) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return (original as (...a: unknown[]) => unknown)(p, opts);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(() => log.readAll()).not.toThrow();
+      expect(log.readAll()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // Counterpart to the ENOENT case (issue 1002): non-ENOENT errors
+  // (EACCES, EIO, EISDIR, …) MUST still propagate so a corrupt or
+  // unreadable log does not silently appear empty. This guards a
+  // future refactor that might over-broaden the catch.
+  it("readAll re-throws non-ENOENT errors from readFileSync (no silent corruption)", () => {
+    const log = new EditLog(tmpRoot);
+    log.append(entry());
+
+    const original = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync");
+    spy.mockImplementation(((p: unknown, opts: unknown) => {
+      if (typeof p === "string" && p.endsWith("edits.jsonl")) {
+        const err = new Error(
+          `EACCES: permission denied, open '${p}'`,
+        ) as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (original as (...a: unknown[]) => unknown)(p, opts);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(() => log.readAll()).toThrow(/EACCES|permission/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("skips malformed lines without crashing readAll", () => {
     fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
     const p = path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl");

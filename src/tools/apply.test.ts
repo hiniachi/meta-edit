@@ -30,6 +30,36 @@ function change(
   return { canonical, oldContent, newContent };
 }
 
+// Probe whether the current process is actually subject to DAC. Root
+// without dropped CAP_DAC_OVERRIDE / CAP_DAC_READ_SEARCH bypasses chmod 0,
+// so a chmod-0 file remains readable. CAP-restricted root containers do
+// honour the deny and fall through. Any test that depends on chmod-based
+// access denial must call this and skip when the OS does not enforce it,
+// to avoid both false failures (root with bypass) and over-skips (root
+// without capabilities).
+function dacEnforcedFor(probeDir: string): boolean {
+  const probe = path.join(probeDir, ".eacces-probe");
+  fs.writeFileSync(probe, "x", "utf8");
+  fs.chmodSync(probe, 0o000);
+  try {
+    fs.readFileSync(probe, "utf8");
+    return false;
+  } catch {
+    return true;
+  } finally {
+    try {
+      fs.chmodSync(probe, 0o600);
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(probe);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 describe("applyChanges", () => {
   it("writes the new content for a single modify-only change", () => {
     writeFile("src/foo.ts", "alpha\n");
@@ -166,6 +196,11 @@ describe("applyChanges", () => {
 
   it("refuses on EACCES at apply time without modifying the file", () => {
     if (process.platform === "win32") return; // chmod 0 is meaningless on Windows
+    // Skip only when the OS does not enforce DAC against this process
+    // (root without dropped CAP_DAC_OVERRIDE / CAP_DAC_READ_SEARCH).
+    // CAP-restricted root containers correctly fall through and exercise
+    // the EACCES branch.
+    if (!dacEnforcedFor(tmpRoot)) return;
     const abs = writeFile("src/locked.ts", "secret\n");
     fs.chmodSync(abs, 0o000);
     try {
@@ -173,10 +208,9 @@ describe("applyChanges", () => {
         change("src/locked.ts", "secret\n", "tampered\n"),
       ]);
       expect(result.applied).toBe(false);
-      // The file is untouched; the warnings detail the read failure.
-      // chmod 0 still allows root to read; in CI environments where
-      // tests run as root we accept that result.applied may be true.
-      // Verify only that, on failure, the file is not corrupted.
+      // The DAC probe at the top confirmed that this process cannot read
+      // chmod-000 files; the assertion above is reliable. Verify only
+      // that, on failure, the file is not corrupted.
       const after = (() => {
         try {
           return fs.readFileSync(abs, "utf8");

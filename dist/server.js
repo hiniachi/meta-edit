@@ -18873,6 +18873,11 @@ function applyCreates(repoRoot, changes, options = {}) {
       fs4.fsyncSync(fd);
     } catch (e) {
       const code = e?.code;
+      if (fd !== null && code !== "EEXIST" && code !== "ELOOP") {
+        try {
+          fs4.unlinkSync(w.absolute);
+        } catch {}
+      }
       const reason = code === "EEXIST" ? `change.file "${w.canonical}" appeared on disk between preflight and create; refusing (raced)` : code === "ELOOP" ? `change.file "${w.canonical}" resolves through a symlink at the leaf; O_NOFOLLOW refused` : `failed to create "${w.canonical}": ${code ?? "ERR"}`;
       warnings.push(reason);
       partialWriteWarning();
@@ -19055,10 +19060,14 @@ class EditLog {
     }
   }
   readAll() {
-    if (!fs5.existsSync(this.logPath)) {
-      return [];
+    let text;
+    try {
+      text = fs5.readFileSync(this.logPath, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT")
+        return [];
+      throw e;
     }
-    const text = fs5.readFileSync(this.logPath, "utf8");
     const out = [];
     for (const line of text.split(`
 `)) {
@@ -19247,4 +19256,4 @@ export {
   createServer
 };
 
-//# debugId=A97C720B445F7EE664756E2164756E21
+//# debugId=3F93E77ABD48965C64756E2164756E21
