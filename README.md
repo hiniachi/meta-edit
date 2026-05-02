@@ -15,9 +15,9 @@ Instructions in `CLAUDE.md` decay across turns. Skills only fire when the agent 
 
 Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers "add boundary tests", `meta-edit` splits the single `Edit` primitive into nineteen kind-specific tools, each carrying — in its own description — when to use it, when not to use it, what tests must accompany the edit, and when to stop and ask the user.
 
-The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification, and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the v0.2 backlog.
+The bet: **the shape of the tool surface is what changes AI editing behavior**, not detection or post-hoc verification. The conceptual ancestor is [SQLite's testing strategy](https://sqlite.org/testing.html) — boundary values, MC/DC condition coverage, anomaly testing, per-change checklists — translated from C library quality into application-level edit categories. See [`docs/SPEC.md`](./docs/SPEC.md) for the full specification (Part I constitution + Part II derived spec), and [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) for the post-v0.2 detection backlog.
 
-Status: `0.1.4` pre-release. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
+Status: `0.2.0` pre-release. v0.2 reframes the mechanism as **declaration + token binding** (per `SPEC.md` Article 5): the MCP server validates declarations and issues short-lived tokens; native `Edit` / `Write` performs the actual writes under the `deny-raw-edit` hook's binding-validation gate. Distributed as a single-plugin Claude Code marketplace (this repo) and as the `@hiniachi/meta-edit` npm package (not yet published).
 
 ## The nineteen tools
 
@@ -158,16 +158,21 @@ meta-edit install-hooks --scope user
 
 ## Edit log
 
-Every `edit_*` call appends one JSONL line to `.meta-edit/state/edits.jsonl`,
-whether the call succeeded, was rejected by validation, or failed during
-apply. The schema follows [`SPEC.md` §6](./docs/SPEC.md):
+Each typed_edit call produces up to two JSONL lines in `.meta-edit/state/edits.jsonl`. The schema follows [`SPEC.md` §6](./docs/SPEC.md):
 
-```json
-{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
-```
+1. **`issued`** — written when the MCP server accepts the declaration and issues a token:
 
-The patch body is **not** stored. If you need it, your VCS history is
-the source of truth.
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   ```
+
+2. **`consumed`** — written when the `deny-raw-edit` hook authorizes the corresponding native Edit / Write call (PreToolUse, before the write executes):
+
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   ```
+
+Validation rejections produce a single `phase: "rejected"` entry with a non-empty `audit_error`. The patch body is **not** stored — your VCS history is the source of truth. An `issued` record without a `consumed` sibling is evidence of an abandoned or expired declaration.
 
 ## CI integration
 
@@ -184,7 +189,7 @@ If `meta-edit` saves you time or prevents a bad edit, please consider buying the
 Your support helps fund:
 
 - New `edit_*` categories based on observed AI failure modes
-- The optional v0.2 lightweight diff classifier (see [`SPEC.md` Article 2](./docs/SPEC.md))
+- The optional future lightweight diff classifier as a backstop if descriptions prove insufficient (see [`SPEC.md` Article 2](./docs/SPEC.md))
 - Tighter Claude Code Plugin integration
 
 ## License

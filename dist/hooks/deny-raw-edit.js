@@ -104,7 +104,7 @@ import * as path5 from "node:path";
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.1.5",
+  version: "0.2.0",
   description: "MCP server with nineteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -6041,4 +6041,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=DEB3B50B18D6992364756E2164756E21
+//# debugId=E03754B3F8836AA764756E2164756E21

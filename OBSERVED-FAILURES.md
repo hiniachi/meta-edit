@@ -1,13 +1,17 @@
 # Observed failure patterns
 
-Per CLAUDE.md §7.3, when a specific failure pattern looks common enough to
-warrant detection, write it down here for v0.2. Do not add detection in
-MVP — the bet is that descriptions alone change AI behavior; muddying
-the signal with classifiers makes that question impossible to answer.
+Per CLAUDE.md §7.3, when a specific failure pattern looks common enough
+to warrant detection, write it down here. Do not add detection in MVP —
+the bet is that descriptions alone change AI behavior; muddying the
+signal with classifiers makes that question impossible to answer.
 
-This file is a queue, not a backlog. v0.2 may pick zero, one, or many of
-these. The triggering signal is **observed misuse in the edit log or
-through user-reported false negatives**, not theoretical possibility.
+(Note: v0.2 reframed the *mechanism* — declaration + token binding,
+SPEC Article 5 — but did NOT add detection. This file remains the
+queue for the optional future diff-classifier backstop, per SPEC
+Article 2 / Article 7. A future version may pick zero, one, or many of
+these entries; the triggering signal is **observed misuse in the edit
+log or through user-reported false negatives**, not theoretical
+possibility.)
 
 ---
 

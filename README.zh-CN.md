@@ -15,9 +15,9 @@
 
 工具定义不会被遗忘。AI 即将调用的工具，其 schema 与说明文都会在每一次调用时被加载。`meta-edit` 把单一的 `Edit` 原语拆成十九个按类别区分的工具，让每个工具的说明文自身承载"什么时候用""什么时候不能用""必须伴随哪些测试""什么时候停下来询问用户"。不需要再指望 AI"还记得要补一个边界值测试"。
 
-这个项目押的是这样一个判断：**改变 AI 编辑行为的，是工具表面的形状本身**——而不是检测或事后验证。设计灵感来自 [SQLite 的测试策略](https://sqlite.org/testing.html)（边界值、MC/DC 条件覆盖、异常路径测试、按变更逐项核对清单），把 C 库级别的质量纪律翻译成应用层的编辑类别。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)，v0.2 的待办清单见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
+这个项目押的是这样一个判断：**改变 AI 编辑行为的，是工具表面的形状本身**——而不是检测或事后验证。设计灵感来自 [SQLite 的测试策略](https://sqlite.org/testing.html)（边界值、MC/DC 条件覆盖、异常路径测试、按变更逐项核对清单），把 C 库级别的质量纪律翻译成应用层的编辑类别。完整规范见 [`docs/SPEC.md`](./docs/SPEC.md)（Part I 宪法 + Part II 派生规范），v0.2 之后的检测待办清单见 [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)。
 
-状态：`0.1.4` 预发布版。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
+状态：`0.2.0` 预发布版。v0.2 把机制重塑为 **声明 + 令牌绑定**（参见 `SPEC.md` Article 5）：MCP 服务器只校验声明并发放短期令牌；真正的写入由 Claude Code 内置的 `Edit` / `Write` 在 `deny-raw-edit` 钩子的绑定校验门下完成。本仓库自身就是一个单插件的 Claude Code marketplace，同时也以 npm 包 `@hiniachi/meta-edit` 的形式分发（npm 尚未发布）。
 
 ## 十九个工具
 
@@ -131,13 +131,21 @@ meta-edit install-hooks --scope user
 
 ## 编辑日志
 
-每一次 `edit_*` 调用——无论是成功、被校验拒绝、还是在应用阶段失败——都会向 `.meta-edit/state/edits.jsonl` 追加一行 JSONL。schema 见 [`SPEC.md` §6](./docs/SPEC.md)：
+每一次 typed_edit 调用都会向 `.meta-edit/state/edits.jsonl` 追加最多两行 JSONL。schema 见 [`SPEC.md` §6](./docs/SPEC.md)：
 
-```json
-{"edit_id":"edit_20260427_0001","timestamp":"2026-04-27T10:15:00+09:00","tool_name":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"patch_size_bytes":432,"applied":true,"warnings":[]}
-```
+1. **`issued`** — MCP 服务器接受声明并发放令牌时写入：
 
-补丁本身**不会**被存储。如果需要原始内容，请以 VCS 的历史记录为准。
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:00+09:00","phase":"issued","kind":"edit_boundary_condition","target_file":"src/billing/charge.ts","rationale":"Allow exact-balance charges by changing < to <=","risk_level":"high","test_files":["tests/billing/charge.test.ts"],"binding":[{"file":"src/billing/charge.ts","before_sha256":"…","after_sha256":"…"}],"token":"met_20260502_a3f9b2…"}
+   ```
+
+2. **`consumed`** — `deny-raw-edit` 钩子授权对应的内置 Edit / Write 写入时写入（PreToolUse、写入执行前）：
+
+   ```json
+   {"edit_id":"edit_20260502_0001","ts":"2026-05-02T19:00:11+09:00","phase":"consumed","consuming_tool":"Edit"}
+   ```
+
+校验拒绝以 `phase: "rejected"` 单条记录写入，并附带非空的 `audit_error`。补丁本身**不会**被存储——如需原始内容请以 VCS 历史为准。只有 `issued` 而没有 `consumed` 兄弟记录，意味着声明被放弃或令牌已过期。
 
 ## CI 集成
 
@@ -152,7 +160,7 @@ meta-edit install-hooks --scope user
 赞助会用于：
 
 - 根据观察到的 AI 失败模式新增 `edit_*` 类别；
-- 实现 v0.2 计划中的轻量 diff 分类器（详见 [`SPEC.md` §11](./docs/SPEC.md)）；
+- 若仅靠工具说明文证明不够，作为兜底实现轻量 diff 分类器（详见 [`SPEC.md` Article 2](./docs/SPEC.md)）；
 - 强化与 Claude Code Plugin 的集成。
 
 ## 许可证
