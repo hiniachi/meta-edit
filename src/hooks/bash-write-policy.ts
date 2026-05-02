@@ -346,11 +346,42 @@ function evaluateSegment(
   // start hitting formatters, the allowlist becomes the explicit override
   // surface; the architecture now reserves room for that without giving
   // deny-bypass on chained commands.
+  // Issue 1107: position-aware DENY_SUBSTRINGS scan. Compute the
+  // verb-window for `scanText`, then deny only when the matched needle
+  // lands inside the window (verb + ~32 trailing chars covering
+  // "verb + one short option + redirect"). A match in argument position
+  // (e.g. `git commit -m "...cat > src/foo.ts..."`) demotes to warn —
+  // the typed-edit invariant is preserved by the verb-position deny on
+  // chained second segments and by the recursive shell-hosted-payload
+  // scan, which feeds inner segments back through the same routine.
+  // Earlier behavior was an unconditional substring deny, which
+  // false-positively rejected legitimate prose in commit messages, PR
+  // bodies, and rationale text — see issue 1700 for the dogfood
+  // evidence and 1107 for the design.
+  const trimOffset = normalized.length - normalized.trimStart().length;
+  const verbInfo = extractCommandVerbInfo(normalized.trimStart());
+  const verbWindowEnd =
+    verbInfo === null
+      ? scanText.length
+      : trimOffset + verbInfo.verbEnd + VERB_WINDOW_TAIL_CHARS;
+  let firstWarn: HookDecision | null = null;
   for (const needle of DENY_SUBSTRINGS) {
-    if (scanText.includes(needle)) {
+    const pos = scanText.indexOf(needle);
+    if (pos < 0) continue;
+    if (pos < verbWindowEnd) {
       return {
         decision: "deny",
         reason: denyReason(needle),
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason:
+          `pattern "${needle}" appears at argument position (verb is "${verbInfo?.verb ?? "unknown"}"); ` +
+          `not denied because the typed-edit hypothesis (Article 3 + Article 4) trusts ` +
+          `descriptions to guide the agent away from real bypass intent. Recorded as ` +
+          `bypass-risk and may be tightened in a future version (1107).`,
       };
     }
   }
@@ -387,12 +418,13 @@ function evaluateSegment(
   //   P1-2: wrapper-prefixed eval (`sudo eval "..."`, `env eval "..."`)
   // `warn` from the recursion is held on `firstWarn` so a later deny
   // check on the same outer segment still wins; if nothing else denies,
-  // the inner warn surfaces at the end of the function.
-  let firstWarn: HookDecision | null = null;
+  // the inner warn surfaces at the end of the function. Note: 1107's
+  // position-aware DENY_SUBSTRINGS scan above declared `firstWarn`
+  // earlier in this function; we just assign rather than re-declare.
   const hosted = evaluateShellHostedPayload(rawSegment, opts);
   if (hosted !== null) {
     if (hosted.decision === "deny") return hosted;
-    if (hosted.decision === "warn") firstWarn = hosted;
+    if (hosted.decision === "warn" && firstWarn === null) firstWarn = hosted;
   }
 
   // dogfood-001 + dogfood-005: structural WARN for any `>` / `>>` / `>|`
@@ -814,6 +846,54 @@ function extractSubstitutionInners(seg: string): string[] {
         continue;
       }
       // Unmatched `$(` — bail out, partial command.
+      return inners;
+    }
+    // Issue 1107: process substitution `<(cmd)` / `>(cmd)` carries an
+    // inner command that bash executes as a subshell. Pre-1107 the
+    // unconditional DENY_SUBSTRINGS scan caught these incidentally;
+    // now that the scan is position-aware, the inner needs a real
+    // recursion path so its verb-position deny fires. Same paren-
+    // balance logic as the `$(` branch above.
+    if (
+      !inSingle &&
+      (c === "<" || c === ">") &&
+      seg[i + 1] === "("
+    ) {
+      let depth = 1;
+      let j = i + 2;
+      let innerSingle = false;
+      let innerDouble = false;
+      while (j < seg.length && depth > 0) {
+        const cj = seg[j];
+        if (cj === "\\" && !innerSingle && j + 1 < seg.length) {
+          j += 2;
+          continue;
+        }
+        if (cj === "'" && !innerDouble) {
+          innerSingle = !innerSingle;
+          j++;
+          continue;
+        }
+        if (cj === '"' && !innerSingle) {
+          innerDouble = !innerDouble;
+          j++;
+          continue;
+        }
+        if (!innerSingle && !innerDouble) {
+          if (cj === "(") {
+            depth++;
+          } else if (cj === ")") {
+            depth--;
+            if (depth === 0) break;
+          }
+        }
+        j++;
+      }
+      if (depth === 0) {
+        inners.push(seg.slice(i + 2, j));
+        i = j + 1;
+        continue;
+      }
       return inners;
     }
     if (!inSingle && c === "`") {
@@ -1506,10 +1586,26 @@ function redirectsToProtected(
 // redirect-target check (dogfood-001 / dogfood-005; warn since v0.1.5,
 // see redirectsOutsideSafeSinkAllowlist). Returns dequoted,
 // unparsed-token strings — callers apply their own predicate.
-function* iterRedirectTargets(s: string): IterableIterator<string> {
+//
+// Issue 1701: `skipSubstitutionInternal` skips redirects whose `>`
+// lives inside a `$(...)` command-substitution. Heredoc bodies inside
+// `$(cat <<EOF ... EOF)` (the project's own canonical multi-line
+// commit / PR-body shape) often contain literal `>` characters that
+// the lexer can't distinguish from real redirects. The structural
+// redirect warn opts in so these stop generating noise on every
+// commit. The protected-path detector keeps the default (depth-aware
+// off) so substitution-hidden writes to protected paths still deny.
+type IterRedirectOpts = { skipSubstitutionInternal?: boolean };
+
+function* iterRedirectTargets(
+  s: string,
+  opts: IterRedirectOpts = {},
+): IterableIterator<string> {
+  const skipSub = opts.skipSubstitutionInternal === true;
   let i = 0;
   let inSingle = false;
   let inDouble = false;
+  let subDepth = 0;
   while (i < s.length) {
     const c = s[i];
     if (!inSingle && c === "\\" && i + 1 < s.length) {
@@ -1526,6 +1622,23 @@ function* iterRedirectTargets(s: string): IterableIterator<string> {
       i++;
       continue;
     }
+    // Track `$(...)` substitution depth so the caller can opt to
+    // ignore redirects inside the substitution body. Backticks are not
+    // tracked (POSIX backticks don't nest, and the existing extraction
+    // path already handles them as inner segments). Process
+    // substitution `<(...)` / `>(...)` is also handled separately by
+    // extractSubstitutionInners (the inner cmd is recursed into a
+    // fresh evaluateSegment call).
+    if (!inSingle && c === "$" && s[i + 1] === "(") {
+      subDepth++;
+      i += 2;
+      continue;
+    }
+    if (!inSingle && !inDouble && c === ")" && subDepth > 0) {
+      subDepth--;
+      i++;
+      continue;
+    }
     if (inSingle || inDouble || c !== ">") {
       i++;
       continue;
@@ -1533,6 +1646,10 @@ function* iterRedirectTargets(s: string): IterableIterator<string> {
     // `>&` is fd duplication (`2>&1`, `>&2`), not a write redirect.
     if (s[i + 1] === "&") {
       i += 2;
+      continue;
+    }
+    if (skipSub && subDepth > 0) {
+      i++;
       continue;
     }
     let j = i + 1;
@@ -1680,7 +1797,14 @@ function extractEvalArg(rawSegment: string): string | null {
 // §5.2) — verb-deny and protected-path checks fire earlier with their
 // own `deny`.
 function redirectsOutsideSafeSinkAllowlist(rawSegment: string): boolean {
-  for (const target of iterRedirectTargets(rawSegment)) {
+  // Issue 1701: skip substitution-internal redirects (e.g. heredoc
+  // body `>` literals inside `git commit -m "$(cat <<EOF ... EOF)"`).
+  // These are not user-written redirects; they're prose. The
+  // protected-path detector still walks all depths so genuine bypass
+  // attempts (`bash -c "printf x > .meta-edit/state/foo"`) deny.
+  for (const target of iterRedirectTargets(rawSegment, {
+    skipSubstitutionInternal: true,
+  })) {
     if (target.length === 0) continue;
     if (isInRepoWriteTarget(target)) return true;
   }
@@ -1841,28 +1965,50 @@ function collapsePathDoublings(s: string): string {
 }
 
 function extractCommandVerb(segment: string): string | null {
+  return extractCommandVerbInfo(segment)?.verb ?? null;
+}
+
+/**
+ * Extended verb extractor (1107). Returns the verb plus `verbEnd` —
+ * the byte position in the input `segment` where the verb token ends.
+ * Callers use `verbEnd` to compute a verb-window for position-aware
+ * DENY_SUBSTRINGS scanning: matches inside the window stay deny,
+ * matches in argument position are demoted to warn (issues 1107 / 1700
+ * — agent commit messages and PR bodies that mention deny patterns
+ * literally must not trip the deny).
+ *
+ * The position is computed by walking the same wrapper-peel chain as
+ * the original `extractCommandVerb`, accumulating consumed bytes after
+ * each `stripLeadingEnvAssignments` / wrapper-strip / option-consume
+ * step. The result is exact: `segment.substring(0, verbEnd)` ends at
+ * the verb token's last character.
+ */
+type VerbInfo = { verb: string; verbEnd: number };
+
+function extractCommandVerbInfo(segment: string): VerbInfo | null {
   let s = stripLeadingEnvAssignments(segment);
+  let consumed = segment.length - s.length;
   for (let safety = 0; safety < 32; safety++) {
+    const beforeStrip = s;
     s = stripLeadingEnvAssignments(s);
+    consumed += beforeStrip.length - s.length;
     const m = s.match(/^(\S+)/);
     if (m === null || m[0] === undefined) return null;
     const word = m[0];
     const baseStart = word.lastIndexOf("/");
     const base = baseStart >= 0 ? word.slice(baseStart + 1) : word;
     if (WRAPPER_VERBS.has(base)) {
-      // Skip the wrapper word and any wrapper options that follow
-      // (`-X`, `--foo`, `--foo=bar`). Without this skip, forms like
-      // `env -i mv a b` extract `-i` as the verb and miss `mv`.
-      // Per-wrapper short options that take a separate value (e.g.
-      // `sudo -u root mv a b`) consume the next token as the value so
-      // the verb resolves to `mv`, not `root`.
       const valueOpts = WRAPPER_VALUE_OPTS[base];
-      s = s.slice(word.length).replace(/^\s+/, "");
+      const afterWord = s.slice(word.length).replace(/^\s+/, "");
+      consumed += s.length - afterWord.length;
+      s = afterWord;
       while (true) {
         const optMatch = s.match(/^(-[^\s-]\S*|--[^\s=]+(?:=\S*)?)/);
         if (optMatch === null || optMatch[0] === undefined) break;
         const opt = optMatch[0];
-        s = s.slice(opt.length).replace(/^\s+/, "");
+        const afterOpt = s.slice(opt.length).replace(/^\s+/, "");
+        consumed += s.length - afterOpt.length;
+        s = afterOpt;
         if (
           valueOpts !== undefined &&
           !opt.includes("=") &&
@@ -1870,16 +2016,30 @@ function extractCommandVerb(segment: string): string | null {
         ) {
           const valMatch = s.match(/^\S+/);
           if (valMatch !== null && valMatch[0] !== undefined) {
-            s = s.slice(valMatch[0].length).replace(/^\s+/, "");
+            const afterVal = s.slice(valMatch[0].length).replace(/^\s+/, "");
+            consumed += s.length - afterVal.length;
+            s = afterVal;
           }
         }
       }
       continue;
     }
-    return base;
+    return { verb: base, verbEnd: consumed + word.length };
   }
   return null;
 }
+
+/**
+ * Issue 1107 verb-window tail: characters AFTER verbEnd that still
+ * count as verb-position. Set to 0 — the DENY_SUBSTRINGS needles
+ * (`sed -i`, `cat >`, `perl -pi`, `git apply`, …) all start AT verb
+ * position, so a needle whose START is at or before verbEnd is verb-
+ * shaped. Anything past verbEnd is an argument and demotes to warn
+ * (1107). Earlier values (32) over-extended the window and re-denied
+ * heredoc-body pseudo-segments like `fix: avoid sed -i bypass` whose
+ * extracted "verb" was the prose word `fix:`.
+ */
+const VERB_WINDOW_TAIL_CHARS = 0;
 
 // Strip a chain of leading `NAME=value` shell variable assignments.
 // Examples:
