@@ -8,7 +8,7 @@
 //     "hooks": {
 //       "PreToolUse": [
 //         {
-//           "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+//           "matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch",
 //           "hooks": [
 //             { "type": "command", "command": "node dist/hooks/deny-raw-edit.js" }
 //           ]
@@ -20,9 +20,12 @@
 // The matcher above MUST list every tool name in RAW_EDIT_TOOLS
 // (raw-edit-policy.ts). `meta-edit install-hooks` emits this exact
 // matcher via META_EDIT_RAW_EDIT_MATCHER in cli/hooks-cmd.ts.
+// `apply_patch` is opencode-only — Claude Code never emits it, so the
+// matcher entry is a dead route there. Including it keeps the canonical
+// set un-forked across harnesses (SPEC Article 8).
 //
 // Decision flow (SPEC §5.1):
-//   1. If toolName is not one of the four raw edit primitives, allow.
+//   1. If toolName is not one of the five raw edit primitives, allow.
 //      (Defensive — the matcher above already filters; this is a no-op
 //      for any other tool that somehow lands here.)
 //   2. Otherwise run the token-aware policy. The hook denies on

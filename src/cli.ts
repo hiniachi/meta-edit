@@ -9,6 +9,11 @@ import {
   runInstallHooks,
   runUninstallHooks,
 } from "./cli/hooks-cmd.js";
+import {
+  parseOpencodeArgs,
+  runInstallOpencode,
+  runUninstallOpencode,
+} from "./cli/opencode-cmd.js";
 import { renderHelp } from "./cli/help-cmd.js";
 import { VERSION } from "./version.js";
 
@@ -90,6 +95,24 @@ export async function main(argv: string[]): Promise<number> {
         return 64;
       }
       return runUninstallHooks({ scope: parsed.scope, out, err });
+    }
+
+    case "install-opencode": {
+      const parsed = parseOpencodeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit install-opencode: ${parsed.error}\n`);
+        return 64;
+      }
+      return runInstallOpencode({ scope: parsed.scope, out, err });
+    }
+
+    case "uninstall-opencode": {
+      const parsed = parseOpencodeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit uninstall-opencode: ${parsed.error}\n`);
+        return 64;
+      }
+      return runUninstallOpencode({ scope: parsed.scope, out, err });
     }
 
     default: {

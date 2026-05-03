@@ -1,11 +1,16 @@
 # Macro plan — opencode migration
 
-> Status: **draft / awaiting decisions**. This document scopes the work
-> required to make `meta-edit` usable from
-> [opencode](https://opencode.ai) in addition to Claude Code. Several
-> decisions (§Open questions) need user sign-off before implementation
-> starts. Per `CLAUDE.md` §3 this expands the MVP surface; the user has
-> requested it explicitly.
+> Status: **accepted (2026-05-03)**. Q1–Q8 are settled; see Decision log
+> at the bottom of this file. Implementation tracking lives in the
+> session plan handoff; the v0.3.1-era code-audit, work-unit ordering,
+> and architectural sketch supersede this draft where they differ
+> (notably: `RAW_EDIT_TOOLS` extends with `ApplyPatch`; the opencode
+> plugin reuses the impure `evaluateTokenedEdit` flow in-process rather
+> than only its pure classifier; tool count is 18, not 19).
+>
+> This document remains the authoritative artifact for the *decisions*
+> (Q1–Q8) and the architecture *direction*. The day-to-day work-unit
+> checklist (OC-1..OC-12) lives with the implementing session.
 
 ## Objective
 
@@ -296,17 +301,85 @@ Recommend: **single package**, `./opencode` subpath via `exports`.
 
 ---
 
-## Decision log (to be filled in)
+## Decision log (settled 2026-05-03)
 
-- [ ] Q1: …
-- [ ] Q2: …
-- [ ] Q3: …
-- [ ] Q4: …
-- [ ] Q5: …
-- [ ] Q6: …
-- [ ] Q7: …
-- [ ] Q8: …
+- [x] **Q1 — Scope**: **(a) land in the current package** as a
+      `src/opencode/` subtree. Single npm package, `@opencode-ai/plugin`
+      becomes an optional peer / optional dependency. Rejected (b)
+      because the plumbing reuses the pure / DI-shaped policy modules
+      and a separate package would re-export them anyway.
+- [x] **Q2 — Deny mechanism**: **hook throw only**. No declarative
+      `tools: { edit: false, write: false, apply_patch: false }`. The
+      hook reason text is the single channel the agent sees on a
+      blocked raw edit, mirroring Claude Code behaviour. Belt-and-
+      braces declarative blocks were considered and rejected for the
+      install-footprint cost; if a future opencode release exposes a
+      mid-session re-enable for the raw tools, revisit.
+- [x] **Q3 — Bash deny**: **hook only**. `permission.bash` declarative
+      pattern lists are not used. The bash policy is a parsed-shell
+      classifier (`evaluateBashCommand` is pure ✓ — confirmed in the
+      v0.3.1 code audit), far beyond glob patterns.
+- [x] **Q4 — Tool surface**: **MCP only**. The same stdio MCP server
+      (`meta-edit serve`) registered to opencode via its `mcp` config
+      block. Native opencode plugin tools deferred to a possible v0.2
+      revisit if users complain about latency / process overhead.
+      Keeps the eighteen tool descriptions a single source of truth and
+      preserves the CLAUDE.md §4 verbatim-from-SPEC invariant.
+- [x] **Q5 — Installer CLI**: **(a) build it**. `meta-edit
+      install-opencode --scope user|project` symmetric to
+      `install-hooks`. ~half-day work (OC-6 in the implementation
+      session); writes the `mcp` and `plugin` keys idempotently to
+      `opencode.json` (project) or `~/.config/opencode/opencode.json`
+      (user).
+- [x] **Q6 — `apply_patch`**: **add to canonical raw-edit set** (as
+      `ApplyPatch` in PascalCase to keep the canonical-name convention;
+      the existing case-insensitive lookup in `evaluateRawEdit` accepts
+      the lowercase `apply_patch` form opencode actually emits).
+      Harmless on Claude Code (no such tool there). Bumps the constant
+      so the matcher is harness-agnostic.
+- [x] **Q7 — NotebookEdit on opencode**: **leave as-is**. opencode has
+      no notebook tool, so the canonical PascalCase entry stays in
+      `RAW_EDIT_TOOLS` and is a no-op there. (Note: v0.3.0 already
+      lifted the policy-level NotebookEdit deny in
+      `evaluateTokenedEdit` per issue 0105-notebookedit; the opencode
+      plugin inherits that flow.)
+- [x] **Q8 — Distribution**: **single npm package** with `./opencode`
+      subpath via `package.json` `exports`. Tied to Q1.
 
-Once Q1–Q8 are answered, this doc is converted from "draft" to
-"accepted" and the work units in the table become the implementation
-checklist.
+### New decision (Q-D, raised by v0.3.1 code audit)
+
+- [x] **Q-D — Token-flow integration**: **full integration**. The
+      opencode plugin instantiates `EditLog` + `Grants` for the same
+      repoRoot and calls `evaluateTokenedEdit` directly (in-process —
+      opencode's plugin runtime is also Node JS, so the grants store
+      under `.meta-edit/state/grants/` and the audit log under
+      `.meta-edit/state/edits.jsonl` are shared with any concurrent
+      MCP-server-side issuer). Rejected the cheaper "raw-edit deny
+      only" alternative because it would force opencode users to
+      route every write through the MCP tool surface itself, breaking
+      parity with Claude Code's `typed_edit declaration → native
+      edit lands` flow (SPEC Article 5). Implementation footprint:
+      `src/opencode/plugin.ts` mirrors the shape of
+      `src/hooks/deny-raw-edit.ts`.
+
+### Implementation handoff
+
+The above decisions feed the work-unit table (OC-1..OC-12) at the top
+of this file. Two amendments emerged during the audit phase that the
+table did not capture:
+
+1. **OC-2 reframed**: not "extract pure shape" — `evaluateRawEdit` is
+   already pure but too coarse. The change is "add `ApplyPatch` to
+   `RAW_EDIT_TOOLS` so the canonical set covers opencode's third
+   raw-edit primitive."
+2. **OC-3 reframed**: opencode plugin is *not* a thin wrapper over a
+   pure classifier. It instantiates `EditLog` + `Grants` for the
+   project worktree and calls the impure `evaluateTokenedEdit`
+   (matching `src/hooks/deny-raw-edit.ts` step-for-step). The DI
+   shape is already harness-agnostic, so no extraction work is
+   required.
+
+Tool count: **18** (was 19 when this plan was drafted; v0.3.1 dropped
+the create tools per the typed-create discussion). The opencode plugin
+inherits whatever the MCP `ListTools` returns, so no opencode-side
+update is needed when the count moves.

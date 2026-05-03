@@ -105,12 +105,31 @@ describe("evaluateRawEdit", () => {
     expect(evaluateRawEdit("notebookedit").decision).toBe("deny");
   });
 
+  it("denies opencode's apply_patch raw-edit primitive", () => {
+    // OC-2: apply_patch is opencode's third raw-edit primitive
+    // (alongside `edit` and `write`). It carries no top-level file_path
+    // (its input is a unified-diff blob with embedded path headers),
+    // so the agent cannot route it through the typed-edit grant flow
+    // — the classifier denies it outright. Lowercase + underscore is
+    // the canonical form here because Claude Code has no PascalCase
+    // equivalent to fold to.
+    const r = evaluateRawEdit("apply_patch");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("apply_patch");
+    expect(r.reason).toContain("edit_*");
+    // Case-insensitivity sanity (opencode emits lowercase, but a
+    // future harness could capitalise — both must hit).
+    expect(evaluateRawEdit("Apply_Patch").decision).toBe("deny");
+    expect(evaluateRawEdit("APPLY_PATCH").decision).toBe("deny");
+  });
+
   it("exposes the exact denied set", () => {
     expect([...RAW_EDIT_TOOLS].sort()).toEqual([
       "Edit",
       "MultiEdit",
       "NotebookEdit",
       "Write",
+      "apply_patch",
     ]);
   });
 });
@@ -118,6 +137,53 @@ describe("evaluateRawEdit", () => {
 // =====================================================================
 // Layer 2: evaluateTokenedEdit (SPEC §5.1 flow, v0.2.2)
 // =====================================================================
+
+describe("evaluateTokenedEdit — apply_patch early deny (OC-2)", () => {
+  it("denies apply_patch outright with an actionable reason — does NOT fall through to missing-file_path", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    // Realistic opencode apply_patch input: a unified-diff blob with no
+    // top-level file_path. The pre-OC-2 code would route this to step 1
+    // and emit "apply_patch call missing file_path", misleading the
+    // agent to think they should pass file_path. The early-exit branch
+    // returns a dedicated reason that names the structural mismatch.
+    const r = await evaluateTokenedEdit({
+      toolName: "apply_patch",
+      toolInput: {
+        // opencode passes the diff under various keys (e.g. `input`,
+        // `patch`); none correspond to file_path semantically. Emulate
+        // by leaving the standard fields off entirely.
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("apply_patch");
+    expect(r.reason).toContain("unified-diff");
+    expect(r.reason).toContain("typed_edit");
+    // Anti-regression: must NOT use the misleading missing-file_path
+    // wording from step 1 (the post-OC-2 check is structural, not
+    // payload-shape-dependent).
+    expect(r.reason).not.toMatch(/missing "file_path"/);
+  });
+
+  it("case-insensitive: APPLY_PATCH / Apply_Patch also short-circuit", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    for (const name of ["APPLY_PATCH", "Apply_Patch"]) {
+      const r = await evaluateTokenedEdit({
+        toolName: name,
+        toolInput: {},
+        repoRoot: tmpRoot,
+        grants,
+        log,
+      });
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("unified-diff");
+    }
+  });
+});
 
 describe("evaluateTokenedEdit — gate failures", () => {
   it("denies an Edit call when no active grant covers the file", async () => {

@@ -10,3 +10,4 @@ coverage/
 *.tsbuildinfo
 issues/drafts/
 test-playground/
+sandbox-inside/

@@ -1,0 +1,10 @@
+{
+  "mcp": {
+    "meta-edit": {
+      "type": "local",
+      "command": ["meta-edit", "serve"],
+      "enabled": true
+    }
+  },
+  "plugin": ["@hiniachi/meta-edit/opencode"]
+}

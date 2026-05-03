@@ -120,6 +120,59 @@ Add the server to your Claude Code MCP configuration:
 }
 ```
 
+### Option C: opencode
+
+The same npm package ships an opencode plugin under the `./opencode`
+subpath. The MCP server is unchanged — only the harness adapter is
+different. Install:
+
+```sh
+npm install -g @hiniachi/meta-edit
+meta-edit install-opencode --scope user
+```
+
+Or per-project:
+
+```sh
+npm install --save-dev @hiniachi/meta-edit
+meta-edit install-opencode --scope project
+```
+
+The installer writes (or merges into) `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "meta-edit": {
+      "type": "local",
+      "command": ["meta-edit", "serve"],
+      "enabled": true
+    }
+  },
+  "plugin": ["@hiniachi/meta-edit/opencode"]
+}
+```
+
+A reference snippet lives at
+[`examples/.opencode/opencode.json`](./examples/.opencode/opencode.json).
+
+The plugin runs in opencode's in-process runtime, denies raw `edit`
+/ `write` / `apply_patch` and dangerous `bash`, and shares the
+`.meta-edit/state/grants/` and `.meta-edit/state/edits.jsonl` with
+any concurrent MCP-server-side issuer. Same eighteen typed_edit tool
+descriptions, same audit log, same grant flow as the Claude Code
+path.
+
+`@opencode-ai/plugin` is declared as an optional peer dependency;
+opencode bundles it at runtime, so users do not need a separate
+`npm install`.
+
+To uninstall:
+
+```sh
+meta-edit uninstall-opencode --scope project
+```
+
 ## Runtime requirements
 
 - **Node 20 LTS or newer** on the consumer side. The plugin and the npm bin both invoke `node` against the prebuilt `dist/cli.js` shipped in the package.
@@ -134,6 +187,8 @@ meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]  Print edits.jsonl ent
 meta-edit summary [--since DATE]                         Aggregate statistics from the edit log
 meta-edit install-hooks --scope user|project             Install Claude Code hooks into settings.json
 meta-edit uninstall-hooks --scope user|project           Remove Claude Code hooks from settings.json
+meta-edit install-opencode --scope user|project          Install opencode mcp + plugin into opencode.json
+meta-edit uninstall-opencode --scope user|project        Remove opencode mcp + plugin from opencode.json
 ```
 
 ### Examples

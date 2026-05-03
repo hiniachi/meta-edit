@@ -92,6 +92,55 @@ meta-edit install-hooks --scope project
 }
 ```
 
+### 方式 C：opencode
+
+同一个 npm 包通过 `./opencode` 子路径暴露 opencode 插件 — MCP 服务器
+完全不变，只是 harness 适配器不同。
+
+```sh
+npm install -g @hiniachi/meta-edit
+meta-edit install-opencode --scope user
+```
+
+或者只在某个项目里使用：
+
+```sh
+npm install --save-dev @hiniachi/meta-edit
+meta-edit install-opencode --scope project
+```
+
+安装器会创建或合并 `opencode.json`：
+
+```json
+{
+  "mcp": {
+    "meta-edit": {
+      "type": "local",
+      "command": ["meta-edit", "serve"],
+      "enabled": true
+    }
+  },
+  "plugin": ["@hiniachi/meta-edit/opencode"]
+}
+```
+
+参考片段位于
+[`examples/.opencode/opencode.json`](./examples/.opencode/opencode.json)。
+插件运行在 opencode 的 in-process 运行时中，拒绝原始 `edit` /
+`write` / `apply_patch` 与危险的 `bash`，并与 MCP 服务端发行方共享
+`.meta-edit/state/grants/` 与 `.meta-edit/state/edits.jsonl`。
+对于 18 个 typed_edit 工具描述、审计日志、grant 流程，与 Claude Code
+路径完全等价。
+
+`@opencode-ai/plugin` 声明为 optional peer dependency；opencode
+运行时已自带，无需另外 `npm install`。
+
+卸载：
+
+```sh
+meta-edit uninstall-opencode --scope project
+```
+
 ## 运行环境
 
 - **Node 20 LTS 或更新版本**（使用者侧）。插件与 npm bin 都以 `node` 运行随包发布的 `dist/cli.js`。
@@ -106,6 +155,8 @@ meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]  打印 edits.jsonl �
 meta-edit summary [--since DATE]                           汇总编辑日志的统计
 meta-edit install-hooks --scope user|project               把 Claude Code Hook 写入 settings.json
 meta-edit uninstall-hooks --scope user|project             从 settings.json 中移除 Hook
+meta-edit install-opencode --scope user|project            把 opencode mcp + plugin 写入 opencode.json
+meta-edit uninstall-opencode --scope user|project          从 opencode.json 中移除 opencode mcp + plugin
 ```
 
 ### 示例
