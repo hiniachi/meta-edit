@@ -5,12 +5,17 @@ description: Use when starting development work in a project where the meta-edit
 
 # typed_edit onboarding
 
-`meta-edit` replaces the agent's raw `Edit` / `Write` / `MultiEdit` /
-`NotebookEdit` calls with **eighteen kind-specific MCP tools**. Each
-tool's description encodes when to use it, when not to use it, and what
-tests must accompany the edit. The bet is that a structured tool surface
-plus testing obligations encoded in tool descriptions changes editing
-behavior — without diff classification or post-hoc verification.
+`meta-edit` is a **test-driven development (TDD) framework** delivered
+as an MCP server. It replaces the agent's raw `Edit` / `Write` /
+`MultiEdit` / `NotebookEdit` calls with **eighteen kind-specific MCP
+tools**. Each tool's description encodes when to use it, when not to
+use it, and what tests must accompany the edit — every typed_edit
+declaration (except `edit_refactor_only` and `edit_test_only_change`)
+requires non-empty `test_files`, so writing or updating tests is a
+first-class step of every change, not an afterthought. The bet is that
+a structured tool surface plus testing obligations encoded in tool
+descriptions changes editing behavior — without diff classification or
+post-hoc verification.
 
 ## Catalog (17 SQLite-derived + 1 workflow)
 
