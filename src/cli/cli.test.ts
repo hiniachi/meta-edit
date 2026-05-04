@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 // ---------------------------------------------------------------------------
 // In-process helper: pass mock argv/stdout/stderr to the exported `main`.
@@ -77,6 +78,148 @@ describe("cli help / version", () => {
     const { code, stdout } = await runMain(["--version"]);
     expect(code).toBe(0);
     expect(stdout).toMatch(/^meta-edit \S+/);
+  });
+});
+
+describe("cli log subcommand dispatch", () => {
+  it("runs log with no filters and exits 0", async () => {
+    const tmpDir = makeTmpRoot("cli-log");
+    fs.mkdirSync(path.join(tmpDir, ".meta-edit", "state"), { recursive: true });
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["log"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+
+  it("returns 64 on invalid log flag", async () => {
+    const { code, stderr } = await runMain(["log", "--bogus"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit log:");
+  });
+});
+
+describe("cli summary subcommand dispatch", () => {
+  it("runs summary and exits 0", async () => {
+    const tmpDir = makeTmpRoot("cli-sum");
+    fs.mkdirSync(path.join(tmpDir, ".meta-edit", "state"), { recursive: true });
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["summary"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+
+  it("returns 64 on invalid summary flag", async () => {
+    const { code, stderr } = await runMain(["summary", "--bogus"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit summary:");
+  });
+});
+
+describe("cli install-hooks dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["install-hooks"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit install-hooks:");
+  });
+
+  it("installs hooks with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-hooks");
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["install-hooks", "--scope", "project"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
+describe("cli uninstall-hooks dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["uninstall-hooks"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit uninstall-hooks:");
+  });
+
+  it("uninstalls hooks with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-unhooks");
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["uninstall-hooks", "--scope", "project"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
+describe("cli install-opencode dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["install-opencode"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit install-opencode:");
+  });
+
+  it("installs opencode config with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-oc-install");
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["install-opencode", "--scope", "project"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
+describe("cli uninstall-opencode dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["uninstall-opencode"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit uninstall-opencode:");
+  });
+
+  it("uninstalls opencode config with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-oc-uninstall");
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["uninstall-opencode", "--scope", "project"]);
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
+describe("cli help with tool argument", () => {
+  it("renders full description for a valid tool name", async () => {
+    const { code, stdout } = await runMain(["help", "edit_boundary_condition"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("edit_boundary_condition");
+  });
+
+  it("returns 64 for an unknown tool name", async () => {
+    const { code, stderr } = await runMain(["help", "edit_nonexistent"]);
+    expect(code).toBe(64);
+    expect(stderr.length).toBeGreaterThan(0);
   });
 });
 

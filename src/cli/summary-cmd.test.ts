@@ -3,54 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSummary, parseSummaryArgs, runSummaryCommand } from "./summary-cmd.js";
-import type {
-  EditLogEntry,
-  IssuedEntry,
-  ConsumedEntry,
-  RejectedEntry,
-} from "../state/edit-log.js";
-
-const HEX64_A = "a".repeat(64);
-
-function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
-  return {
-    edit_id: "edit_20260430_0001",
-    ts: "2026-04-30T10:00:00+09:00",
-    phase: "issued",
-    kind: "edit_boundary_condition",
-    target_file: "src/foo.ts",
-    rationale: "test",
-    risk_level: "medium",
-    test_files: ["tests/foo.test.ts"],
-    binding: [
-      { file: "src/foo.ts", before_sha256: HEX64_A },
-    ],
-    token: "met_20260430_0123456789",
-    ...overrides,
-  };
-}
-
-function consumed(overrides: Partial<ConsumedEntry> = {}): ConsumedEntry {
-  return {
-    edit_id: "edit_20260430_0001",
-    ts: "2026-04-30T10:00:11+09:00",
-    phase: "consumed",
-    consuming_tool: "Edit",
-    ...overrides,
-  };
-}
-
-function rejected(overrides: Partial<RejectedEntry> = {}): RejectedEntry {
-  return {
-    edit_id: "edit_20260430_0099",
-    ts: "2026-04-30T10:01:00+09:00",
-    phase: "rejected",
-    kind: "edit_boundary_condition",
-    target_file: "src/foo.ts",
-    audit_error: "validation failed",
-    ...overrides,
-  };
-}
+import type { EditLogEntry, IssuedEntry } from "../state/edit-log.js";
+import {
+  issued,
+  consumed,
+  rejected,
+  makeTmpRoot,
+  cleanTmpRoot,
+} from "../test-helpers.js";
 
 describe("formatSummary", () => {
   it("renders zero edits", () => {
@@ -196,7 +156,7 @@ describe("parseSummaryArgs", () => {
 // ---------------------------------------------------------------------------
 
 function tmpRepoForSummary(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-ansi-sum-"));
+  const dir = makeTmpRoot("ansi-sum");
   fs.mkdirSync(path.join(dir, ".meta-edit", "state"), { recursive: true });
   return dir;
 }

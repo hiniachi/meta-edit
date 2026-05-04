@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -13,33 +12,25 @@ import {
   META_EDIT_OPENCODE_RESOURCES,
   type OpencodeConfigShape,
 } from "./opencode-cmd.js";
+import {
+  makeTmpRoot,
+  cleanTmpRoot,
+  StringStream,
+  asWritableStream as asStream,
+} from "../test-helpers.js";
 
 let tmpHome: string;
 let tmpCwd: string;
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-oc-cmd-home-"));
-  tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-oc-cmd-cwd-"));
+  tmpHome = makeTmpRoot("oc-cmd-home");
+  tmpCwd = makeTmpRoot("oc-cmd-cwd");
 });
 
 afterEach(() => {
-  fs.rmSync(tmpHome, { recursive: true, force: true });
-  fs.rmSync(tmpCwd, { recursive: true, force: true });
+  cleanTmpRoot(tmpHome);
+  cleanTmpRoot(tmpCwd);
 });
-
-class StringStream {
-  text = "";
-  write(chunk: string | Uint8Array): boolean {
-    this.text += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
-    return true;
-  }
-}
-// Cast helper: the installer takes NodeJS.WritableStream but we only
-// need write(); fully impersonating WritableStream (with all 17 EE
-// methods) would be noise here.
-function asStream(s: StringStream): NodeJS.WritableStream {
-  return s as unknown as NodeJS.WritableStream;
-}
 
 // =====================================================================
 // configPathForScope

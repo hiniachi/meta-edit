@@ -1,26 +1,23 @@
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGrantsStore,
   GRANT_TTL_MS,
   type GrantBinding,
 } from "./grants.js";
+import { makeTmpRoot, cleanTmpRoot, HEX64_A, HEX64_C } from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-grants-"));
+  tmpRoot = makeTmpRoot("grants");
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
-
-const HEX64_A = "a".repeat(64);
-const HEX64_C = "c".repeat(64);
 
 function binding(file: string, before = HEX64_A): GrantBinding {
   return { file, before_sha256: before };

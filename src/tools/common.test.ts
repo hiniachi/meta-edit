@@ -20,22 +20,26 @@ import {
   type EditToolRequest,
   type ValidationContext,
 } from "./common.js";
+import {
+  makeTmpRoot,
+  cleanTmpRoot,
+  writeFileIn,
+  captureStderr as captureStderrSync,
+} from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-common-"));
+  tmpRoot = makeTmpRoot("common");
   fs.mkdirSync(path.join(tmpRoot, ".git"));
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
 
 function writeFile(rel: string, content: string): void {
-  const abs = path.join(tmpRoot, rel);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, content, "utf8");
+  writeFileIn(tmpRoot, rel, content);
 }
 
 function ctx(): ValidationContext {
@@ -124,22 +128,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
   // coercion behavior so a future zod / refactor doesn't silently drop
   // it. See issues/2026-05-04-1700-opencode-empty-test-files-array-mismarshalled.md.
 
-  /** Capture stderr writes during fn() so the WARN log is observable. */
-  function captureStderr(fn: () => void): string {
-    const original = process.stderr.write.bind(process.stderr);
-    let buf = "";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    process.stderr.write = ((chunk: any) => {
-      buf += typeof chunk === "string" ? chunk : String(chunk);
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      fn();
-    } finally {
-      process.stderr.write = original;
-    }
-    return buf;
-  }
+  const captureStderr = captureStderrSync;
 
   it("coerces test_files: '[]' (string) into []", () => {
     let parsed!: ReturnType<typeof EditToolRequestSchema.safeParse>;

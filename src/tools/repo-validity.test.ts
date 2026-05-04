@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { repoIsValid, assertIsRepo } from "./repo-validity.js";
+import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-repo-validity-"));
+  tmpRoot = makeTmpRoot("repo-validity");
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
 
 describe("repoIsValid", () => {

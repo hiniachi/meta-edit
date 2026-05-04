@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   installMetaEditHooks,
@@ -15,6 +14,7 @@ import {
   type SettingsShape,
 } from "./hooks-cmd.js";
 import { RAW_EDIT_TOOLS } from "../hooks/raw-edit-policy.js";
+import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Drift-prevention tests — pure constant/import checks, NO filesystem setup.
@@ -391,13 +391,13 @@ describe("runInstallHooks (effectful)", () => {
   } as unknown as NodeJS.WritableStream;
 
   beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-hooks-cmd-"));
+    tmpRoot = makeTmpRoot("hooks-cmd");
     collectedOut = [];
     collectedErr = [];
   });
 
   afterEach(() => {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    cleanTmpRoot(tmpRoot);
   });
 
   it("creates settings.json under --scope project", () => {
