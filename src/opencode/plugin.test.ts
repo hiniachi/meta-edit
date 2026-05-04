@@ -6,7 +6,11 @@ import * as path from "node:path";
 
 import {
   createMetaEditPlugin,
+  FALLBACK_ONBOARDING_POINTER,
+  loadDefaultSkillContent,
+  stripFrontmatter,
   summarizeReasonForOpencode,
+  type OpencodeChatSystemTransformOutput,
   type OpencodePluginContext,
   type OpencodeToolBeforeInput,
   type OpencodeToolBeforeOutput,
@@ -359,6 +363,124 @@ describe("opencode plugin audit log", () => {
 // =====================================================================
 // summarizeReasonForOpencode (TUI render-bug mitigation)
 // =====================================================================
+
+// =====================================================================
+// experimental.chat.system.transform — skill onboarding pointer
+// =====================================================================
+
+describe("experimental.chat.system.transform", () => {
+  const FIXTURE_SKILL = "# fixture skill\n- catalog item one\n";
+
+  it("pushes the bundled SKILL.md content into output.system on every chat call", async () => {
+    const plugin = createMetaEditPlugin({ skillContent: FIXTURE_SKILL });
+    const hooks = await plugin(ctx);
+    const out: OpencodeChatSystemTransformOutput = { system: [] };
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "sess-1" },
+      out,
+    );
+    expect(out.system.length).toBe(1);
+    expect(out.system[0]).toBe(FIXTURE_SKILL);
+  });
+
+  it("preserves existing system entries (push, not replace)", async () => {
+    const plugin = createMetaEditPlugin({ skillContent: FIXTURE_SKILL });
+    const hooks = await plugin(ctx);
+    const out: OpencodeChatSystemTransformOutput = {
+      system: ["pre-existing system message from another plugin"],
+    };
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "sess-2" },
+      out,
+    );
+    expect(out.system.length).toBe(2);
+    expect(out.system[0]).toBe("pre-existing system message from another plugin");
+    expect(out.system[1]).toBe(FIXTURE_SKILL);
+  });
+
+  it("fires per-message (no per-session dedup) — opencode rebuilds system per call", async () => {
+    const plugin = createMetaEditPlugin({ skillContent: FIXTURE_SKILL });
+    const hooks = await plugin(ctx);
+    const out1: OpencodeChatSystemTransformOutput = { system: [] };
+    const out2: OpencodeChatSystemTransformOutput = { system: [] };
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "sess-3" },
+      out1,
+    );
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "sess-3" },
+      out2,
+    );
+    expect(out1.system.length).toBe(1);
+    expect(out2.system.length).toBe(1);
+  });
+
+  it("uses the FALLBACK_ONBOARDING_POINTER when injected explicitly", async () => {
+    const plugin = createMetaEditPlugin({
+      skillContent: FALLBACK_ONBOARDING_POINTER,
+    });
+    const hooks = await plugin(ctx);
+    const out: OpencodeChatSystemTransformOutput = { system: [] };
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "sess-fallback" },
+      out,
+    );
+    expect(out.system[0]).toContain("meta-edit MCP server is registered");
+    expect(out.system[0]).toContain("fallback mode");
+  });
+});
+
+describe("FALLBACK_ONBOARDING_POINTER", () => {
+  it("explains the typed_edit_* gate without depending on the SKILL.md", () => {
+    expect(FALLBACK_ONBOARDING_POINTER).toContain("typed_edit_*");
+    expect(FALLBACK_ONBOARDING_POINTER).toMatch(/edit \/ write \/ apply_patch/);
+    expect(FALLBACK_ONBOARDING_POINTER).toContain("fallback mode");
+  });
+
+  it("is reasonably short — system-prompt entry, not full skill content", () => {
+    expect(FALLBACK_ONBOARDING_POINTER.length).toBeLessThan(500);
+  });
+});
+
+describe("stripFrontmatter", () => {
+  it("removes a YAML frontmatter block at the start of the document", () => {
+    const input =
+      "---\nname: typed-edit-onboarding\ndescription: long ...\n---\n# Body\n\nrest";
+    expect(stripFrontmatter(input)).toBe("# Body\n\nrest");
+  });
+
+  it("passes through unchanged when there is no frontmatter", () => {
+    const input = "# Body\n\nno frontmatter here";
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+
+  it("does NOT eat past the close marker even if the body has --- horizontal rules", () => {
+    const input =
+      "---\nname: x\n---\n# Body\n\n---\n\nA horizontal rule above this line is part of the body.";
+    expect(stripFrontmatter(input)).toContain("# Body");
+    expect(stripFrontmatter(input)).toContain("horizontal rule");
+  });
+
+  it("handles CRLF line endings", () => {
+    const input = "---\r\nname: x\r\n---\r\n# Body\r\n";
+    expect(stripFrontmatter(input)).toBe("# Body\r\n");
+  });
+
+  it("returns input unchanged when an opening --- has no matching close", () => {
+    const input = "---\nname: x\n# Body, no close";
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+});
+
+describe("loadDefaultSkillContent", () => {
+  it("loads the bundled SKILL.md and strips its frontmatter", () => {
+    const content = loadDefaultSkillContent();
+    expect(content.startsWith("---")).toBe(false);
+    expect(content.startsWith("name: ")).toBe(false);
+    expect(content).toContain("edit_refactor_only");
+    expect(content).toContain("Selection heuristic");
+  });
+});
 
 describe("summarizeReasonForOpencode", () => {
   it("keeps a short single-sentence reason as-is", () => {

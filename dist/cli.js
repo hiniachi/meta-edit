@@ -18478,7 +18478,7 @@ async function runStdioServer(options = {}) {
 
 // src/cli.ts
 import * as fs9 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // src/cli/parse-since.ts
 var YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -18976,61 +18976,10 @@ import * as crypto5 from "node:crypto";
 import * as fs8 from "node:fs";
 import * as os2 from "node:os";
 import * as path8 from "node:path";
-import { fileURLToPath } from "node:url";
 var META_EDIT_OPENCODE_RESOURCES = {
   mcpServerName: "meta-edit",
-  pluginPackage: "@hiniachi/meta-edit/opencode",
-  skillName: "typed-edit-onboarding"
+  pluginPackage: "@hiniachi/meta-edit/opencode"
 };
-function defaultSkillSourcePath() {
-  const here = path8.dirname(fileURLToPath(import.meta.url));
-  let cur = here;
-  for (let i = 0;i < 4; i++) {
-    const candidate = path8.join(cur, "skills", META_EDIT_OPENCODE_RESOURCES.skillName, "SKILL.md");
-    if (fs8.existsSync(candidate))
-      return candidate;
-    const parent = path8.dirname(cur);
-    if (parent === cur)
-      break;
-    cur = parent;
-  }
-  return path8.join(here, "..", "..", "skills", META_EDIT_OPENCODE_RESOURCES.skillName, "SKILL.md");
-}
-function skillTargetPath(home) {
-  return path8.join(home, ".claude", "skills", META_EDIT_OPENCODE_RESOURCES.skillName, "SKILL.md");
-}
-function installMetaEditSkill(opts) {
-  const source = opts.source ?? defaultSkillSourcePath();
-  const target = skillTargetPath(opts.home);
-  const content = fs8.readFileSync(source, "utf8");
-  let existing = null;
-  try {
-    existing = fs8.readFileSync(target, "utf8");
-  } catch (e) {
-    if (e.code !== "ENOENT")
-      throw e;
-  }
-  if (existing === content)
-    return;
-  fs8.mkdirSync(path8.dirname(target), { recursive: true });
-  fs8.writeFileSync(target, content, { encoding: "utf8", mode: 384 });
-}
-function uninstallMetaEditSkill(opts) {
-  const target = skillTargetPath(opts.home);
-  try {
-    fs8.unlinkSync(target);
-  } catch (e) {
-    if (e.code !== "ENOENT")
-      throw e;
-    return;
-  }
-  const dir = path8.dirname(target);
-  try {
-    const entries = fs8.readdirSync(dir);
-    if (entries.length === 0)
-      fs8.rmdirSync(dir);
-  } catch {}
-}
 function configPathForScope(scope, options = {}) {
   const home = options.home ?? os2.homedir();
   const cwd = options.cwd ?? process.cwd();
@@ -19053,16 +19002,6 @@ function runInstallOpencode(opts) {
   writeConfig(target, updated);
   opts.out.write(`meta-edit: installed opencode mcp + plugin into ${target}
 `);
-  const home = opts.home ?? os2.homedir();
-  try {
-    installMetaEditSkill({ home });
-    const skillTarget = skillTargetPath(home);
-    opts.out.write(`meta-edit: installed typed-edit-onboarding skill into ${skillTarget}
-`);
-  } catch (e) {
-    opts.err.write(`meta-edit: WARN: could not install typed-edit-onboarding skill: ${e.message} (mcp + plugin install succeeded)
-`);
-  }
   return 0;
 }
 function runUninstallOpencode(opts) {
@@ -19084,15 +19023,6 @@ function runUninstallOpencode(opts) {
   writeConfig(target, updated);
   opts.out.write(`meta-edit: removed opencode mcp + plugin from ${target}
 `);
-  const home = opts.home ?? os2.homedir();
-  try {
-    uninstallMetaEditSkill({ home });
-    opts.out.write(`meta-edit: removed typed-edit-onboarding skill from ${skillTargetPath(home)}
-`);
-  } catch (e) {
-    opts.err.write(`meta-edit: WARN: could not remove typed-edit-onboarding skill: ${e.message}
-`);
-  }
   return 0;
 }
 function installMetaEditOpencode(config2) {
@@ -19404,7 +19334,7 @@ function isMainModule() {
     return false;
   try {
     const argv1Real = fs9.realpathSync(process.argv[1]);
-    const moduleReal = fs9.realpathSync(fileURLToPath2(import.meta.url));
+    const moduleReal = fs9.realpathSync(fileURLToPath(import.meta.url));
     return argv1Real === moduleReal;
   } catch {
     return false;
@@ -19422,4 +19352,4 @@ export {
   main
 };
 
-//# debugId=A378B8C686B25F8264756E2164756E21
+//# debugId=F03D5473A2103D0F64756E2164756E21

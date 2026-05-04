@@ -31,6 +31,10 @@
 // `.meta-edit/state/edits.jsonl` are shared with any concurrent
 // MCP-server-side issuer (in-process JS, same filesystem).
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   evaluateTokenedEdit,
   type RawToolInput,
@@ -85,8 +89,25 @@ export type OpencodeToolBeforeHook = (
   output: OpencodeToolBeforeOutput,
 ) => void | Promise<void>;
 
+/** Subset of the `experimental.chat.system.transform` event input. */
+export interface OpencodeChatSystemTransformInput {
+  sessionID?: string;
+}
+
+/** Subset of the `experimental.chat.system.transform` event output. */
+export interface OpencodeChatSystemTransformOutput {
+  /** Lines appended to the LLM system prompt (mutated in place). */
+  system: string[];
+}
+
+export type OpencodeChatSystemTransformHook = (
+  input: OpencodeChatSystemTransformInput,
+  output: OpencodeChatSystemTransformOutput,
+) => void | Promise<void>;
+
 export interface OpencodePluginHooks {
   "tool.execute.before"?: OpencodeToolBeforeHook;
+  "experimental.chat.system.transform"?: OpencodeChatSystemTransformHook;
 }
 
 export type OpencodePlugin = (
@@ -102,6 +123,14 @@ export type OpencodePlugin = (
 export interface CreateMetaEditPluginDeps {
   newEditLog?: (repoRoot: string) => EditLog;
   newGrantsStore?: (repoRoot: string) => GrantsStore;
+  /**
+   * Inject the SKILL.md text the plugin pushes into the system prompt.
+   * Tests pass a fixture string; the default reads
+   * `<package-root>/skills/typed-edit-onboarding/SKILL.md` from the
+   * npm-published bundle. If the file is missing the plugin falls
+   * back to a short pointer (see `FALLBACK_ONBOARDING_POINTER`).
+   */
+  skillContent?: string;
 }
 
 /**
@@ -114,6 +143,10 @@ export function createMetaEditPlugin(
 ): OpencodePlugin {
   const newEditLog = deps.newEditLog ?? ((root: string) => new EditLog(root));
   const newGrantsStore = deps.newGrantsStore ?? createGrantsStore;
+  // Read SKILL.md once, at plugin creation. If the file is missing
+  // (stripped install / unusual layout), fall back to the short pointer
+  // so deny messages still have a referable name.
+  const skillContent = deps.skillContent ?? loadDefaultSkillContent();
 
   return async (ctx) => {
     const repoRoot = ctx.project.worktree;
@@ -197,8 +230,28 @@ export function createMetaEditPlugin(
       // Anything else passes through untouched.
     };
 
+    // -------------------------------------------------------------------
+    // Skill onboarding pointer — opencode equivalent of the Claude Code
+    // SessionStart hook (src/hooks/session-onboarding.ts). opencode
+    // discovers ~/.claude/skills/<name>/SKILL.md but does not auto-surface
+    // skill content into the agent's per-message context the way Claude
+    // Code does. We push a short pointer into the system prompt array on
+    // every chat call (opencode rebuilds the system prompt per message,
+    // so per-message push, not per-session dedup, is the right shape).
+    //
+    // The pointer mirrors the SessionStart additionalContext text but is
+    // condensed to a few lines — the skill description itself is the
+    // authoritative content; we just remind the agent the skill exists.
+    const onSystemTransform: OpencodeChatSystemTransformHook = (
+      _input,
+      output,
+    ) => {
+      output.system.push(skillContent);
+    };
+
     return {
       "tool.execute.before": onToolBefore,
+      "experimental.chat.system.transform": onSystemTransform,
     };
   };
 }
@@ -329,4 +382,87 @@ export function summarizeReasonForOpencode(reason: string): string {
 function throwAbort(reason: string, output: OpencodeToolBeforeOutput): never {
   output.aborted = true;
   throw new Error(summarizeReasonForOpencode(reason));
+}
+
+/**
+ * Fallback onboarding pointer used when the bundled SKILL.md cannot be
+ * read (stripped install / file removed / fs error). The full skill
+ * content is loaded at plugin creation; this string is the safety net
+ * so the agent still sees something explaining the deny gate.
+ *
+ * Exported for tests.
+ */
+export const FALLBACK_ONBOARDING_POINTER = [
+  "meta-edit MCP server is registered for this project.",
+  "Use the typed_edit_* MCP tools — raw edit / write / apply_patch " +
+    "calls are denied by the meta-edit pre-tool hook unless preceded " +
+    "by a typed_edit declaration. Empty-content writes for new files " +
+    "are authorized as a free path.",
+  "(typed-edit-onboarding SKILL.md was not found in the installed " +
+    "package; agent guidance is operating in fallback mode.)",
+].join(" ");
+
+/**
+ * Read the bundled `skills/typed-edit-onboarding/SKILL.md`, strip its
+ * YAML frontmatter, and return the prose body. The frontmatter is
+ * skill-loader metadata — `name` / `description` — which is not useful
+ * inside an opencode system-prompt push, so we drop it.
+ *
+ * On any error (missing file, fs problem, malformed frontmatter) the
+ * fallback pointer is returned so the chat.system.transform hook keeps
+ * working in a degraded mode.
+ *
+ * Exported for tests; the runtime path uses defaultSkillSourcePath.
+ */
+export function loadDefaultSkillContent(): string {
+  try {
+    const raw = fs.readFileSync(defaultSkillSourcePath(), "utf8");
+    return stripFrontmatter(raw).trimStart();
+  } catch {
+    return FALLBACK_ONBOARDING_POINTER;
+  }
+}
+
+/**
+ * Locate <package-root>/skills/typed-edit-onboarding/SKILL.md. Walks
+ * up from this module's location at most 4 levels — works in both dev
+ * (<root>/src/opencode/plugin.ts, walks 2 up) and the published
+ * bundle (<root>/dist/opencode/plugin.js, walks 1 up). Falls back to
+ * a sensible relative path on miss; the caller's try/catch then
+ * promotes to the fallback pointer.
+ */
+function defaultSkillSourcePath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let cur = here;
+  for (let i = 0; i < 4; i++) {
+    const candidate = path.join(
+      cur,
+      "skills",
+      "typed-edit-onboarding",
+      "SKILL.md",
+    );
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return path.join(here, "..", "..", "skills", "typed-edit-onboarding", "SKILL.md");
+}
+
+/**
+ * Drop a leading YAML frontmatter block (--- ... ---) and return the
+ * rest of the document. If the input does not start with --- we pass
+ * through unchanged — defensive against future SKILL.md formats that
+ * don't carry frontmatter.
+ *
+ * Exported for tests.
+ */
+export function stripFrontmatter(text: string): string {
+  if (!text.startsWith("---")) return text;
+  // Match the second --- on its own line. Use a non-greedy body so we
+  // don't eat past the actual close marker if the body happens to
+  // contain --- later (Markdown horizontal rules).
+  const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!m) return text;
+  return text.slice(m[0].length);
 }

@@ -6,13 +6,10 @@ import * as path from "node:path";
 import {
   configPathForScope,
   installMetaEditOpencode,
-  installMetaEditSkill,
   parseOpencodeArgs,
   runInstallOpencode,
   runUninstallOpencode,
-  skillTargetPath,
   uninstallMetaEditOpencode,
-  uninstallMetaEditSkill,
   META_EDIT_OPENCODE_RESOURCES,
   type OpencodeConfigShape,
 } from "./opencode-cmd.js";
@@ -363,178 +360,9 @@ describe("runInstallOpencode (user scope)", () => {
   });
 });
 
-// =====================================================================
-// Skill install / uninstall (typed-edit-onboarding)
-// =====================================================================
-
-function withFixtureSkill(home: string, fn: (source: string) => void): void {
-  // Build a fake "package root" with a valid SKILL.md so we exercise
-  // installMetaEditSkill without depending on the real skills/ dir
-  // (the real one IS shipped with the package, but this isolates the
-  // test from the rest of the tree).
-  const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-fake-pkg-"));
-  const skillDir = path.join(
-    fakeRoot,
-    "skills",
-    META_EDIT_OPENCODE_RESOURCES.skillName,
-  );
-  fs.mkdirSync(skillDir, { recursive: true });
-  const source = path.join(skillDir, "SKILL.md");
-  fs.writeFileSync(source, "# fixture SKILL\n", "utf8");
-  try {
-    fn(source);
-  } finally {
-    fs.rmSync(fakeRoot, { recursive: true, force: true });
-  }
-  // suppress unused var warnings
-  void home;
-}
-
-describe("skillTargetPath", () => {
-  it("resolves to ~/.claude/skills/typed-edit-onboarding/SKILL.md", () => {
-    expect(skillTargetPath("/h")).toBe(
-      path.join("/h", ".claude", "skills", "typed-edit-onboarding", "SKILL.md"),
-    );
-  });
-});
-
-describe("installMetaEditSkill", () => {
-  it("copies the SKILL.md to ~/.claude/skills/typed-edit-onboarding/", () => {
-    withFixtureSkill(tmpHome, (source) => {
-      installMetaEditSkill({ home: tmpHome, source });
-      const target = skillTargetPath(tmpHome);
-      expect(fs.existsSync(target)).toBe(true);
-      expect(fs.readFileSync(target, "utf8")).toBe("# fixture SKILL\n");
-    });
-  });
-
-  it("is idempotent — same content does not bump mtime", () => {
-    withFixtureSkill(tmpHome, (source) => {
-      installMetaEditSkill({ home: tmpHome, source });
-      const target = skillTargetPath(tmpHome);
-      const mtime1 = fs.statSync(target).mtimeMs;
-      // Re-install: should detect identical bytes and skip the write.
-      // Sleep a tiny bit so any rewrite would show up as a different
-      // mtime even on coarse clocks.
-      const until = Date.now() + 25;
-      while (Date.now() < until) {
-        /* spin */
-      }
-      installMetaEditSkill({ home: tmpHome, source });
-      const mtime2 = fs.statSync(target).mtimeMs;
-      expect(mtime2).toBe(mtime1);
-    });
-  });
-
-  it("overwrites a stale SKILL.md (install is the source of truth)", () => {
-    withFixtureSkill(tmpHome, (source) => {
-      const target = skillTargetPath(tmpHome);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, "# stale skill content\n", "utf8");
-      installMetaEditSkill({ home: tmpHome, source });
-      expect(fs.readFileSync(target, "utf8")).toBe("# fixture SKILL\n");
-    });
-  });
-
-  it("throws ENOENT when the source SKILL.md is missing", () => {
-    expect(() =>
-      installMetaEditSkill({ home: tmpHome, source: "/nonexistent/SKILL.md" }),
-    ).toThrow();
-  });
-});
-
-describe("uninstallMetaEditSkill", () => {
-  it("removes SKILL.md and the now-empty parent dir", () => {
-    withFixtureSkill(tmpHome, (source) => {
-      installMetaEditSkill({ home: tmpHome, source });
-      const target = skillTargetPath(tmpHome);
-      uninstallMetaEditSkill({ home: tmpHome });
-      expect(fs.existsSync(target)).toBe(false);
-      expect(fs.existsSync(path.dirname(target))).toBe(false);
-    });
-  });
-
-  it("preserves sibling files in the skill dir (user-added)", () => {
-    withFixtureSkill(tmpHome, (source) => {
-      installMetaEditSkill({ home: tmpHome, source });
-      const target = skillTargetPath(tmpHome);
-      const sibling = path.join(path.dirname(target), "USER_NOTE.md");
-      fs.writeFileSync(sibling, "user note\n");
-      uninstallMetaEditSkill({ home: tmpHome });
-      expect(fs.existsSync(target)).toBe(false);
-      // Sibling preserved → parent dir not removed.
-      expect(fs.existsSync(sibling)).toBe(true);
-    });
-  });
-
-  it("is a no-op when SKILL.md is already absent", () => {
-    expect(() => uninstallMetaEditSkill({ home: tmpHome })).not.toThrow();
-  });
-});
-
-describe("runInstallOpencode skill integration", () => {
-  it("installs the bundled skill alongside the mcp + plugin", () => {
-    // The bundled skill is the real one in the repo's skills/ dir;
-    // defaultSkillSourcePath() walks up from this test file's dir to
-    // the package root and finds it. We trust that's working in dev.
-    const out = new StringStream();
-    const err = new StringStream();
-    runInstallOpencode({
-      scope: "project",
-      cwd: tmpCwd,
-      home: tmpHome,
-      out: asStream(out),
-      err: asStream(err),
-    });
-    const skillTarget = skillTargetPath(tmpHome);
-    expect(fs.existsSync(skillTarget)).toBe(true);
-    expect(out.text).toContain("typed-edit-onboarding skill into");
-  });
-
-  it("does not fail the install if the skill source is somehow missing", () => {
-    // This is a behavior contract: a stripped-down install or a
-    // bad build should not block the user from getting mcp + plugin.
-    // We can't easily simulate "source missing" against the real
-    // package layout, so this test is a placeholder that simply
-    // confirms the install returns 0 in the normal case (covered
-    // above) — and the production code's try/catch is the structural
-    // guarantee.
-    const out = new StringStream();
-    const err = new StringStream();
-    const code = runInstallOpencode({
-      scope: "project",
-      cwd: tmpCwd,
-      home: tmpHome,
-      out: asStream(out),
-      err: asStream(err),
-    });
-    expect(code).toBe(0);
-  });
-});
-
-describe("runUninstallOpencode skill integration", () => {
-  it("removes the installed skill alongside the mcp + plugin", () => {
-    const out = new StringStream();
-    const err = new StringStream();
-    runInstallOpencode({
-      scope: "project",
-      cwd: tmpCwd,
-      home: tmpHome,
-      out: asStream(out),
-      err: asStream(err),
-    });
-    const skillTarget = skillTargetPath(tmpHome);
-    expect(fs.existsSync(skillTarget)).toBe(true);
-    out.text = "";
-    err.text = "";
-    runUninstallOpencode({
-      scope: "project",
-      cwd: tmpCwd,
-      home: tmpHome,
-      out: asStream(out),
-      err: asStream(err),
-    });
-    expect(fs.existsSync(skillTarget)).toBe(false);
-    expect(out.text).toContain("removed typed-edit-onboarding skill from");
-  });
-});
+// (Skill install / uninstall tests removed in v0.5+:
+// install-opencode no longer copies a SKILL.md into ~/.claude/skills/.
+// The bundled SKILL.md is loaded by the opencode plugin at runtime and
+// pushed into the chat system prompt directly — see
+// src/opencode/plugin.test.ts for `loadDefaultSkillContent` /
+// `experimental.chat.system.transform` coverage.)

@@ -43,6 +43,11 @@ var __export = (target, all) => {
     });
 };
 
+// src/opencode/plugin.ts
+import * as fs8 from "node:fs";
+import * as path9 from "node:path";
+import { fileURLToPath } from "node:url";
+
 // src/hooks/raw-edit-policy.ts
 import * as crypto3 from "node:crypto";
 import * as fs6 from "node:fs/promises";
@@ -7284,6 +7289,7 @@ function toCanonicalRawEditName(name) {
 function createMetaEditPlugin(deps = {}) {
   const newEditLog = deps.newEditLog ?? ((root) => new EditLog(root));
   const newGrantsStore = deps.newGrantsStore ?? createGrantsStore;
+  const skillContent = deps.skillContent ?? loadDefaultSkillContent();
   return async (ctx) => {
     const repoRoot = ctx.project.worktree;
     const log = newEditLog(repoRoot);
@@ -7327,8 +7333,12 @@ function createMetaEditPlugin(deps = {}) {
         return;
       }
     };
+    const onSystemTransform = (_input, output) => {
+      output.system.push(skillContent);
+    };
     return {
-      "tool.execute.before": onToolBefore
+      "tool.execute.before": onToolBefore,
+      "experimental.chat.system.transform": onSystemTransform
     };
   };
 }
@@ -7375,10 +7385,48 @@ function throwAbort(reason, output) {
   output.aborted = true;
   throw new Error(summarizeReasonForOpencode(reason));
 }
+var FALLBACK_ONBOARDING_POINTER = [
+  "meta-edit MCP server is registered for this project.",
+  "Use the typed_edit_* MCP tools — raw edit / write / apply_patch " + "calls are denied by the meta-edit pre-tool hook unless preceded " + "by a typed_edit declaration. Empty-content writes for new files " + "are authorized as a free path.",
+  "(typed-edit-onboarding SKILL.md was not found in the installed " + "package; agent guidance is operating in fallback mode.)"
+].join(" ");
+function loadDefaultSkillContent() {
+  try {
+    const raw = fs8.readFileSync(defaultSkillSourcePath(), "utf8");
+    return stripFrontmatter(raw).trimStart();
+  } catch {
+    return FALLBACK_ONBOARDING_POINTER;
+  }
+}
+function defaultSkillSourcePath() {
+  const here = path9.dirname(fileURLToPath(import.meta.url));
+  let cur = here;
+  for (let i = 0;i < 4; i++) {
+    const candidate = path9.join(cur, "skills", "typed-edit-onboarding", "SKILL.md");
+    if (fs8.existsSync(candidate))
+      return candidate;
+    const parent = path9.dirname(cur);
+    if (parent === cur)
+      break;
+    cur = parent;
+  }
+  return path9.join(here, "..", "..", "skills", "typed-edit-onboarding", "SKILL.md");
+}
+function stripFrontmatter(text) {
+  if (!text.startsWith("---"))
+    return text;
+  const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!m)
+    return text;
+  return text.slice(m[0].length);
+}
 export {
   summarizeReasonForOpencode,
+  stripFrontmatter,
+  loadDefaultSkillContent,
   plugin_default as default,
-  createMetaEditPlugin
+  createMetaEditPlugin,
+  FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=4EB931A039948D8A64756E2164756E21
+//# debugId=BD63553C840C5A3164756E2164756E21
