@@ -1,34 +1,23 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createServer } from "./server.js";
+import { makeTmpRoot, cleanTmpRoot, captureStderr } from "./test-helpers.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function mkTmpDir(suffix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `meta-edit-srv-${suffix}-`));
-}
-
-// A directory that looks like a git repo (has a .git sentinel).
 function mkGitRepo(): string {
-  const dir = mkTmpDir("repo");
+  const dir = makeTmpRoot("srv-repo");
   fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
   return dir;
 }
 
-// A directory that looks like a jj repo.
 function mkJjRepo(): string {
-  const dir = mkTmpDir("jjrepo");
+  const dir = makeTmpRoot("srv-jjrepo");
   fs.mkdirSync(path.join(dir, ".jj"), { recursive: true });
   return dir;
 }
 
-// A directory with no repo sentinel.
 function mkBareDir(): string {
-  return mkTmpDir("bare");
+  return makeTmpRoot("srv-bare");
 }
 
 // ---------------------------------------------------------------------------
@@ -53,9 +42,9 @@ describe("createServer repoRoot validation", () => {
   });
 
   afterAll(() => {
-    fs.rmSync(gitRepo, { recursive: true, force: true });
-    fs.rmSync(jjRepo, { recursive: true, force: true });
-    fs.rmSync(bareDir, { recursive: true, force: true });
+    cleanTmpRoot(gitRepo);
+    cleanTmpRoot(jjRepo);
+    cleanTmpRoot(bareDir);
   });
 
   it("succeeds when repoRoot contains a .git directory", () => {
@@ -67,44 +56,39 @@ describe("createServer repoRoot validation", () => {
   });
 
   it("does NOT throw on a non-repo directory (issue 1530 — lazy check)", () => {
-    // Capture stderr to avoid the advisory line bleeding into test output.
-    const origWrite = process.stderr.write.bind(process.stderr);
-    let stderrBuf = "";
-    (process.stderr as unknown as { write: (s: string) => boolean }).write = (
-      s: string,
-    ) => {
-      stderrBuf += s;
-      return true;
-    };
-    try {
+    const stderrBuf = captureStderr(() => {
       expect(() => createServer({ repoRoot: bareDir })).not.toThrow();
-      // The advisory must still surface so the operator sees the
-      // misconfiguration without waiting for the first failed call.
-      expect(stderrBuf).toContain("does not appear to be a repository root");
-    } finally {
-      (process.stderr as unknown as { write: typeof origWrite }).write =
-        origWrite;
-    }
+    });
+    expect(stderrBuf).toContain("does not appear to be a repository root");
   });
 
   it("does NOT throw on a freshly-created tmp dir with no sentinel", () => {
-    // Mirrors the production onboarding flow described in issue 1530:
-    // user starts Claude Code in a fresh dir, MCP server connects.
-    // We must reach ListTools (so descriptions land); per-tool calls
-    // get rejected later by validateRequest, not by a synchronous throw
-    // in createServer.
-    const isolatedTmp = fs.mkdtempSync(
-      path.join(os.tmpdir(), "meta-edit-srv-notrepo-"),
-    );
-    const origWrite = process.stderr.write.bind(process.stderr);
-    (process.stderr as unknown as { write: (s: string) => boolean }).write =
-      () => true;
+    const isolatedTmp = makeTmpRoot("srv-notrepo");
     try {
-      expect(() => createServer({ repoRoot: isolatedTmp })).not.toThrow();
+      captureStderr(() => {
+        expect(() => createServer({ repoRoot: isolatedTmp })).not.toThrow();
+      });
     } finally {
-      (process.stderr as unknown as { write: typeof origWrite }).write =
-        origWrite;
-      fs.rmSync(isolatedTmp, { recursive: true, force: true });
+      cleanTmpRoot(isolatedTmp);
+    }
+  });
+
+  it("returns a Server instance with request handlers registered", () => {
+    const server = createServer({ repoRoot: gitRepo });
+    expect(server).toBeDefined();
+    expect(typeof server.connect).toBe("function");
+  });
+
+  it("defaults repoRoot to process.cwd() when no options provided", () => {
+    const origCwd = process.cwd();
+    process.chdir(gitRepo);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer()).not.toThrow();
+      });
+      expect(stderrBuf).not.toContain("does not appear to be");
+    } finally {
+      process.chdir(origCwd);
     }
   });
 });

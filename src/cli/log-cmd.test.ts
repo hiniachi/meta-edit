@@ -5,26 +5,7 @@ import * as path from "node:path";
 import { filterEntries, parseLogArgs, runLogCommand } from "./log-cmd.js";
 import { EditLog, type IssuedEntry } from "../state/edit-log.js";
 import type { EditLogEntry } from "../state/edit-log.js";
-
-const HEX64_A = "a".repeat(64);
-
-function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
-  return {
-    edit_id: "edit_20260430_0001",
-    ts: "2026-04-30T10:00:00+09:00",
-    phase: "issued",
-    kind: "edit_boundary_condition",
-    target_file: "src/foo.ts",
-    rationale: "test",
-    risk_level: "medium",
-    test_files: ["tests/foo.test.ts"],
-    binding: [
-      { file: "src/foo.ts", before_sha256: HEX64_A },
-    ],
-    token: "met_20260430_0123456789",
-    ...overrides,
-  };
-}
+import { issued, makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 describe("filterEntries", () => {
   const all: EditLogEntry[] = [
@@ -214,7 +195,7 @@ describe("parseLogArgs", () => {
 // ---------------------------------------------------------------------------
 
 function tmpRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-ansi-"));
+  const dir = makeTmpRoot("ansi");
   fs.mkdirSync(path.join(dir, ".meta-edit", "state"), { recursive: true });
   return dir;
 }

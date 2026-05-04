@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -17,29 +15,31 @@ import {
 } from "./plugin.js";
 import { createGrantsStore } from "../state/grants.js";
 import { EditLog } from "../state/edit-log.js";
+import {
+  makeTmpRoot,
+  cleanTmpRoot,
+  writeFileIn,
+  sha256Hex,
+  captureStderrAsync,
+} from "../test-helpers.js";
 
 let tmpRoot: string;
 let ctx: OpencodePluginContext;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-opencode-plugin-"));
+  tmpRoot = makeTmpRoot("opencode-plugin");
   fs.mkdirSync(path.join(tmpRoot, ".git"));
   ctx = { project: { worktree: tmpRoot } };
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
 
-function sha256(content: string): string {
-  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
-}
+const sha256 = sha256Hex;
 
 function writeFile(rel: string, content: string): string {
-  const abs = path.join(tmpRoot, rel);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, content, "utf8");
-  return abs;
+  return writeFileIn(tmpRoot, rel, content);
 }
 
 async function callBefore(
@@ -56,22 +56,7 @@ async function callBefore(
   }
 }
 
-/** Capture stderr writes during `fn()`. */
-async function captureStderr(fn: () => Promise<void>): Promise<string> {
-  const original = process.stderr.write.bind(process.stderr);
-  let buf = "";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  process.stderr.write = ((chunk: any) => {
-    buf += typeof chunk === "string" ? chunk : String(chunk);
-    return true;
-  }) as typeof process.stderr.write;
-  try {
-    await fn();
-  } finally {
-    process.stderr.write = original;
-  }
-  return buf;
-}
+const captureStderr = captureStderrAsync;
 
 // =====================================================================
 // Branch 1: opencode raw-edit primitives → evaluateTokenedEdit

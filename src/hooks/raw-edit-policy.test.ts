@@ -28,7 +28,6 @@
 // scope) before lookup. Tests below reflect the simplified flow.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -45,28 +44,23 @@ import {
   type GrantBinding,
   type GrantsStore,
 } from "../state/grants.js";
+import { makeTmpRoot, cleanTmpRoot, writeFileIn, sha256Hex } from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-rawhook-"));
-  // Make tmpRoot look repo-shaped so any path-safety checks see a sensible root.
+  tmpRoot = makeTmpRoot("rawhook");
   fs.mkdirSync(path.join(tmpRoot, ".git"));
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
 
-function sha256(content: string): string {
-  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
-}
+const sha256 = sha256Hex;
 
 function writeFile(rel: string, content: string): string {
-  const abs = path.join(tmpRoot, rel);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, content, "utf8");
-  return abs;
+  return writeFileIn(tmpRoot, rel, content);
 }
 
 async function issueGrant(

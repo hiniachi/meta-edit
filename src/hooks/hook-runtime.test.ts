@@ -6,6 +6,10 @@ import {
   replyAllowWithWarning,
   replyDeny,
 } from "./hook-runtime.js";
+import {
+  captureStdout,
+  captureStderr,
+} from "../test-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Helper: temporarily replace process.stdin with a mock Readable.
@@ -78,39 +82,6 @@ describe("readStdin — fail-closed behaviour", () => {
 // silently change deny into "no opinion / allow" with nothing breaking.
 // ---------------------------------------------------------------------------
 
-function captureStdout(fn: () => unknown): string {
-  const chunks: string[] = [];
-  const original = process.stdout.write.bind(process.stdout);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (process.stdout as any).write = (chunk: any) => {
-    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-    return true;
-  };
-  try {
-    fn();
-  } finally {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (process.stdout as any).write = original;
-  }
-  return chunks.join("");
-}
-
-function captureStderr(fn: () => unknown): string {
-  const chunks: string[] = [];
-  const original = process.stderr.write.bind(process.stderr);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (process.stderr as any).write = (chunk: any) => {
-    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-    return true;
-  };
-  try {
-    fn();
-  } finally {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (process.stderr as any).write = original;
-  }
-  return chunks.join("");
-}
 
 describe("replyDeny — stdout JSON shape", () => {
   it("emits hookSpecificOutput.permissionDecision === 'deny' with the supplied reason", () => {

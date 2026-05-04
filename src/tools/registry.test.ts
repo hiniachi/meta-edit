@@ -1,11 +1,16 @@
-import { describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   TOOL_NAMES,
   TOOL_DESCRIPTIONS,
   TOOLS_REQUIRING_TEST_FILES,
 } from "./descriptions.js";
+import { registerTools, type RegisterToolsOptions } from "./registry.js";
+import type { EditToolRequest, EditToolResult } from "./common.js";
+import type { ToolName } from "./descriptions.js";
+import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 describe("eighteen tools", () => {
   it("registers exactly eighteen tool names", () => {
@@ -64,6 +69,33 @@ describe("eighteen tools", () => {
     }
   });
 
+  it("TOOLS_REQUIRING_TEST_FILES contains no tools that are in the explicit exempt set", () => {
+    const exempt = ["edit_refactor_only", "edit_test_only_change", "edit_docs_only"];
+    for (const name of exempt) {
+      expect(TOOLS_REQUIRING_TEST_FILES).not.toContain(name);
+    }
+  });
+
+  it("every tool in TOOL_NAMES is either in TOOLS_REQUIRING_TEST_FILES or in the explicit exempt set", () => {
+    const exempt = new Set(["edit_refactor_only", "edit_test_only_change", "edit_docs_only"]);
+    for (const name of TOOL_NAMES) {
+      const required = TOOLS_REQUIRING_TEST_FILES.includes(name);
+      const exempted = exempt.has(name);
+      expect(required || exempted).toBe(true);
+    }
+  });
+
+  it("all tools in the explicit exempt set are present in TOOL_NAMES", () => {
+    const exempt = ["edit_refactor_only", "edit_test_only_change", "edit_docs_only"];
+    for (const name of exempt) {
+      expect(TOOL_NAMES).toContain(name as typeof TOOL_NAMES[number]);
+    }
+  });
+
+  it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
+    expect(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 3);
+  });
+
   it("includes the universal General principles block verbatim in every description", () => {
     // Per the v0.1.2 policy change: every edit_* tool description must
     // carry the same three-line block so the agent reads the same text
@@ -79,5 +111,96 @@ describe("eighteen tools", () => {
       const desc = TOOL_DESCRIPTIONS[name];
       expect(desc).toContain(principlesBlock);
     }
+  });
+});
+
+// =====================================================================
+// registerTools — CallToolRequest handler paths
+// =====================================================================
+
+describe("registerTools — CallToolRequest handler", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = makeTmpRoot("registry");
+    fs.mkdirSync(path.join(tmpRoot, ".git"));
+  });
+
+  afterEach(() => {
+    cleanTmpRoot(tmpRoot);
+  });
+
+  function makeServerWithMockHandler(): {
+    server: Server;
+    calls: Array<{ tool: ToolName; args: EditToolRequest }>;
+  } {
+    const calls: Array<{ tool: ToolName; args: EditToolRequest }> = [];
+    const server = new Server(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    const mockHandler = async (
+      tool: ToolName,
+      args: EditToolRequest,
+    ): Promise<EditToolResult> => {
+      calls.push({ tool, args });
+      return {
+        token: "met_20260505_test000000",
+        expires_at: "2026-05-05T00:00:00Z",
+        edit_id: "edit_20260505_0001",
+        warnings: [],
+      };
+    };
+    registerTools(server, {
+      context: { repoRoot: tmpRoot },
+      handler: mockHandler,
+    });
+    return { server, calls };
+  }
+
+  it("returns isError=true for unknown tool name", async () => {
+    const { server } = makeServerWithMockHandler();
+    const handler = (server as unknown as { _requestHandlers: Map<string, (req: unknown) => Promise<unknown>> })._requestHandlers.get("tools/call");
+    if (!handler) throw new Error("CallToolRequest handler not registered");
+    const result = await handler({
+      method: "tools/call",
+      params: { name: "not_a_real_tool", arguments: {} },
+    }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Unknown tool");
+  });
+
+  it("returns isError=true for invalid arguments (missing required fields)", async () => {
+    const { server } = makeServerWithMockHandler();
+    const handler = (server as unknown as { _requestHandlers: Map<string, (req: unknown) => Promise<unknown>> })._requestHandlers.get("tools/call");
+    if (!handler) throw new Error("CallToolRequest handler not registered");
+    const result = await handler({
+      method: "tools/call",
+      params: { name: "edit_boundary_condition", arguments: {} },
+    }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Invalid arguments");
+  });
+
+  it("dispatches valid request to the handler and returns JSON result", async () => {
+    const { server, calls } = makeServerWithMockHandler();
+    const handler = (server as unknown as { _requestHandlers: Map<string, (req: unknown) => Promise<unknown>> })._requestHandlers.get("tools/call");
+    if (!handler) throw new Error("CallToolRequest handler not registered");
+    const result = await handler({
+      method: "tools/call",
+      params: {
+        name: "edit_boundary_condition",
+        arguments: {
+          target_file: "src/foo.ts",
+          rationale: "test",
+          risk_level: "medium",
+          test_files: ["tests/foo.test.ts"],
+        },
+      },
+    }) as { content: Array<{ text: string }> };
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.tool).toBe("edit_boundary_condition");
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.token).toBe("met_20260505_test000000");
   });
 });

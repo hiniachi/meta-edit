@@ -1,66 +1,28 @@
 import { afterEach, beforeEach, describe, it, expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   EditLog,
   isoTimestamp,
   type IssuedEntry,
-  type ConsumedEntry,
-  type RejectedEntry,
 } from "./edit-log.js";
+import {
+  makeTmpRoot,
+  cleanTmpRoot,
+  issued,
+  consumed,
+  rejected,
+} from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-log-"));
+  tmpRoot = makeTmpRoot("log");
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
-
-const HEX64_A = "a".repeat(64);
-
-function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
-  return {
-    edit_id: "edit_20260430_0001",
-    ts: "2026-04-30T10:00:00+09:00",
-    phase: "issued",
-    kind: "edit_boundary_condition",
-    target_file: "src/foo.ts",
-    rationale: "test",
-    risk_level: "medium",
-    test_files: ["tests/foo.test.ts"],
-    binding: [
-      { file: "src/foo.ts", before_sha256: HEX64_A },
-    ],
-    token: "met_20260430_0123456789",
-    ...overrides,
-  };
-}
-
-function consumed(overrides: Partial<ConsumedEntry> = {}): ConsumedEntry {
-  return {
-    edit_id: "edit_20260430_0001",
-    ts: "2026-04-30T10:00:11+09:00",
-    phase: "consumed",
-    consuming_tool: "Edit",
-    ...overrides,
-  };
-}
-
-function rejected(overrides: Partial<RejectedEntry> = {}): RejectedEntry {
-  return {
-    edit_id: "edit_20260430_0002",
-    ts: "2026-04-30T10:01:00+09:00",
-    phase: "rejected",
-    kind: "edit_boundary_condition",
-    target_file: "src/foo.ts",
-    audit_error: "test_files must be non-empty",
-    ...overrides,
-  };
-}
 
 describe("EditLog.nextEditId", () => {
   it("starts at 0001 on a fresh log", () => {

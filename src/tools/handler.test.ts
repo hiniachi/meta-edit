@@ -17,7 +17,6 @@
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { makeIssuingHandler } from "./apply.js";
 import {
@@ -29,25 +28,21 @@ import {
 import { EditLog } from "../state/edit-log.js";
 import { createGrantsStore } from "../state/grants.js";
 import type { ToolName } from "./descriptions.js";
+import { makeTmpRoot, cleanTmpRoot, writeFileIn } from "../test-helpers.js";
 
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-handler-"));
-  // We want the path-safety realpath() walk to land inside tmpRoot. Make it a
-  // valid-looking repo root by giving it a `.git` sentinel — server.ts gates
-  // on this but the tools layer does not; harmless either way.
+  tmpRoot = makeTmpRoot("handler");
   fs.mkdirSync(path.join(tmpRoot, ".git"));
 });
 
 afterEach(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanTmpRoot(tmpRoot);
 });
 
 function writeFile(rel: string, content: string): void {
-  const abs = path.join(tmpRoot, rel);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, content, "utf8");
+  writeFileIn(tmpRoot, rel, content);
 }
 
 function makeHandler(): {
@@ -297,5 +292,66 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     // only target so each missing file produces a warning.
     expect(result.token).toBe("");
     expect(result.warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("makeIssuingHandler — grants.issue failure", () => {
+  it("returns empty token and audit_error when grants.issue throws", async () => {
+    writeFile("src/foo.ts", "hello\n");
+    const ctx: ValidationContext = { repoRoot: tmpRoot };
+    const log = new EditLog(tmpRoot);
+    const failingGrants = {
+      async issue() {
+        throw new Error("simulated disk full");
+      },
+      async lookup() { return null; },
+      async consume() { return { consumed: false, fully_consumed: false }; },
+      async findActiveBindingForFile() { return null; },
+      async reapExpired() { return 0; },
+    };
+    const handler = makeIssuingHandler({ ctx, log, grants: failingGrants as ReturnType<typeof createGrantsStore> });
+    const result = await handler("edit_boundary_condition", modifyRequest());
+    expect(result.token).toBe("");
+    expect(result.warnings.some((w) => w.includes("grants.issue failed"))).toBe(true);
+    expect(result.audit_error).toContain("grants.issue failed");
+    expect(result.audit_error).toContain("simulated disk full");
+  });
+});
+
+describe("makeIssuingHandler — edit log append failures", () => {
+  it("returns audit_error when appendIssued throws (persistence failure)", async () => {
+    writeFile("src/foo.ts", "hello\n");
+    const ctx: ValidationContext = { repoRoot: tmpRoot };
+    const log = new EditLog(tmpRoot);
+    const grants = createGrantsStore(tmpRoot);
+    const originalAppend = log.appendIssued.bind(log);
+    let callCount = 0;
+    log.appendIssued = (entry: Parameters<typeof log.appendIssued>[0]) => {
+      callCount++;
+      throw new Error("simulated ENOSPC");
+    };
+    const handler = makeIssuingHandler({ ctx, log, grants });
+    const result = await handler("edit_boundary_condition", modifyRequest());
+    expect(callCount).toBe(1);
+    expect(result.token.length).toBeGreaterThan(0);
+    expect(result.audit_error).toContain("failed to append edit log entry");
+    expect(result.audit_error).toContain("simulated ENOSPC");
+  });
+
+  it("returns audit_error when appendRejected throws (double failure)", async () => {
+    const ctx: ValidationContext = { repoRoot: tmpRoot };
+    const log = new EditLog(tmpRoot);
+    const grants = createGrantsStore(tmpRoot);
+    log.appendRejected = () => {
+      throw new Error("simulated write error");
+    };
+    const handler = makeIssuingHandler({ ctx, log, grants });
+    const result = await handler(
+      "edit_boundary_condition",
+      modifyRequest({ rationale: "   " }),
+    );
+    expect(result.token).toBe("");
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.audit_error).toContain("failed to append edit log entry");
   });
 });
