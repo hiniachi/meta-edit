@@ -93,7 +93,7 @@ describe("eighteen tools", () => {
   });
 
   it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
-    expect(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 3);
+    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 3);
   });
 
   it("includes the universal General principles block verbatim in every description", () => {
