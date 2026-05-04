@@ -17303,12 +17303,29 @@ var MAX_ADDITIONAL_FILES = 32;
 var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
   "edit_docs_only"
 ];
+function coerceJsonStringToArray(fieldName) {
+  return (v) => {
+    if (typeof v !== "string")
+      return v;
+    let parsed;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      return v;
+    }
+    if (!Array.isArray(parsed))
+      return v;
+    process.stderr.write(`[meta-edit] WARN: coerced ${fieldName} JSON-string to array (opencode harness mis-marshaling); ` + `see issues/2026-05-04-1700-opencode-empty-test-files-array-mismarshalled.md
+`);
+    return parsed;
+  };
+}
 var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
-  test_files: exports_external.array(exports_external.string()),
-  additional_files: exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES).optional()
+  test_files: exports_external.preprocess(coerceJsonStringToArray("test_files"), exports_external.array(exports_external.string())),
+  additional_files: exports_external.preprocess(coerceJsonStringToArray("additional_files"), exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES)).optional()
 }).strict();
 function sha256Hex(content) {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
@@ -18479,4 +18496,4 @@ export {
   createServer
 };
 
-//# debugId=1C5A4DA8716BE7C764756E2164756E21
+//# debugId=31D02078A89833DB64756E2164756E21
