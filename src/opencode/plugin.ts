@@ -269,14 +269,64 @@ function pickString(
 }
 
 /**
+ * Squash a long, multi-clause Claude Code-style deny reason into a
+ * single short sentence opencode's TUI can render cleanly above the
+ * input bar.
+ *
+ * Background: opencode (v1.14.x) renders thrown plugin errors near the
+ * bottom of the screen and overlaps long error text with the input
+ * widget. Backtick-quoted code spans (`mcp meta-edit edit`) make this
+ * worse because the markdown renderer assigns them inline-code width
+ * that the layout engine miscounts. Other MCP servers exhibit the
+ * same overlap, so the bug is upstream — see TODO upstream link in
+ * README. As a meta-edit-side mitigation we:
+ *
+ *   1. Take only the first sentence (split on `.` / `。` followed by
+ *      whitespace). Subsequent sentences carry recovery hints
+ *      (ToolSearch, edit_* etc.) — the agent already has the typed
+ *      surface available; stripping the hint is acceptable cost vs the
+ *      visual annoyance.
+ *   2. Strip backticks → plain words. The information is preserved;
+ *      the rendering hint is gone.
+ *   3. Hard cap at 160 chars with ellipsis as a last resort.
+ *
+ * The canonical multi-clause reason in `raw-edit-policy.ts` is
+ * unchanged — Claude Code's hook continues to surface the full text.
+ */
+export function summarizeReasonForOpencode(reason: string): string {
+  const noBackticks = reason.replace(/`/g, "");
+  // Split on the first sentence terminator. Two patterns:
+  //   - Japanese 。 → split immediately after (no whitespace needed; CJK
+  //     prose runs sentences continuously).
+  //   - English . → require a following `\s+[A-Z]` so common
+  //     abbreviations (`e.g. query`, `i.e. opencode`) do not falsely
+  //     terminate. This is heuristic but covers the deny-reason corpus
+  //     in raw-edit-policy.ts.
+  const jp = noBackticks.match(/^[\s\S]*?。/);
+  let firstSentence: string;
+  if (jp) {
+    firstSentence = jp[0];
+  } else {
+    const en = noBackticks.match(/^[\s\S]*?\.(?=\s+[A-Z])/);
+    firstSentence = en ? en[0] : noBackticks;
+  }
+  if (firstSentence.length <= 160) return firstSentence;
+  return firstSentence.slice(0, 157) + "...";
+}
+
+/**
  * Throw an abort error in the shape opencode's plugin runtime expects.
  * As of this writing the documented contract is to throw; the function
  * also sets `output.aborted = true` defensively so a future opencode
  * release that switches to inspect-output-then-abort (R2 in the macro
  * plan) still aborts the call without touching this call site. The
  * extra property is harmless on the throw-only contract.
+ *
+ * The reason is squashed via `summarizeReasonForOpencode` first to
+ * mitigate an opencode TUI rendering bug that causes long deny
+ * messages to overlap with the input bar.
  */
 function throwAbort(reason: string, output: OpencodeToolBeforeOutput): never {
   output.aborted = true;
-  throw new Error(reason);
+  throw new Error(summarizeReasonForOpencode(reason));
 }

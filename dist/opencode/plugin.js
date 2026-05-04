@@ -7357,13 +7357,28 @@ function pickString(args, key) {
   const v = args[key];
   return typeof v === "string" ? v : undefined;
 }
+function summarizeReasonForOpencode(reason) {
+  const noBackticks = reason.replace(/`/g, "");
+  const jp = noBackticks.match(/^[\s\S]*?。/);
+  let firstSentence;
+  if (jp) {
+    firstSentence = jp[0];
+  } else {
+    const en = noBackticks.match(/^[\s\S]*?\.(?=\s+[A-Z])/);
+    firstSentence = en ? en[0] : noBackticks;
+  }
+  if (firstSentence.length <= 160)
+    return firstSentence;
+  return firstSentence.slice(0, 157) + "...";
+}
 function throwAbort(reason, output) {
   output.aborted = true;
-  throw new Error(reason);
+  throw new Error(summarizeReasonForOpencode(reason));
 }
 export {
+  summarizeReasonForOpencode,
   plugin_default as default,
   createMetaEditPlugin
 };
 
-//# debugId=CB96B36FA17AD2F964756E2164756E21
+//# debugId=4EB931A039948D8A64756E2164756E21

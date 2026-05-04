@@ -6,6 +6,7 @@ import * as path from "node:path";
 
 import {
   createMetaEditPlugin,
+  summarizeReasonForOpencode,
   type OpencodePluginContext,
   type OpencodeToolBeforeInput,
   type OpencodeToolBeforeOutput,
@@ -352,5 +353,65 @@ describe("opencode plugin audit log", () => {
     if (consumed && consumed.phase === "consumed") {
       expect(consumed.consuming_tool).toBe("Edit"); // canonical name
     }
+  });
+});
+
+// =====================================================================
+// summarizeReasonForOpencode (TUI render-bug mitigation)
+// =====================================================================
+
+describe("summarizeReasonForOpencode", () => {
+  it("keeps a short single-sentence reason as-is", () => {
+    const r = "denied: not a thing";
+    expect(summarizeReasonForOpencode(r)).toBe(r);
+  });
+
+  it("trims to the first sentence on a multi-sentence reason", () => {
+    const r =
+      'meta-edit denies raw "edit"; use a typed edit_* MCP tool. ' +
+      "If the typed_edit tool schemas are not loaded in your tool list, " +
+      "use ToolSearch to load them before declaring.";
+    const out = summarizeReasonForOpencode(r);
+    expect(out.endsWith("MCP tool.")).toBe(true);
+    expect(out).not.toContain("ToolSearch");
+  });
+
+  it("strips backticks (opencode TUI renders inline-code spans badly)", () => {
+    const r =
+      "use ToolSearch (e.g. query `mcp meta-edit edit` " +
+      "or `select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only`).";
+    const out = summarizeReasonForOpencode(r);
+    expect(out).not.toContain("`");
+    expect(out).toContain("mcp meta-edit edit");
+  });
+
+  it("hard-caps at 160 chars with ellipsis when the first sentence is long", () => {
+    const r = "x".repeat(300) + ".";
+    const out = summarizeReasonForOpencode(r);
+    expect(out.length).toBe(160);
+    expect(out.endsWith("...")).toBe(true);
+  });
+
+  it("works on Japanese sentences (terminator: 。)", () => {
+    const r = "宣言が見つかりませんでした。再度宣言してください。";
+    const out = summarizeReasonForOpencode(r);
+    expect(out).toBe("宣言が見つかりませんでした。");
+  });
+
+  it("squashes the canonical apply_patch deny to its first sentence", () => {
+    // Anti-regression: real reason text from raw-edit-policy.ts
+    // step 0a. The agent should still see "apply_patch" and
+    // "unified-diff" in the squashed form.
+    const r =
+      'meta-edit denies "apply_patch": its unified-diff input has no ' +
+      "top-level file_path to bind a typed_edit declaration against. " +
+      "Use the opencode `edit` or `write` tool (which DO carry " +
+      "file_path) after a typed_edit declaration, or invoke a typed " +
+      "edit_* MCP tool directly.";
+    const out = summarizeReasonForOpencode(r);
+    expect(out).toContain("apply_patch");
+    expect(out).toContain("unified-diff");
+    expect(out).not.toContain("`");
+    expect(out.length).toBeLessThanOrEqual(160);
   });
 });

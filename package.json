@@ -20,6 +20,7 @@
     "docs/SPEC.md",
     ".claude-plugin/",
     "hooks/",
+    "skills/",
     "README.md",
     "LICENSE"
   ],

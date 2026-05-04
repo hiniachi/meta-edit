@@ -18383,6 +18383,7 @@ var package_default = {
     "docs/SPEC.md",
     ".claude-plugin/",
     "hooks/",
+    "skills/",
     "README.md",
     "LICENSE"
   ],
@@ -18478,4 +18479,4 @@ export {
   createServer
 };
 
-//# debugId=2022F9D0BFF16C0664756E2164756E21
+//# debugId=023E21992617902264756E2164756E21
