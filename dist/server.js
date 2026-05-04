@@ -18363,7 +18363,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.3.1",
+  version: "0.4.0",
   description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18479,4 +18479,4 @@ export {
   createServer
 };
 
-//# debugId=023E21992617902264756E2164756E21
+//# debugId=1C5A4DA8716BE7C764756E2164756E21
