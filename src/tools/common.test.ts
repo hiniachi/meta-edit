@@ -118,6 +118,114 @@ describe("EditToolRequestSchema — zod surface", () => {
   });
 });
 
+describe("EditToolRequestSchema — opencode JSON-string array coercion", () => {
+  // opencode v1.14.x mis-marshals empty `[]` array arguments as the
+  // JSON-string `"[]"`. The schema accepts either form; tests pin the
+  // coercion behavior so a future zod / refactor doesn't silently drop
+  // it. See issues/2026-05-04-1700-opencode-empty-test-files-array-mismarshalled.md.
+
+  /** Capture stderr writes during fn() so the WARN log is observable. */
+  function captureStderr(fn: () => void): string {
+    const original = process.stderr.write.bind(process.stderr);
+    let buf = "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    process.stderr.write = ((chunk: any) => {
+      buf += typeof chunk === "string" ? chunk : String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      fn();
+    } finally {
+      process.stderr.write = original;
+    }
+    return buf;
+  }
+
+  it("coerces test_files: '[]' (string) into []", () => {
+    let parsed!: ReturnType<typeof EditToolRequestSchema.safeParse>;
+    const stderr = captureStderr(() => {
+      parsed = EditToolRequestSchema.safeParse({
+        target_file: "docs/a.md",
+        rationale: "ok",
+        risk_level: "low",
+        test_files: "[]" as unknown as string[],
+      });
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.test_files).toEqual([]);
+    }
+    expect(stderr).toContain("coerced test_files JSON-string to array");
+  });
+
+  it("coerces test_files: '[\"a\"]' (string) into ['a']", () => {
+    let parsed!: ReturnType<typeof EditToolRequestSchema.safeParse>;
+    captureStderr(() => {
+      parsed = EditToolRequestSchema.safeParse({
+        target_file: "docs/a.md",
+        rationale: "ok",
+        risk_level: "low",
+        test_files: '["src/foo.test.ts"]' as unknown as string[],
+      });
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.test_files).toEqual(["src/foo.test.ts"]);
+    }
+  });
+
+  it("passes proper test_files arrays through unchanged (no WARN, Claude Code path)", () => {
+    let parsed!: ReturnType<typeof EditToolRequestSchema.safeParse>;
+    const stderr = captureStderr(() => {
+      parsed = EditToolRequestSchema.safeParse({
+        target_file: "docs/a.md",
+        rationale: "ok",
+        risk_level: "low",
+        test_files: [],
+      });
+    });
+    expect(parsed.success).toBe(true);
+    expect(stderr).toBe("");
+  });
+
+  it("rejects non-array, non-JSON-string test_files (e.g. number) with the original Zod error", () => {
+    const parsed = EditToolRequestSchema.safeParse({
+      target_file: "docs/a.md",
+      rationale: "ok",
+      risk_level: "low",
+      test_files: 42 as unknown as string[],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects garbage-string test_files (not JSON, not array) with the original Zod error", () => {
+    const parsed = EditToolRequestSchema.safeParse({
+      target_file: "docs/a.md",
+      rationale: "ok",
+      risk_level: "low",
+      test_files: "not json" as unknown as string[],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("coerces additional_files: '[]' as well (symmetric to test_files)", () => {
+    let parsed!: ReturnType<typeof EditToolRequestSchema.safeParse>;
+    captureStderr(() => {
+      parsed = EditToolRequestSchema.safeParse({
+        target_file: "docs/a.md",
+        rationale: "ok",
+        risk_level: "low",
+        test_files: [],
+        additional_files: "[]" as unknown as { file: string }[],
+      });
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.additional_files).toEqual([]);
+    }
+  });
+});
+
 describe("validateRequest — disk + path-safety", () => {
   function modifyReq(overrides: Partial<EditToolRequest> = {}): EditToolRequest {
     return {

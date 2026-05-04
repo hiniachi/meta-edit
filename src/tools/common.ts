@@ -62,15 +62,56 @@ export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
   "edit_docs_only",
 ];
 
+/**
+ * z.preprocess shim: opencode (v1.14.x) mis-marshals empty `[]` array
+ * arguments as the JSON-string `"[]"` when calling typed_edit MCP
+ * tools. Claude Code does not — it correctly sends an actual array.
+ *
+ * To unblock opencode users without changing the wire contract, we
+ * accept either form at the schema boundary. The transform is purely
+ * defensive: a proper array passes through unchanged; a JSON-encoded
+ * array string is parsed back into an array; anything else falls
+ * through to the array validation, which fails with the original
+ * "expected array" Zod error.
+ *
+ * When coercion fires we emit a stderr WARN naming the field, so the
+ * upstream bug remains observable and we can tell when the workaround
+ * is no longer needed (i.e. when WARN frequency drops to zero in real
+ * deployments). See
+ * `issues/2026-05-04-1700-opencode-empty-test-files-array-mismarshalled.md`.
+ */
+function coerceJsonStringToArray(fieldName: string) {
+  return (v: unknown): unknown => {
+    if (typeof v !== "string") return v;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      return v;
+    }
+    if (!Array.isArray(parsed)) return v;
+    process.stderr.write(
+      `[meta-edit] WARN: coerced ${fieldName} JSON-string to array (opencode harness mis-marshaling); ` +
+        `see issues/2026-05-04-1700-opencode-empty-test-files-array-mismarshalled.md\n`,
+    );
+    return parsed;
+  };
+}
+
 export const EditToolRequestSchema = z
   .object({
     target_file: z.string().min(1),
     rationale: z.string(),
     risk_level: RiskLevelSchema,
-    test_files: z.array(z.string()),
+    test_files: z.preprocess(
+      coerceJsonStringToArray("test_files"),
+      z.array(z.string()),
+    ),
     additional_files: z
-      .array(AdditionalFileSchema)
-      .max(MAX_ADDITIONAL_FILES)
+      .preprocess(
+        coerceJsonStringToArray("additional_files"),
+        z.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES),
+      )
       .optional(),
   })
   .strict();
