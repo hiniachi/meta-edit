@@ -36,7 +36,6 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type Scope = "user" | "project";
 
@@ -47,118 +46,18 @@ export type Scope = "user" | "project";
 export const META_EDIT_OPENCODE_RESOURCES = {
   mcpServerName: "meta-edit",
   pluginPackage: "@hiniachi/meta-edit/opencode",
-  /**
-   * Skill name (matches the `name:` frontmatter in
-   * skills/typed-edit-onboarding/SKILL.md). Both Claude Code and
-   * opencode discover skills by reading `~/.claude/skills/<name>/SKILL.md`,
-   * so installing here makes the skill available to opencode users
-   * who do NOT have the Claude Code marketplace plugin installed.
-   * Claude Code marketplace users already get the same skill from the
-   * plugin's bundled `skills/` dir; the duplicate copy here is
-   * harmless because skill loaders deduplicate by name.
-   */
-  skillName: "typed-edit-onboarding",
 } as const;
 
-/**
- * Locate the bundled SKILL.md inside the published npm package (or
- * inside the source tree during development). Walks up from this
- * module's location at most 4 levels looking for
- * `<root>/skills/typed-edit-onboarding/SKILL.md`. Both layouts work:
- *
- *   dev:        <root>/src/cli/opencode-cmd.ts → walks 2 up → <root>
- *   published:  <root>/dist/cli.js (bundled)   → walks 1 up → <root>
- */
-function defaultSkillSourcePath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  let cur = here;
-  for (let i = 0; i < 4; i++) {
-    const candidate = path.join(
-      cur,
-      "skills",
-      META_EDIT_OPENCODE_RESOURCES.skillName,
-      "SKILL.md",
-    );
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  // Fallback: caller will get an ENOENT with a clear path in the error.
-  return path.join(
-    here,
-    "..",
-    "..",
-    "skills",
-    META_EDIT_OPENCODE_RESOURCES.skillName,
-    "SKILL.md",
-  );
-}
-
-/**
- * Resolve the destination path for the meta-edit skill copy. Always
- * `~/.claude/skills/typed-edit-onboarding/SKILL.md`.
- */
-export function skillTargetPath(home: string): string {
-  return path.join(
-    home,
-    ".claude",
-    "skills",
-    META_EDIT_OPENCODE_RESOURCES.skillName,
-    "SKILL.md",
-  );
-}
-
-/**
- * Copy `<package-root>/skills/typed-edit-onboarding/SKILL.md` to
- * `<home>/.claude/skills/typed-edit-onboarding/SKILL.md`. Idempotent —
- * if the target exists with the same content, no-op (so re-running
- * install does not bump mtime). If the target exists with DIFFERENT
- * content, overwrite (treat install as the source of truth — same
- * policy as the mcp.meta-edit entry, see installMetaEditOpencode).
- */
-export function installMetaEditSkill(opts: {
-  home: string;
-  source?: string;
-}): void {
-  const source = opts.source ?? defaultSkillSourcePath();
-  const target = skillTargetPath(opts.home);
-  const content = fs.readFileSync(source, "utf8");
-  // Idempotency: if same bytes already there, skip the write.
-  let existing: string | null = null;
-  try {
-    existing = fs.readFileSync(target, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
-  if (existing === content) return;
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, content, { encoding: "utf8", mode: 0o600 });
-}
-
-/**
- * Inverse of installMetaEditSkill. Removes the `<home>/.claude/skills/
- * typed-edit-onboarding/SKILL.md` file and the parent dir if it becomes
- * empty (we never created sibling files there).
- */
-export function uninstallMetaEditSkill(opts: { home: string }): void {
-  const target = skillTargetPath(opts.home);
-  try {
-    fs.unlinkSync(target);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    return;
-  }
-  // Remove the now-empty skill dir, but only if it actually is empty —
-  // a user who manually added sibling files should keep them.
-  const dir = path.dirname(target);
-  try {
-    const entries = fs.readdirSync(dir);
-    if (entries.length === 0) fs.rmdirSync(dir);
-  } catch {
-    // Best-effort cleanup; ignore.
-  }
-}
+// Note: prior versions copied a SKILL.md into `~/.claude/skills/` during
+// install-opencode so that opencode would pick it up via skill discovery.
+// That coupled opencode operation to a Claude-Code-named directory and
+// wrote outside the user's project. v0.5+ removes that path entirely —
+// the opencode plugin now reads the bundled SKILL.md at runtime and
+// pushes its content into the chat system prompt via
+// `experimental.chat.system.transform`. See `src/opencode/plugin.ts`
+// (`loadDefaultSkillContent`). install-opencode now only writes the
+// `mcp` and `plugin` entries to `opencode.json` — no `~/.claude/`
+// touching from the opencode codepath.
 
 /** Subset of opencode.json shape we read / write. */
 export interface OpencodeConfigShape {
@@ -203,24 +102,6 @@ export function runInstallOpencode(opts: InstallOpencodeOptions): number {
   opts.out.write(
     `meta-edit: installed opencode mcp + plugin into ${target}\n`,
   );
-  // Skill copy is best-effort: if the source SKILL.md is missing
-  // (e.g. a stripped-down install or a build issue) we surface a
-  // warning to stderr but do NOT fail the install — the mcp + plugin
-  // entries still work without the skill.
-  const home = opts.home ?? os.homedir();
-  try {
-    installMetaEditSkill({ home });
-    const skillTarget = skillTargetPath(home);
-    opts.out.write(
-      `meta-edit: installed typed-edit-onboarding skill into ${skillTarget}\n`,
-    );
-  } catch (e) {
-    opts.err.write(
-      `meta-edit: WARN: could not install typed-edit-onboarding skill: ${
-        (e as Error).message
-      } (mcp + plugin install succeeded)\n`,
-    );
-  }
   return 0;
 }
 
@@ -244,21 +125,6 @@ export function runUninstallOpencode(opts: InstallOpencodeOptions): number {
   opts.out.write(
     `meta-edit: removed opencode mcp + plugin from ${target}\n`,
   );
-  // Skill removal is best-effort: an I/O failure should not change
-  // the config-uninstall outcome.
-  const home = opts.home ?? os.homedir();
-  try {
-    uninstallMetaEditSkill({ home });
-    opts.out.write(
-      `meta-edit: removed typed-edit-onboarding skill from ${skillTargetPath(home)}\n`,
-    );
-  } catch (e) {
-    opts.err.write(
-      `meta-edit: WARN: could not remove typed-edit-onboarding skill: ${
-        (e as Error).message
-      }\n`,
-    );
-  }
   return 0;
 }
 

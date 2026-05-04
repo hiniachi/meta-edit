@@ -11,3 +11,6 @@ coverage/
 issues/drafts/
 test-playground/
 sandbox-inside/
+# This project uses bun.lock; npm publish may emit package-lock.json
+# but it should not be committed.
+package-lock.json
