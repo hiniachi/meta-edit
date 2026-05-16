@@ -146,6 +146,20 @@ describe("createServer repoRoot resolution precedence", () => {
     }
   });
 
+  it("honors explicit options.repoRoot when $META_EDIT_REPO_ROOT is unset", () => {
+    delete process.env["META_EDIT_REPO_ROOT"];
+    const origCwd = process.cwd();
+    process.chdir(bareDir);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer({ repoRoot: gitRepo })).not.toThrow();
+      });
+      expect(stderrBuf).not.toContain("does not appear to be");
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+
   it("explicit options.repoRoot wins over $META_EDIT_REPO_ROOT", () => {
     process.env["META_EDIT_REPO_ROOT"] = bareDir;
     const stderrBuf = captureStderr(() => {

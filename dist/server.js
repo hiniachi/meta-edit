@@ -18453,9 +18453,18 @@ var package_default = {
 var VERSION = package_default.version;
 
 // src/server.ts
-function createServer(options = {}) {
+function resolveRepoRoot(optionRepoRoot) {
+  if (typeof optionRepoRoot === "string" && optionRepoRoot.length > 0) {
+    return path7.resolve(optionRepoRoot);
+  }
   const envRoot = process.env["META_EDIT_REPO_ROOT"];
-  const repoRoot = path7.resolve(options.repoRoot ?? (typeof envRoot === "string" && envRoot.length > 0 ? envRoot : process.cwd()));
+  if (typeof envRoot === "string" && envRoot.length > 0) {
+    return path7.resolve(envRoot);
+  }
+  return process.cwd();
+}
+function createServer(options = {}) {
+  const repoRoot = resolveRepoRoot(options.repoRoot);
   const repoCheck = repoIsValid(repoRoot);
   if (!repoCheck.ok) {
     process.stderr.write(`[meta-edit] WARN: ${repoCheck.error}
@@ -18500,4 +18509,4 @@ export {
   createServer
 };
 
-//# debugId=887D2311495AD88264756E2164756E21
+//# debugId=2C6D4806621C8FE664756E2164756E21

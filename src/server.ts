@@ -13,22 +13,30 @@ export type CreateServerOptions = {
   repoRoot?: string;
 };
 
-export function createServer(options: CreateServerOptions = {}): Server {
-  // Resolution precedence (must stay in lockstep with the hooks'
-  // resolveRepoRoot in src/hooks/session-onboarding.ts /
-  // src/hooks/deny-raw-edit.ts): explicit override (the `--repo-root`
-  // CLI flag) → $META_EDIT_REPO_ROOT → process.cwd(). The server and
-  // the hooks MUST land on the same root or their canonical forms
-  // diverge and the grant binding lookup fails (the jj-workspace /
-  // git-worktree / sub-directory-launch failure mode). `path.resolve`
-  // matches the hooks' `path.resolve(envRoot)` normalization.
+// Resolution precedence, kept STRUCTURALLY identical to the hooks'
+// resolveRepoRoot (src/hooks/session-onboarding.ts /
+// src/hooks/deny-raw-edit.ts): explicit override → $META_EDIT_REPO_ROOT
+// → process.cwd(). Override branches are `path.resolve`-d; the cwd
+// branch is returned bare (already absolute/normalized) — the same
+// per-branch shape the hooks use, NOT a chain-wide resolve. The server
+// and the hooks MUST land on the same root or their canonical forms
+// diverge and the grant binding lookup fails (the jj-workspace /
+// git-worktree / sub-directory-launch failure mode). The server's
+// explicit-override branch is `options.repoRoot` (the `--repo-root`
+// CLI flag); it occupies the slot the hooks fill with `eventCwd`.
+function resolveRepoRoot(optionRepoRoot: string | undefined): string {
+  if (typeof optionRepoRoot === "string" && optionRepoRoot.length > 0) {
+    return path.resolve(optionRepoRoot);
+  }
   const envRoot = process.env["META_EDIT_REPO_ROOT"];
-  const repoRoot = path.resolve(
-    options.repoRoot ??
-      (typeof envRoot === "string" && envRoot.length > 0
-        ? envRoot
-        : process.cwd()),
-  );
+  if (typeof envRoot === "string" && envRoot.length > 0) {
+    return path.resolve(envRoot);
+  }
+  return process.cwd();
+}
+
+export function createServer(options: CreateServerOptions = {}): Server {
+  const repoRoot = resolveRepoRoot(options.repoRoot);
   // Issue 1530: do NOT throw here even if the repo-root sentinel is
   // absent. A synchronous throw inside createServer kills the MCP server
   // before transport handshake — Claude Code marks the server failed
