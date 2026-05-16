@@ -6515,6 +6515,9 @@ var require_dist = __commonJS((exports, module) => {
   exports.default = formatsPlugin;
 });
 
+// src/server.ts
+import * as path7 from "node:path";
+
 // node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
@@ -17290,7 +17293,7 @@ function repoIsValid(dir) {
     return { ok: true };
   return {
     ok: false,
-    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory or restart the MCP server with ` + `--repo-root pointed at the actual repository root.`
+    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory, or restart the MCP server ` + `with \`meta-edit serve --repo-root <path>\` (or set the ` + `META_EDIT_REPO_ROOT environment variable) pointed at the ` + `actual repository root.`
   };
 }
 
@@ -18380,7 +18383,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.4.0",
+  version: "0.4.1",
   description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18450,8 +18453,18 @@ var package_default = {
 var VERSION = package_default.version;
 
 // src/server.ts
+function resolveRepoRoot(optionRepoRoot) {
+  if (typeof optionRepoRoot === "string" && optionRepoRoot.length > 0) {
+    return path7.resolve(optionRepoRoot);
+  }
+  const envRoot = process.env["META_EDIT_REPO_ROOT"];
+  if (typeof envRoot === "string" && envRoot.length > 0) {
+    return path7.resolve(envRoot);
+  }
+  return process.cwd();
+}
 function createServer(options = {}) {
-  const repoRoot = options.repoRoot ?? process.cwd();
+  const repoRoot = resolveRepoRoot(options.repoRoot);
   const repoCheck = repoIsValid(repoRoot);
   if (!repoCheck.ok) {
     process.stderr.write(`[meta-edit] WARN: ${repoCheck.error}
@@ -18483,11 +18496,11 @@ async function runStdioServer(options = {}) {
     transport.close().catch(() => {});
   });
   await server.connect(transport);
-  await new Promise((resolve5) => {
+  await new Promise((resolve6) => {
     const previousOnClose = transport.onclose;
     transport.onclose = () => {
       previousOnClose?.call(transport);
-      resolve5();
+      resolve6();
     };
   });
 }
@@ -18496,4 +18509,4 @@ export {
   createServer
 };
 
-//# debugId=31D02078A89833DB64756E2164756E21
+//# debugId=2C6D4806621C8FE664756E2164756E21

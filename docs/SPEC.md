@@ -401,6 +401,36 @@ type EditToolResult = {
 };
 ```
 
+### Repository root
+
+The **repository root** is the single directory that all `target_file`
+/ `additional_files` paths are resolved against (after `realpath`) and
+the boundary the path-safety check enforces. Every path in this spec is
+repository-relative to it.
+
+The MCP server resolves the repository root once at startup, in this
+precedence:
+
+1. the explicit `--repo-root <path>` flag passed to `meta-edit serve`
+2. the `META_EDIT_REPO_ROOT` environment variable
+3. `process.cwd()` (the default; unchanged)
+
+The resolved value is normalized with `path.resolve`. The hooks
+(`deny-raw-edit`, session onboarding) resolve their root with the
+**same precedence and normalization**. This parity is a correctness
+requirement, not incidental: if the server and the hooks land on
+different roots, their canonical forms diverge and the single-use
+binding lookup fails (the request is rejected as not covered, or a
+legitimate path is rejected as escaping the root).
+
+When the launch working directory is not the repository top-level — a
+`jj` workspace, a git worktree, or a sub-directory launch — the
+remediation is to point `--repo-root` or `META_EDIT_REPO_ROOT` at the
+actual repository root. The server does not walk up the directory tree
+or parse VCS layouts to discover the root; VCS-adapter abstraction and
+jj-specific support remain out of scope (Article 7). The override is
+VCS-agnostic plumbing only.
+
 ### Argument validation
 
 The MCP server enforces:
@@ -1330,6 +1360,16 @@ Three commands.
 ### `meta-edit serve`
 
 Start the MCP server in stdio mode. This is what Claude Code (or any other MCP client) connects to.
+
+```
+meta-edit serve [--repo-root <path>]
+```
+
+`--repo-root` (or the `META_EDIT_REPO_ROOT` environment variable)
+overrides the repository root; see §3 "Repository root" for the
+resolution precedence and why it must match the hooks. Use it when the
+launch cwd is not the repository top-level (jj workspace, git worktree,
+sub-directory launch).
 
 ### `meta-edit log`
 

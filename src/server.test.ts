@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -82,6 +82,108 @@ describe("createServer repoRoot validation", () => {
   });
 
   it("defaults repoRoot to process.cwd() when no options provided", () => {
+    const origCwd = process.cwd();
+    process.chdir(gitRepo);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer()).not.toThrow();
+      });
+      expect(stderrBuf).not.toContain("does not appear to be");
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Repository-root resolution precedence:
+//   options.repoRoot → $META_EDIT_REPO_ROOT → process.cwd()
+//
+// createServer does not return the resolved root, so we observe it via
+// the repo-validity advisory stderr line (a bare dir warns; a dir with
+// a .git/.jj sentinel does not). This must stay in lockstep with the
+// hooks' resolveRepoRoot, hence the explicit precedence tests.
+// ---------------------------------------------------------------------------
+
+describe("createServer repoRoot resolution precedence", () => {
+  let gitRepo: string;
+  let bareDir: string;
+  let origEnv: string | undefined;
+
+  beforeAll(() => {
+    gitRepo = mkGitRepo();
+    bareDir = mkBareDir();
+  });
+
+  afterAll(() => {
+    cleanTmpRoot(gitRepo);
+    cleanTmpRoot(bareDir);
+  });
+
+  beforeEach(() => {
+    origEnv = process.env["META_EDIT_REPO_ROOT"];
+  });
+
+  afterEach(() => {
+    if (origEnv === undefined) {
+      delete process.env["META_EDIT_REPO_ROOT"];
+    } else {
+      process.env["META_EDIT_REPO_ROOT"] = origEnv;
+    }
+  });
+
+  it("honors $META_EDIT_REPO_ROOT when no option is provided", () => {
+    process.env["META_EDIT_REPO_ROOT"] = gitRepo;
+    const origCwd = process.cwd();
+    process.chdir(bareDir);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer()).not.toThrow();
+      });
+      expect(stderrBuf).not.toContain("does not appear to be");
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+
+  it("honors explicit options.repoRoot when $META_EDIT_REPO_ROOT is unset", () => {
+    delete process.env["META_EDIT_REPO_ROOT"];
+    const origCwd = process.cwd();
+    process.chdir(bareDir);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer({ repoRoot: gitRepo })).not.toThrow();
+      });
+      expect(stderrBuf).not.toContain("does not appear to be");
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+
+  it("explicit options.repoRoot wins over $META_EDIT_REPO_ROOT", () => {
+    process.env["META_EDIT_REPO_ROOT"] = bareDir;
+    const stderrBuf = captureStderr(() => {
+      expect(() => createServer({ repoRoot: gitRepo })).not.toThrow();
+    });
+    expect(stderrBuf).not.toContain("does not appear to be");
+  });
+
+  it("$META_EDIT_REPO_ROOT takes precedence over process.cwd()", () => {
+    process.env["META_EDIT_REPO_ROOT"] = bareDir;
+    const origCwd = process.cwd();
+    process.chdir(gitRepo);
+    try {
+      const stderrBuf = captureStderr(() => {
+        expect(() => createServer()).not.toThrow();
+      });
+      expect(stderrBuf).toContain("does not appear to be a repository root");
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+
+  it("falls back to process.cwd() when neither option nor env is set", () => {
+    delete process.env["META_EDIT_REPO_ROOT"];
     const origCwd = process.cwd();
     process.chdir(gitRepo);
     try {
