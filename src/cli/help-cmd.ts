@@ -64,7 +64,11 @@ function renderGeneralHelp(): string {
   return `meta-edit ${VERSION}
 
 Usage:
-  meta-edit serve                          Run the MCP stdio server.
+  meta-edit serve [--repo-root <path>]     Run the MCP stdio server.
+                                           --repo-root (or $META_EDIT_REPO_ROOT)
+                                           overrides the repository root when the
+                                           launch cwd is not the repo top-level
+                                           (jj workspace, git worktree, subdir).
   meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]
                                            Print edits.jsonl entries.
   meta-edit summary [--since DATE]         Aggregate statistics from the edit log.

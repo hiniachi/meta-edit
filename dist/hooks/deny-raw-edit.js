@@ -4837,7 +4837,7 @@ function repoIsValid(dir) {
     return { ok: true };
   return {
     ok: false,
-    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory or restart the MCP server with ` + `--repo-root pointed at the actual repository root.`
+    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory, or restart the MCP server ` + `with \`meta-edit serve --repo-root <path>\` (or set the ` + `META_EDIT_REPO_ROOT environment variable) pointed at the ` + `actual repository root.`
   };
 }
 
@@ -5933,4 +5933,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=71C816A2FA58EC5B64756E2164756E21
+//# debugId=86ADA36D6ECCA74E64756E2164756E21

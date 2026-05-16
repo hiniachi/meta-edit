@@ -4788,7 +4788,7 @@ function repoIsValid(dir) {
     return { ok: true };
   return {
     ok: false,
-    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory or restart the MCP server with ` + `--repo-root pointed at the actual repository root.`
+    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory, or restart the MCP server ` + `with \`meta-edit serve --repo-root <path>\` (or set the ` + `META_EDIT_REPO_ROOT environment variable) pointed at the ` + `actual repository root.`
   };
 }
 
@@ -7446,4 +7446,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=F238620244DDB20464756E2164756E21
+//# debugId=7FCA428776FA837E64756E2164756E21

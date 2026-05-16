@@ -6516,6 +6516,9 @@ var require_dist = __commonJS((exports, module) => {
   exports.default = formatsPlugin;
 });
 
+// src/server.ts
+import * as path7 from "node:path";
+
 // node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
@@ -17291,7 +17294,7 @@ function repoIsValid(dir) {
     return { ok: true };
   return {
     ok: false,
-    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory or restart the MCP server with ` + `--repo-root pointed at the actual repository root.`
+    error: `meta-edit: "${dir}" does not appear to be a repository root ` + `(no .git or .jj directory found). ` + `Run \`git init\` in this directory, or restart the MCP server ` + `with \`meta-edit serve --repo-root <path>\` (or set the ` + `META_EDIT_REPO_ROOT environment variable) pointed at the ` + `actual repository root.`
   };
 }
 
@@ -18452,7 +18455,8 @@ var VERSION = package_default.version;
 
 // src/server.ts
 function createServer(options = {}) {
-  const repoRoot = options.repoRoot ?? process.cwd();
+  const envRoot = process.env["META_EDIT_REPO_ROOT"];
+  const repoRoot = path7.resolve(options.repoRoot ?? (typeof envRoot === "string" && envRoot.length > 0 ? envRoot : process.cwd()));
   const repoCheck = repoIsValid(repoRoot);
   if (!repoCheck.ok) {
     process.stderr.write(`[meta-edit] WARN: ${repoCheck.error}
@@ -18484,11 +18488,11 @@ async function runStdioServer(options = {}) {
     transport.close().catch(() => {});
   });
   await server.connect(transport);
-  await new Promise((resolve5) => {
+  await new Promise((resolve6) => {
     const previousOnClose = transport.onclose;
     transport.onclose = () => {
       previousOnClose?.call(transport);
-      resolve5();
+      resolve6();
     };
   });
 }
@@ -18496,6 +18500,36 @@ async function runStdioServer(options = {}) {
 // src/cli.ts
 import * as fs9 from "node:fs";
 import { fileURLToPath } from "node:url";
+
+// src/cli/serve-cmd.ts
+function parseServeArgs(argv) {
+  let repoRoot;
+  for (let i = 0;i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--repo-root") {
+      const v = argv[++i];
+      if (v === undefined || v.length === 0) {
+        return {
+          ok: false,
+          error: "--repo-root requires a path argument"
+        };
+      }
+      repoRoot = v;
+    } else if (arg !== undefined && arg.startsWith("--repo-root=")) {
+      const v = arg.slice("--repo-root=".length);
+      if (v.length === 0) {
+        return {
+          ok: false,
+          error: "--repo-root requires a path argument"
+        };
+      }
+      repoRoot = v;
+    } else {
+      return { ok: false, error: `unknown flag: ${arg}` };
+    }
+  }
+  return repoRoot !== undefined ? { ok: true, repoRoot } : { ok: true };
+}
 
 // src/cli/parse-since.ts
 var YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -18762,7 +18796,7 @@ function parseDate(s) {
 import * as crypto4 from "node:crypto";
 import * as fs7 from "node:fs";
 import * as os from "node:os";
-import * as path7 from "node:path";
+import * as path8 from "node:path";
 var META_EDIT_HOOK_COMMANDS = {
   rawEdit: "meta-edit-deny-raw-edit",
   bashWriteBypass: "meta-edit-deny-bash-write-bypass"
@@ -18773,9 +18807,9 @@ function settingsPathForScope(scope, options = {}) {
   const home = options.home ?? os.homedir();
   const cwd = options.cwd ?? process.cwd();
   if (scope === "user") {
-    return path7.join(home, ".claude", "settings.json");
+    return path8.join(home, ".claude", "settings.json");
   }
-  return path7.join(cwd, ".claude", "settings.json");
+  return path8.join(cwd, ".claude", "settings.json");
 }
 function runInstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
@@ -18909,7 +18943,7 @@ function isMetaEditHookCommand(cmd) {
   ];
   if (owned.includes(cmd))
     return true;
-  const basename3 = path7.basename(cmd);
+  const basename3 = path8.basename(cmd);
   return owned.includes(basename3);
 }
 function readSettings(filePath) {
@@ -18925,14 +18959,14 @@ function readSettings(filePath) {
   }
 }
 function writeSettings(filePath, settings) {
-  const dir = path7.dirname(filePath);
+  const dir = path8.dirname(filePath);
   fs7.mkdirSync(dir, { recursive: true });
   let mode = 384;
   try {
     mode = fs7.statSync(filePath).mode & 4095;
   } catch {}
-  const tempName = path7.basename(filePath) + "." + crypto4.randomBytes(8).toString("hex") + ".metaedit-tmp";
-  const tempPath = path7.join(dir, tempName);
+  const tempName = path8.basename(filePath) + "." + crypto4.randomBytes(8).toString("hex") + ".metaedit-tmp";
+  const tempPath = path8.join(dir, tempName);
   let fd = null;
   try {
     fd = fs7.openSync(tempPath, fs7.constants.O_WRONLY | fs7.constants.O_CREAT | fs7.constants.O_EXCL | (fs7.constants.O_NOFOLLOW ?? 0), 384);
@@ -18992,7 +19026,7 @@ function parseHooksArgs(argv) {
 import * as crypto5 from "node:crypto";
 import * as fs8 from "node:fs";
 import * as os2 from "node:os";
-import * as path8 from "node:path";
+import * as path9 from "node:path";
 var META_EDIT_OPENCODE_RESOURCES = {
   mcpServerName: "meta-edit",
   pluginPackage: "@hiniachi/meta-edit/opencode"
@@ -19001,9 +19035,9 @@ function configPathForScope(scope, options = {}) {
   const home = options.home ?? os2.homedir();
   const cwd = options.cwd ?? process.cwd();
   if (scope === "user") {
-    return path8.join(home, ".config", "opencode", "opencode.json");
+    return path9.join(home, ".config", "opencode", "opencode.json");
   }
-  return path8.join(cwd, "opencode.json");
+  return path9.join(cwd, "opencode.json");
 }
 function runInstallOpencode(opts) {
   const target = configPathForScope(opts.scope, opts);
@@ -19097,14 +19131,14 @@ function readConfig(filePath) {
   }
 }
 function writeConfig(filePath, config2) {
-  const dir = path8.dirname(filePath);
+  const dir = path9.dirname(filePath);
   fs8.mkdirSync(dir, { recursive: true });
   let mode = 384;
   try {
     mode = fs8.statSync(filePath).mode & 4095;
   } catch {}
-  const tempName = path8.basename(filePath) + "." + crypto5.randomBytes(8).toString("hex") + ".metaedit-tmp";
-  const tempPath = path8.join(dir, tempName);
+  const tempName = path9.basename(filePath) + "." + crypto5.randomBytes(8).toString("hex") + ".metaedit-tmp";
+  const tempPath = path9.join(dir, tempName);
   let fd = null;
   try {
     fd = fs8.openSync(tempPath, fs8.constants.O_WRONLY | fs8.constants.O_CREAT | fs8.constants.O_EXCL | (fs8.constants.O_NOFOLLOW ?? 0), 384);
@@ -19200,7 +19234,11 @@ function renderGeneralHelp() {
   return `meta-edit ${VERSION}
 
 Usage:
-  meta-edit serve                          Run the MCP stdio server.
+  meta-edit serve [--repo-root <path>]     Run the MCP stdio server.
+                                           --repo-root (or $META_EDIT_REPO_ROOT)
+                                           overrides the repository root when the
+                                           launch cwd is not the repo top-level
+                                           (jj workspace, git worktree, subdir).
   meta-edit log [--tool NAME] [--risk LEVEL] [--since DATE]
                                            Print edits.jsonl entries.
   meta-edit summary [--since DATE]         Aggregate statistics from the edit log.
@@ -19269,9 +19307,16 @@ async function main(argv) {
       out.write(`meta-edit ${VERSION}
 `);
       return 0;
-    case "serve":
-      await runStdioServer();
+    case "serve": {
+      const parsed = parseServeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit serve: ${parsed.error}
+`);
+        return 64;
+      }
+      await runStdioServer(parsed.repoRoot !== undefined ? { repoRoot: parsed.repoRoot } : {});
       return 0;
+    }
     case "log": {
       const parsed = parseLogArgs(rest);
       if (!parsed.ok) {
@@ -19369,4 +19414,4 @@ export {
   main
 };
 
-//# debugId=40F73E93EA606E0F64756E2164756E21
+//# debugId=EE0967F4BD1E766664756E2164756E21

@@ -15,6 +15,12 @@
         "@types/node": "^22.0.0",
         "typescript": "^5.6.0",
       },
+      "peerDependencies": {
+        "@opencode-ai/plugin": "*",
+      },
+      "optionalPeers": [
+        "@opencode-ai/plugin",
+      ],
     },
   },
   "packages": {

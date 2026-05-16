@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools/registry.js";
@@ -13,7 +14,21 @@ export type CreateServerOptions = {
 };
 
 export function createServer(options: CreateServerOptions = {}): Server {
-  const repoRoot = options.repoRoot ?? process.cwd();
+  // Resolution precedence (must stay in lockstep with the hooks'
+  // resolveRepoRoot in src/hooks/session-onboarding.ts /
+  // src/hooks/deny-raw-edit.ts): explicit override (the `--repo-root`
+  // CLI flag) → $META_EDIT_REPO_ROOT → process.cwd(). The server and
+  // the hooks MUST land on the same root or their canonical forms
+  // diverge and the grant binding lookup fails (the jj-workspace /
+  // git-worktree / sub-directory-launch failure mode). `path.resolve`
+  // matches the hooks' `path.resolve(envRoot)` normalization.
+  const envRoot = process.env["META_EDIT_REPO_ROOT"];
+  const repoRoot = path.resolve(
+    options.repoRoot ??
+      (typeof envRoot === "string" && envRoot.length > 0
+        ? envRoot
+        : process.cwd()),
+  );
   // Issue 1530: do NOT throw here even if the repo-root sentinel is
   // absent. A synchronous throw inside createServer kills the MCP server
   // before transport handshake — Claude Code marks the server failed

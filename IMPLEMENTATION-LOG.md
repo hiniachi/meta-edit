@@ -1048,3 +1048,34 @@ typed_edit declaration that needs non-empty `test_files` with a
 ToolSearch refresh of that tool. Root cause hypothesis: harness
 caches MCP tool schemas at session start and the cached form
 mis-marshals non-empty string arrays.
+
+## v0.4.1: explicit repository-root override for `meta-edit serve`
+
+- Completed: 2026-05-16
+- What works:
+  - `meta-edit serve --repo-root <path>` (and `--repo-root=<path>`)
+    overrides the MCP server's repository root. New
+    `src/cli/serve-cmd.ts` `parseServeArgs`, wired in `src/cli.ts`
+    (`serve` case now parses args, exit 64 on bad flag).
+  - `src/server.ts` `createServer` resolution precedence is now
+    `options.repoRoot` → `$META_EDIT_REPO_ROOT` → `process.cwd()`,
+    normalized with `path.resolve` — in lockstep with the hooks'
+    `resolveRepoRoot`, closing the prior server/hook asymmetry that
+    broke binding lookups when launched from a non-git-root cwd
+    (jj workspace, git worktree, sub-directory launch).
+  - `src/tools/repo-validity.ts` error message now names the real
+    `--repo-root` flag + `META_EDIT_REPO_ROOT`; `help-cmd.ts`
+    documents the flag.
+  - `docs/SPEC.md` §3 gains a "Repository root" definition (precedence
+    + server/hook parity as a correctness requirement + non-git-root
+    remediation); §7 `meta-edit serve` documents the flag.
+- Known issues:
+  - `meta-edit log` / `meta-edit summary` still use `process.cwd()`
+    directly (read-only reporting paths; explicit non-goal this round).
+  - No directory-tree walk-up / `.git`-as-file / jj layout parsing —
+    out of scope per CLAUDE.md §3 (VCS adapter / jj-specific support);
+    explicit override only, by user direction.
+- Tests added: 746 total (+ `serve-cmd.test.ts` 6, server
+  resolution-precedence describe 4, ~13 net). `tsc --noEmit` clean;
+  `bun run build` green; full suite green.
+- Spec deviations: none.

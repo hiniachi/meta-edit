@@ -45,8 +45,10 @@ export function repoIsValid(
     error:
       `meta-edit: "${dir}" does not appear to be a repository root ` +
       `(no .git or .jj directory found). ` +
-      `Run \`git init\` in this directory or restart the MCP server with ` +
-      `--repo-root pointed at the actual repository root.`,
+      `Run \`git init\` in this directory, or restart the MCP server ` +
+      `with \`meta-edit serve --repo-root <path>\` (or set the ` +
+      `META_EDIT_REPO_ROOT environment variable) pointed at the ` +
+      `actual repository root.`,
   };
 }
 

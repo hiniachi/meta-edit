@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runStdioServer } from "./server.js";
+import { parseServeArgs } from "./cli/serve-cmd.js";
 import { parseLogArgs, runLogCommand } from "./cli/log-cmd.js";
 import { parseSummaryArgs, runSummaryCommand } from "./cli/summary-cmd.js";
 import {
@@ -47,9 +48,19 @@ export async function main(argv: string[]): Promise<number> {
       out.write(`meta-edit ${VERSION}\n`);
       return 0;
 
-    case "serve":
-      await runStdioServer();
+    case "serve": {
+      const parsed = parseServeArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit serve: ${parsed.error}\n`);
+        return 64;
+      }
+      await runStdioServer(
+        parsed.repoRoot !== undefined
+          ? { repoRoot: parsed.repoRoot }
+          : {},
+      );
       return 0;
+    }
 
     case "log": {
       const parsed = parseLogArgs(rest);
