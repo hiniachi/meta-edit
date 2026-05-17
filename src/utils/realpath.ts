@@ -94,14 +94,14 @@ export function canonicalDirRealpath(p: string): string | null {
         }
       }
       if (real !== "") {
-        return path.join(real, ...tail.reverse());
+        return path.join(real, ...[...tail].reverse());
       }
     }
     const parent = path.dirname(cur);
     if (parent === cur) {
       // Reached the filesystem root without an existing directory
       // (degenerate; "/" normally exists). Fall back to the lexical form.
-      return path.join(cur, ...tail.reverse());
+      return path.join(cur, ...[...tail].reverse());
     }
     tail.push(path.basename(cur));
     cur = parent;

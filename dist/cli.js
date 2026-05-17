@@ -17240,12 +17240,12 @@ function canonicalDirRealpath(p) {
         }
       }
       if (real !== "") {
-        return path.join(real, ...tail.reverse());
+        return path.join(real, ...[...tail].reverse());
       }
     }
     const parent = path.dirname(cur);
     if (parent === cur) {
-      return path.join(cur, ...tail.reverse());
+      return path.join(cur, ...[...tail].reverse());
     }
     tail.push(path.basename(cur));
     cur = parent;
@@ -18215,6 +18215,10 @@ async function withInterProcessLock(lockPath, fn) {
       }
       await new Promise((r) => setTimeout(r, 25 + Math.random() * 40));
     }
+  }
+  if (!held) {
+    process.stderr.write(`[meta-edit] WARN: grant consume proceeding WITHOUT cross-process lock ` + `(could not acquire ${lockPath} within ${timeoutMs}ms); ` + `concurrent native writes against this grant may race.
+`);
   }
   try {
     return await fn();
@@ -19534,4 +19538,4 @@ export {
   main
 };
 
-//# debugId=C30536047CBFB22064756E2164756E21
+//# debugId=AEABE7EE9960111C64756E2164756E21

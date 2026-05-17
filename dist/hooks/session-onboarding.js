@@ -157,12 +157,12 @@ function canonicalDirRealpath(p) {
         }
       }
       if (real !== "") {
-        return path.join(real, ...tail.reverse());
+        return path.join(real, ...[...tail].reverse());
       }
     }
     const parent = path.dirname(cur);
     if (parent === cur) {
-      return path.join(cur, ...tail.reverse());
+      return path.join(cur, ...[...tail].reverse());
     }
     tail.push(path.basename(cur));
     cur = parent;
@@ -361,4 +361,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=5806D124111BAE7564756E2164756E21
+//# debugId=B2145BC8B2EDEB9364756E2164756E21

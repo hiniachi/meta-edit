@@ -238,6 +238,10 @@ async function withInterProcessLock<T>(
   lockPath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
+  // staleMs MUST stay >> worst-case consumeLocked duration: a holder
+  // whose critical section outlives staleMs can have its lock stolen
+  // mid-flight. consumeLocked is a single small JSON read/modify/write
+  // (sub-millisecond typically), so 15s is ~4 orders of margin.
   const timeoutMs = 5_000;
   const staleMs = 15_000;
   const start = Date.now();
@@ -267,6 +271,18 @@ async function withInterProcessLock<T>(
       }
       await new Promise((r) => setTimeout(r, 25 + Math.random() * 40));
     }
+  }
+  if (!held) {
+    // Proceeding WITHOUT the lock (acquire timed out or lockfile dir
+    // unwritable). The consume still runs — denying a legitimate write
+    // is worse than the residual race (Article 3) — but make the
+    // degradation observable instead of silent, matching the codebase's
+    // stderr-WARN discipline.
+    process.stderr.write(
+      `[meta-edit] WARN: grant consume proceeding WITHOUT cross-process lock ` +
+        `(could not acquire ${lockPath} within ${timeoutMs}ms); ` +
+        `concurrent native writes against this grant may race.\n`,
+    );
   }
   try {
     return await fn();
