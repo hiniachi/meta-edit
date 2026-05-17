@@ -43,11 +43,13 @@
 // NotebookEdit now routes through the same canonicalize → grant →
 // consume → before_sha256 flow as Edit / Write / MultiEdit.
 //
-// Threat model (Article 3): non-adversarial. We do NOT HMAC-sign tokens,
-// we do NOT defend against deep TOCTOU between approval and write, we do
-// NOT cross-process lock. Honest mistakes only. The pre-condition sha256
-// check is staleness detection — Article 5 explicitly accepts the
-// residual race.
+// Threat model (Article 3): non-adversarial. We do NOT HMAC-sign tokens
+// and do NOT defend against deep TOCTOU between approval and write.
+// Honest mistakes only. The pre-condition sha256 check is staleness
+// detection — Article 5 explicitly accepts the residual race. (v0.4.2:
+// grant consume IS now cross-process locked — best-effort O_EXCL — so
+// parallel native writes against one multi-file grant no longer clobber
+// each other; see state/grants.ts withInterProcessLock.)
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -57,8 +59,7 @@ import type { HookDecision } from "./hook-runtime.js";
 import type { GrantsStore } from "../state/grants.js";
 import type { ConsumedEntry, EditLog } from "../state/edit-log.js";
 import { isoTimestamp } from "../state/edit-log.js";
-import { realpathOfDeepestExisting } from "../utils/realpath.js";
-import { normalizeRepoRelative } from "../state/protected-paths.js";
+import { canonicalizeRepoRelative } from "../utils/repo-paths.js";
 
 export type { HookDecision };
 
@@ -293,78 +294,82 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
   // of cell semantics. (No deny here.)
 
   // 4. file_path canonicalization. The grant lookup is keyed on the
-  // canonical (post-realpath, repo-relative, normalized) form produced
-  // at issue time by tools/common.ts checkPathSafety; we must reach the
-  // same form here. A path that vanishes under realpath fails closed.
+  // canonical form produced at issue time by the SHARED canonicalizer
+  // (src/utils/repo-paths.ts) — issuer and consumer now reach a
+  // byte-identical, existence-independent key. Failure fails closed.
   const canonical = canonicalizeForBinding(pathRaw, repoRoot);
   if (canonical === null) {
     return {
       decision: "deny",
-      reason: `meta-edit could not canonicalize "${pathRaw}" to a repository-relative path; failing closed.`,
+      reason: `[meta-edit:path-mismatch] could not canonicalize "${pathRaw}" to a repository-relative path under repoRoot="${repoRoot}"; failing closed.`,
     };
   }
 
-  // 3. Lookup the most-recently-issued active grant covering this file.
-  // The findActiveBindingForFile scan: not expired, file appears in
-  // binding[], file is not yet in consumed_files. LIFO on issued_at.
-  // (v0.2.2: replaces the agent-passed `_meta_edit_token` lookup —
-  // Claude Code's strict input schema strips extra fields, so the
-  // agent has no way to surface a token to the hook.)
-  const match = await grants.findActiveBindingForFile(canonical);
-  if (match === null) {
-    return {
-      decision: "deny",
-      reason:
-        `meta-edit denies "${toolName}" for "${canonical}": no active typed_edit declaration covers this file. ` +
-        `Call a typed edit_* MCP tool first. ` +
-        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
-    };
-  }
-  const { grant, binding: bound } = match;
-
-  // 4. Pre-condition: declared starting state matches disk.
-  // ENOENT is the create-file path (treated as ""); any other read
-  // failure (EACCES, EISDIR, ELOOP, …) is a fail-closed deny — we
-  // cannot confirm the precondition without the bytes. (Codex v0.2.0
-  // medium #1, retained verbatim.)
+  // 5. Pre-condition read FIRST so the disk sha can steer grant
+  // selection (anti-hijack) and categorize the deny. ENOENT → ""
+  // (declaration against a not-yet-created file binds sha256("")).
+  // Any other read failure is fail-closed.
   const diskRead = await readFileForBinding(repoRoot, canonical);
   if (!diskRead.ok) {
     return {
       decision: "deny",
       reason:
-        `meta-edit could not read "${canonical}" to verify the typed_edit precondition (${diskRead.error}); ` +
+        `[meta-edit:unreadable] could not read "${canonical}" to verify the typed_edit precondition (${diskRead.error}); ` +
         `failing closed — re-read the file and re-issue a typed_edit declaration.`,
     };
   }
-  const diskContent = diskRead.content;
-  const diskSha = sha256Hex(diskContent);
+  const diskSha = sha256Hex(diskRead.content);
+
+  // 6. Resolve the active grant. preferBeforeSha steers selection to a
+  // declaration whose recorded starting state matches the current disk,
+  // so an interleaved later declaration cannot hijack this file's
+  // pending write.
+  const match = await grants.findActiveBindingForFile(canonical, {
+    preferBeforeSha: diskSha,
+  });
+  if (match === null) {
+    return {
+      decision: "deny",
+      reason:
+        `[meta-edit:undeclared] no active typed_edit declaration covers "${canonical}" (repoRoot="${repoRoot}"). ` +
+        `Call a typed edit_* MCP tool first. ` +
+        `If you DID declare it, the path or repo root differs between the declaration and this write — ` +
+        `declare with this exact repository-relative path. ` +
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
+    };
+  }
+  const { grant, binding: bound } = match;
+
   if (diskSha !== bound.before_sha256) {
     return {
       decision: "deny",
       reason:
-        `disk content of "${canonical}" has drifted from the typed_edit declaration ` +
+        `[meta-edit:stale] disk content of "${canonical}" has drifted from the typed_edit declaration ` +
         `(declared before_sha256=${shortHash(bound.before_sha256)}, actual ${shortHash(diskSha)}). ` +
-        `Re-read the file and issue a fresh typed_edit declaration.`,
+        `Something changed the file between the declaration and this write — re-read it and issue a fresh typed_edit declaration.`,
     };
   }
 
-  // 5. Pre-condition met. Consume the binding via grants.consume.
-  // grants.consume serialises read/modify/write through a per-token
-  // (per-grant-file-path) IN-PROCESS mutex (state/grants.ts
-  // withSharedLock). The deny-raw-edit hook is, however, a single-shot
-  // Node process per Claude Code hook invocation, so two concurrent
-  // hook processes against the same grant share NO mutex. Cross-process
-  // locking is out of scope per Article 7; this is the residual race
-  // accepted under Article 3 (non-adversarial threat model). The
-  // honest-mistake outcome is that the second consume() returns
-  // "binding already consumed" or "token not found" and the second
-  // native write is denied — partial workflow, not corruption.
+  // 7. Pre-condition met. Consume the binding. grants.consume
+  // serialises the grant-file read/modify/write through an in-process
+  // mutex AND a cross-process O_EXCL advisory lock (state/grants.ts),
+  // so N parallel single-shot hook processes consuming distinct file
+  // bindings of one multi-file grant all succeed instead of racing
+  // `consumed_files` down to a single survivor (v0.4.2).
   const consumeRes = await grants.consume(grant.token_id, canonical);
   if (!consumeRes.consumed) {
+    const err = consumeRes.error ?? "unknown error";
+    const cat =
+      err.includes("expired")
+        ? "expired"
+        : err.includes("already consumed")
+          ? "consumed"
+          : "consume-failed";
     return {
       decision: "deny",
       reason:
-        `meta-edit could not consume the typed_edit declaration for "${canonical}": ${consumeRes.error ?? "unknown error"}.`,
+        `[meta-edit:${cat}] could not consume the typed_edit declaration for "${canonical}": ${err}. ` +
+        `Re-declare with a typed edit_* MCP tool before retrying the write.`,
     };
   }
 
@@ -420,33 +425,14 @@ export function canonicalizeForBinding(
   repoRoot: string,
 ): string | null {
   if (typeof inputPath !== "string" || inputPath.length === 0) return null;
-
-  let resolved: string;
-  if (path.isAbsolute(inputPath)) {
-    resolved = path.normalize(inputPath);
-  } else {
-    resolved = path.resolve(repoRoot, inputPath);
-  }
-
-  const realRoot = realpathOrSelfSync(repoRoot);
-  const realResolved = realpathOfDeepestExisting(resolved);
-  if (realResolved === null) return null;
-
-  if (
-    realResolved !== realRoot &&
-    !realResolved.startsWith(realRoot + path.sep)
-  ) {
-    return null;
-  }
-
-  let rel: string;
-  try {
-    rel = normalizeRepoRelative(path.relative(realRoot, realResolved));
-  } catch {
-    return null;
-  }
-  if (rel.length === 0) return null;
-  return rel;
+  // The ONE shared canonicalizer — byte-identical to the issuer's
+  // checkPathSafety (src/utils/repo-paths.ts). Consume-side policy:
+  // absolute input is accepted (Claude Code passes file_path absolute),
+  // no `..`/protected re-check (the issuer already rejected those before
+  // binding). Existence-independent, so a file created by the native
+  // Write between declare and write still resolves to the bound key.
+  const r = canonicalizeRepoRelative(inputPath, repoRoot);
+  return r.ok ? r.canonical : null;
 }
 
 /**
@@ -457,9 +443,10 @@ export function canonicalizeForBinding(
  * (e.g. Claude Code plan-mode targeting `~/.claude/plans/*.md`) must
  * pass through.
  *
- * Symlink-aware via `realpathOfDeepestExisting`, matching the semantics
- * `canonicalizeForBinding` uses for grant lookup. On realpath failure
- * the function returns `true` (fail-closed: keep the deny path).
+ * Uses the same shared canonicalizer as `canonicalizeForBinding`. A
+ * path that genuinely escapes the repo ⇒ false (out-of-repo write,
+ * passed through). `is_root` ⇒ true (the root itself is in-repo). An
+ * uncanonicalizable path ⇒ true (fail-closed: keep the deny path).
  *
  * Empty / non-string inputs are treated as in-repo so the caller's
  * "missing path key" branch (step 1 in evaluateTokenedEdit) takes
@@ -467,27 +454,11 @@ export function canonicalizeForBinding(
  */
 export function isPathInsideRepo(inputPath: string, repoRoot: string): boolean {
   if (typeof inputPath !== "string" || inputPath.length === 0) return true;
-
-  const resolved = path.isAbsolute(inputPath)
-    ? path.normalize(inputPath)
-    : path.resolve(repoRoot, inputPath);
-
-  const realRoot = realpathOrSelfSync(repoRoot);
-  const realResolved = realpathOfDeepestExisting(resolved);
-  if (realResolved === null) return true; // fail-closed
-
-  if (realResolved === realRoot) return true;
-  return realResolved.startsWith(realRoot + path.sep);
-}
-
-function realpathOrSelfSync(p: string): string {
-  // Use the synchronous realpath via realpathOfDeepestExisting so we
-  // share the helper's semantics. The repo root is expected to exist;
-  // if realpath fails (EACCES), fall back to a normalized lexical form
-  // — the lexical form is what tools/common.ts uses on the issue path
-  // when realpath fails for the root.
-  const r = realpathOfDeepestExisting(p);
-  return r ?? path.resolve(p);
+  const r = canonicalizeRepoRelative(inputPath, repoRoot);
+  if (r.ok) return true;
+  if (r.code === "escapes") return false;
+  // is_root or uncanonicalizable → in-repo / fail-closed (keep deny path)
+  return true;
 }
 
 /**

@@ -129,6 +129,44 @@ function realpathOfDeepestExisting(p) {
     }
   }
 }
+function canonicalDirRealpath(p) {
+  let cur = path.dirname(p);
+  const tail = [path.basename(p)];
+  while (true) {
+    let st = null;
+    try {
+      st = fs.statSync(cur);
+    } catch (e) {
+      const code = e?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return null;
+      }
+      st = null;
+    }
+    if (st !== null && st.isDirectory()) {
+      let real;
+      try {
+        real = fs.realpathSync(cur);
+      } catch (e) {
+        const code = e?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          real = "";
+        } else {
+          return null;
+        }
+      }
+      if (real !== "") {
+        return path.join(real, ...tail.reverse());
+      }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      return path.join(cur, ...tail.reverse());
+    }
+    tail.push(path.basename(cur));
+    cur = parent;
+  }
+}
 
 // src/state/protected-paths.ts
 var PROTECTED_PREFIXES = [
@@ -1671,4 +1709,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=7A768453DBF4884764756E2164756E21
+//# debugId=B1D178B54E329C3664756E2164756E21

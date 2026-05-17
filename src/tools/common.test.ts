@@ -285,12 +285,16 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
-  it("rejects a modify-only call when target_file does not exist", () => {
+  it("accepts a declaration against a non-existent target_file, binding before_sha256 = sha256(\"\")", () => {
     const r = validateRequest("edit_boundary_condition",
       modifyReq({ target_file: "src/missing.ts" }), ctx());
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.warnings.some((w) => w.includes("does not exist"))).toBe(true);
+    // v0.4.2: a declaration against a not-yet-created file is valid; it
+    // binds sha256("") (parity with the hook's ENOENT→"" read). The old
+    // "create the empty file first, THEN declare" dance is gone.
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.canonical).toBe("src/missing.ts");
+      expect(r.primaryBinding.before_sha256).toBe(SHA256_EMPTY);
     }
   });
 

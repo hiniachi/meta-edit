@@ -6516,9 +6516,6 @@ var require_dist = __commonJS((exports, module) => {
   exports.default = formatsPlugin;
 });
 
-// src/server.ts
-import * as path7 from "node:path";
-
 // node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
@@ -17182,8 +17179,8 @@ General principles (apply to every edit):
 
 // src/tools/common.ts
 import * as crypto from "node:crypto";
-import * as fs4 from "node:fs";
-import * as path4 from "node:path";
+import * as fs5 from "node:fs";
+import * as path5 from "node:path";
 // src/state/protected-paths.ts
 import * as fs2 from "node:fs";
 import * as path2 from "node:path";
@@ -17214,6 +17211,44 @@ function realpathOfDeepestExisting(p) {
       }
       return null;
     }
+  }
+}
+function canonicalDirRealpath(p) {
+  let cur = path.dirname(p);
+  const tail = [path.basename(p)];
+  while (true) {
+    let st = null;
+    try {
+      st = fs.statSync(cur);
+    } catch (e) {
+      const code = e?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return null;
+      }
+      st = null;
+    }
+    if (st !== null && st.isDirectory()) {
+      let real;
+      try {
+        real = fs.realpathSync(cur);
+      } catch (e) {
+        const code = e?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          real = "";
+        } else {
+          return null;
+        }
+      }
+      if (real !== "") {
+        return path.join(real, ...tail.reverse());
+      }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      return path.join(cur, ...tail.reverse());
+    }
+    tail.push(path.basename(cur));
+    cur = parent;
   }
 }
 
@@ -17284,12 +17319,79 @@ function isProtectedPath(p, options = {}) {
   return false;
 }
 
-// src/tools/repo-validity.ts
+// src/utils/repo-paths.ts
 import * as fs3 from "node:fs";
 import * as path3 from "node:path";
+function discoverRepoRoot(start) {
+  let dir = path3.resolve(start);
+  let found = null;
+  for (;; ) {
+    if (fs3.existsSync(path3.join(dir, ".git")) || fs3.existsSync(path3.join(dir, ".jj"))) {
+      found = dir;
+      break;
+    }
+    const parent = path3.dirname(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  const base = found ?? path3.resolve(start);
+  return realpathOfDeepestExisting(base) ?? path3.resolve(base);
+}
+function resolveRepoRoot(primary) {
+  if (typeof primary === "string" && primary.length > 0) {
+    return discoverRepoRoot(primary);
+  }
+  const envRoot = process.env["META_EDIT_REPO_ROOT"];
+  if (typeof envRoot === "string" && envRoot.length > 0) {
+    return discoverRepoRoot(envRoot);
+  }
+  return discoverRepoRoot(process.cwd());
+}
+function canonicalizeRepoRelative(inputPath, repoRoot) {
+  const resolved = path3.isAbsolute(inputPath) ? path3.normalize(inputPath) : path3.resolve(repoRoot, inputPath);
+  const realRoot = realpathOfDeepestExisting(path3.resolve(repoRoot)) ?? path3.resolve(repoRoot);
+  const realResolved = canonicalDirRealpath(resolved);
+  if (realResolved === null) {
+    return {
+      ok: false,
+      code: "uncanonicalizable",
+      error: `path "${inputPath}" could not be canonicalized via realpath; failing closed`
+    };
+  }
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path3.sep)) {
+    return {
+      ok: false,
+      code: "escapes",
+      error: `path "${inputPath}" escapes repository root after symlink resolution`
+    };
+  }
+  let rel;
+  try {
+    rel = normalizeRepoRelative(path3.relative(realRoot, realResolved));
+  } catch (e) {
+    return {
+      ok: false,
+      code: "uncanonicalizable",
+      error: `path "${inputPath}" is invalid: ${e.message}`
+    };
+  }
+  if (rel.length === 0) {
+    return {
+      ok: false,
+      code: "is_root",
+      error: `path "${inputPath}" resolves to the repository root`
+    };
+  }
+  return { ok: true, canonical: rel };
+}
+
+// src/tools/repo-validity.ts
+import * as fs4 from "node:fs";
+import * as path4 from "node:path";
 function repoIsValid(dir) {
   const sentinels = [".git", ".jj"];
-  const found = sentinels.some((s) => fs3.existsSync(path3.join(dir, s)));
+  const found = sentinels.some((s) => fs4.existsSync(path4.join(dir, s)));
   if (found)
     return { ok: true };
   return {
@@ -17411,7 +17513,7 @@ function validateRequest(toolName, request, ctx) {
   return { ok: true, primaryBinding, additionalBindings };
 }
 function checkPathSafety(p, repoRoot) {
-  if (path4.isAbsolute(p)) {
+  if (path5.isAbsolute(p)) {
     return {
       ok: false,
       error: `path "${p}" is absolute; must be repository-relative`
@@ -17423,55 +17525,29 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`
     };
   }
-  let norm;
-  try {
-    norm = normalizeRepoRelative(p);
-  } catch (err) {
-    return {
-      ok: false,
-      error: `path "${p}" is invalid: ${err.message}`
-    };
-  }
-  if (norm.length === 0) {
-    return { ok: false, error: "path is empty after normalization" };
-  }
-  const lexicalRoot = path4.resolve(repoRoot);
-  const lexicalResolved = path4.resolve(lexicalRoot, norm);
-  if (lexicalResolved !== lexicalRoot && !lexicalResolved.startsWith(lexicalRoot + path4.sep)) {
-    return { ok: false, error: `path "${p}" escapes repository root` };
-  }
-  const realRoot = realpathOrSelf(lexicalRoot);
-  const realResolved = realpathOfDeepestExisting(lexicalResolved);
-  if (realResolved === null) {
+  const res = canonicalizeRepoRelative(p, repoRoot);
+  if (!res.ok) {
+    if (res.code === "escapes") {
+      return { ok: false, error: `path "${p}" escapes repository root` };
+    }
+    if (res.code === "is_root") {
+      return {
+        ok: false,
+        error: `path "${p}" resolves to the repository root`
+      };
+    }
     return {
       ok: false,
       error: `path "${p}" could not be canonicalized via realpath; failing closed`
     };
   }
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path4.sep)) {
-    return {
-      ok: false,
-      error: `path "${p}" escapes repository root after symlink resolution`
-    };
-  }
-  const canonical = normalizeRepoRelative(path4.relative(realRoot, realResolved));
-  if (canonical.length === 0) {
-    return { ok: false, error: `path "${p}" resolves to the repository root` };
-  }
-  if (isProtectedPath(canonical)) {
+  if (isProtectedPath(res.canonical)) {
     return {
       ok: false,
       error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`
     };
   }
-  return { ok: true, canonical };
-}
-function realpathOrSelf(p) {
-  try {
-    return fs4.realpathSync(p);
-  } catch {
-    return p;
-  }
+  return { ok: true, canonical: res.canonical };
 }
 function containsParentTraversal(p) {
   for (const seg of p.split(/[\\/]/)) {
@@ -17481,17 +17557,14 @@ function containsParentTraversal(p) {
   return false;
 }
 function computeBeforeSha256(canonical, repoRoot, fieldLabel) {
-  const absolute = path4.join(repoRoot, canonical);
+  const absolute = path5.join(repoRoot, canonical);
   let onDisk = null;
   try {
-    onDisk = fs4.readFileSync(absolute, "utf8");
+    onDisk = fs5.readFileSync(absolute, "utf8");
   } catch (e) {
     const code = e?.code;
     if (code === "ENOENT") {
-      return {
-        ok: false,
-        error: `${fieldLabel} "${canonical}" does not exist on disk. ` + `v0.3.1 expects you to create the empty file first via a ` + `native Write with content === "" (no MCP declaration needed; ` + `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` + `parent directories), THEN declare the typed_edit for the content fill.`
-      };
+      return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
       ok: false,
@@ -17625,8 +17698,8 @@ function registerTools(server, options) {
 
 // src/state/edit-log.ts
 import * as crypto2 from "node:crypto";
-import * as fs5 from "node:fs";
-import * as path5 from "node:path";
+import * as fs6 from "node:fs";
+import * as path6 from "node:path";
 var BindingEntrySchema = exports_external.object({
   file: exports_external.string(),
   before_sha256: exports_external.string()
@@ -17670,8 +17743,8 @@ class EditLog {
   todayKey = null;
   todayCounter = 0;
   constructor(repoRoot) {
-    this.statePath = path5.join(repoRoot, ".meta-edit", "state");
-    this.logPath = path5.join(this.statePath, "edits.jsonl");
+    this.statePath = path6.join(repoRoot, ".meta-edit", "state");
+    this.logPath = path6.join(this.statePath, "edits.jsonl");
   }
   get filePath() {
     return this.logPath;
@@ -17719,19 +17792,19 @@ class EditLog {
     ensureNoSymlinkOnPath(this.statePath);
     const line = JSON.stringify(entry) + `
 `;
-    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs6.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to append to the edit log without symlink-leaf protection");
     }
     this.withFileLock(() => {
       let fd = null;
       try {
-        fd = fs5.openSync(this.logPath, fs5.constants.O_WRONLY | fs5.constants.O_APPEND | fs5.constants.O_CREAT | O_NOFOLLOW, 384);
-        fs5.writeSync(fd, line, null, "utf8");
+        fd = fs6.openSync(this.logPath, fs6.constants.O_WRONLY | fs6.constants.O_APPEND | fs6.constants.O_CREAT | O_NOFOLLOW, 384);
+        fs6.writeSync(fd, line, null, "utf8");
       } finally {
         if (fd !== null) {
           try {
-            fs5.closeSync(fd);
+            fs6.closeSync(fd);
           } catch {}
         }
       }
@@ -17739,18 +17812,18 @@ class EditLog {
   }
   ensureStateDir() {
     ensureNoSymlinkOnPath(this.statePath);
-    fs5.mkdirSync(this.statePath, { recursive: true, mode: 448 });
+    fs6.mkdirSync(this.statePath, { recursive: true, mode: 448 });
     if (process.platform !== "win32") {
-      fs5.chmodSync(this.statePath, 448);
+      fs6.chmodSync(this.statePath, 448);
     }
   }
   withFileLock(fn) {
-    const lockPath = path5.join(this.statePath, ".lock");
+    const lockPath = path6.join(this.statePath, ".lock");
     const start = Date.now();
     const TIMEOUT_MS = 30000;
     while (true) {
       try {
-        fs5.mkdirSync(lockPath);
+        fs6.mkdirSync(lockPath);
         break;
       } catch (e) {
         const code = e.code;
@@ -17767,15 +17840,15 @@ class EditLog {
       return fn();
     } finally {
       try {
-        fs5.rmdirSync(lockPath);
+        fs6.rmdirSync(lockPath);
       } catch {}
     }
   }
   readCounterFile(key) {
-    const counterPath = path5.join(this.statePath, "counter.json");
+    const counterPath = path6.join(this.statePath, "counter.json");
     let text;
     try {
-      text = fs5.readFileSync(counterPath, "utf8");
+      text = fs6.readFileSync(counterPath, "utf8");
     } catch (e) {
       const code = e.code;
       if (code === "ENOENT")
@@ -17797,10 +17870,10 @@ class EditLog {
     return 0;
   }
   writeCounterFile(key, value) {
-    const counterPath = path5.join(this.statePath, "counter.json");
+    const counterPath = path6.join(this.statePath, "counter.json");
     const payload = JSON.stringify({ [key]: value });
     try {
-      const lst = fs5.lstatSync(counterPath);
+      const lst = fs6.lstatSync(counterPath);
       if (lst.isSymbolicLink()) {
         throw new Error(`refusing to use edit-log path: "${counterPath}" is a symlink. The audit-log counter must not be redirected through a symlink.`);
       }
@@ -17809,18 +17882,18 @@ class EditLog {
       if (code !== "ENOENT")
         throw e;
     }
-    const O_NOFOLLOW = fs5.constants.O_NOFOLLOW;
+    const O_NOFOLLOW = fs6.constants.O_NOFOLLOW;
     if (typeof O_NOFOLLOW !== "number" || O_NOFOLLOW === 0) {
       throw new Error("this platform does not expose O_NOFOLLOW; meta-edit refuses to write the audit-log counter without symlink-leaf protection");
     }
     let fd = null;
     try {
-      fd = fs5.openSync(counterPath, fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_TRUNC | O_NOFOLLOW, 384);
-      fs5.writeSync(fd, payload, null, "utf8");
+      fd = fs6.openSync(counterPath, fs6.constants.O_WRONLY | fs6.constants.O_CREAT | fs6.constants.O_TRUNC | O_NOFOLLOW, 384);
+      fs6.writeSync(fd, payload, null, "utf8");
     } finally {
       if (fd !== null) {
         try {
-          fs5.closeSync(fd);
+          fs6.closeSync(fd);
         } catch {}
       }
     }
@@ -17828,7 +17901,7 @@ class EditLog {
   readAll() {
     let text;
     try {
-      text = fs5.readFileSync(this.logPath, "utf8");
+      text = fs6.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return [];
@@ -17856,7 +17929,7 @@ class EditLog {
   scanMaxCounterForKey(key) {
     let text;
     try {
-      text = fs5.readFileSync(this.logPath, "utf8");
+      text = fs6.readFileSync(this.logPath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return 0;
@@ -17888,14 +17961,14 @@ class EditLog {
   }
 }
 function ensureNoSymlinkOnPath(maybeRelativeDir) {
-  const absDir = path5.resolve(maybeRelativeDir);
-  const segments = absDir.split(path5.sep).filter((s) => s.length > 0);
-  let cur = path5.sep;
+  const absDir = path6.resolve(maybeRelativeDir);
+  const segments = absDir.split(path6.sep).filter((s) => s.length > 0);
+  let cur = path6.sep;
   for (const seg of segments) {
-    cur = path5.join(cur, seg);
+    cur = path6.join(cur, seg);
     let stat;
     try {
-      stat = fs5.lstatSync(cur);
+      stat = fs6.lstatSync(cur);
     } catch (e) {
       const code = e?.code;
       if (code === "ENOENT")
@@ -18041,8 +18114,8 @@ function formatAuditError(editId, e) {
 
 // src/state/grants.ts
 import * as crypto3 from "node:crypto";
-import * as fs6 from "node:fs/promises";
-import * as path6 from "node:path";
+import * as fs7 from "node:fs/promises";
+import * as path7 from "node:path";
 var GRANT_TTL_MS = 600000;
 var TOKEN_ID_RE = /^met_\d{8}_[0-9a-f]{10}$/;
 function formatDayKey2(d) {
@@ -18114,20 +18187,59 @@ async function withSharedLock(key, fn) {
     }
   }
 }
+async function withInterProcessLock(lockPath, fn) {
+  const timeoutMs = 5000;
+  const staleMs = 15000;
+  const start = Date.now();
+  let held = false;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const fh = await fs7.open(lockPath, "wx", 384);
+      await fh.close();
+      held = true;
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") {
+        break;
+      }
+      try {
+        const st = await fs7.stat(lockPath);
+        if (Date.now() - st.mtimeMs > staleMs) {
+          await fs7.unlink(lockPath).catch(() => {
+            return;
+          });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, 25 + Math.random() * 40));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (held) {
+      await fs7.unlink(lockPath).catch(() => {
+        return;
+      });
+    }
+  }
+}
 
 class GrantsStoreImpl {
   grantsDir;
   constructor(repoRoot) {
-    this.grantsDir = path6.join(repoRoot, ".meta-edit", "state", "grants");
+    this.grantsDir = path7.join(repoRoot, ".meta-edit", "state", "grants");
   }
   mutexKey(token_id) {
-    return path6.resolve(this.grantPath(token_id));
+    return path7.resolve(this.grantPath(token_id));
   }
   async ensureDir() {
-    await fs6.mkdir(this.grantsDir, { recursive: true, mode: 448 });
+    await fs7.mkdir(this.grantsDir, { recursive: true, mode: 448 });
   }
   grantPath(token_id) {
-    return path6.join(this.grantsDir, `${token_id}.json`);
+    return path7.join(this.grantsDir, `${token_id}.json`);
   }
   async issue(args) {
     if (args.binding.length === 0) {
@@ -18167,7 +18279,7 @@ class GrantsStoreImpl {
       };
       const filePath = this.grantPath(token_id);
       try {
-        await fs6.writeFile(filePath, JSON.stringify(grant), {
+        await fs7.writeFile(filePath, JSON.stringify(grant), {
           encoding: "utf8",
           flag: "wx",
           mode: 384
@@ -18191,7 +18303,7 @@ class GrantsStoreImpl {
     const filePath = this.grantPath(token_id);
     let text;
     try {
-      text = await fs6.readFile(filePath, "utf8");
+      text = await fs7.readFile(filePath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT")
         return null;
@@ -18214,13 +18326,13 @@ class GrantsStoreImpl {
     if (typeof token_id !== "string" || !TOKEN_ID_RE.test(token_id)) {
       return { consumed: false, fully_consumed: false, error: "invalid token id" };
     }
-    return withSharedLock(this.mutexKey(token_id), () => this.consumeLocked(token_id, file_path));
+    return withSharedLock(this.mutexKey(token_id), () => withInterProcessLock(`${this.grantPath(token_id)}.lock`, () => this.consumeLocked(token_id, file_path)));
   }
   async consumeLocked(token_id, file_path) {
     const filePath = this.grantPath(token_id);
     let text;
     try {
-      text = await fs6.readFile(filePath, "utf8");
+      text = await fs7.readFile(filePath, "utf8");
     } catch (e) {
       if (e.code === "ENOENT") {
         return {
@@ -18270,41 +18382,40 @@ class GrantsStoreImpl {
     const fullyConsumed = parsed.consumed_files.length === parsed.binding.length;
     if (fullyConsumed) {
       try {
-        await fs6.unlink(filePath);
+        await fs7.unlink(filePath);
       } catch (e) {
         if (e.code !== "ENOENT")
           throw e;
       }
     } else {
-      await fs6.writeFile(filePath, JSON.stringify(parsed), {
+      await fs7.writeFile(filePath, JSON.stringify(parsed), {
         encoding: "utf8",
         mode: 384
       });
     }
     return { consumed: true, fully_consumed: fullyConsumed };
   }
-  async findActiveBindingForFile(canonicalFile) {
+  async findActiveBindingForFile(canonicalFile, opts) {
     if (typeof canonicalFile !== "string" || canonicalFile.length === 0) {
       return null;
     }
     let names;
     try {
-      names = await fs6.readdir(this.grantsDir);
+      names = await fs7.readdir(this.grantsDir);
     } catch (e) {
       if (e.code === "ENOENT")
         return null;
       throw e;
     }
     const now = Date.now();
-    let best = null;
-    let bestIssuedMs = -Infinity;
+    const candidates = [];
     for (const name of names) {
       if (!name.endsWith(".json"))
         continue;
-      const filePath = path6.join(this.grantsDir, name);
+      const filePath = path7.join(this.grantsDir, name);
       let text;
       try {
-        text = await fs6.readFile(filePath, "utf8");
+        text = await fs7.readFile(filePath, "utf8");
       } catch (e) {
         if (e.code === "ENOENT")
           continue;
@@ -18327,17 +18438,27 @@ class GrantsStoreImpl {
         continue;
       const issuedMs = Date.parse(parsed.issued_at);
       const issuedScore = Number.isFinite(issuedMs) ? issuedMs : -Infinity;
-      if (issuedScore > bestIssuedMs) {
-        bestIssuedMs = issuedScore;
-        best = { grant: parsed, binding };
-      }
+      candidates.push({ match: { grant: parsed, binding }, issuedScore });
     }
-    return best;
+    if (candidates.length === 0)
+      return null;
+    let pool = candidates;
+    if (opts?.preferBeforeSha !== undefined) {
+      const matching = candidates.filter((c) => c.match.binding.before_sha256 === opts.preferBeforeSha);
+      if (matching.length > 0)
+        pool = matching;
+    }
+    let best = pool[0];
+    for (const c of pool) {
+      if (c.issuedScore > best.issuedScore)
+        best = c;
+    }
+    return best.match;
   }
   async reapExpired() {
     let names;
     try {
-      names = await fs6.readdir(this.grantsDir);
+      names = await fs7.readdir(this.grantsDir);
     } catch (e) {
       if (e.code === "ENOENT")
         return 0;
@@ -18348,10 +18469,10 @@ class GrantsStoreImpl {
     for (const name of names) {
       if (!name.endsWith(".json"))
         continue;
-      const filePath = path6.join(this.grantsDir, name);
+      const filePath = path7.join(this.grantsDir, name);
       let text;
       try {
-        text = await fs6.readFile(filePath, "utf8");
+        text = await fs7.readFile(filePath, "utf8");
       } catch (e) {
         if (e.code === "ENOENT")
           continue;
@@ -18368,7 +18489,7 @@ class GrantsStoreImpl {
       if (Date.parse(parsed.expires_at) > now)
         continue;
       try {
-        await fs6.unlink(filePath);
+        await fs7.unlink(filePath);
         removed++;
       } catch (e) {
         if (e.code === "ENOENT")
@@ -18384,7 +18505,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.4.1",
+  version: "0.4.2",
   description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18454,16 +18575,6 @@ var package_default = {
 var VERSION = package_default.version;
 
 // src/server.ts
-function resolveRepoRoot(optionRepoRoot) {
-  if (typeof optionRepoRoot === "string" && optionRepoRoot.length > 0) {
-    return path7.resolve(optionRepoRoot);
-  }
-  const envRoot = process.env["META_EDIT_REPO_ROOT"];
-  if (typeof envRoot === "string" && envRoot.length > 0) {
-    return path7.resolve(envRoot);
-  }
-  return process.cwd();
-}
 function createServer(options = {}) {
   const repoRoot = resolveRepoRoot(options.repoRoot);
   const repoCheck = repoIsValid(repoRoot);
@@ -18497,17 +18608,17 @@ async function runStdioServer(options = {}) {
     transport.close().catch(() => {});
   });
   await server.connect(transport);
-  await new Promise((resolve6) => {
+  await new Promise((resolve5) => {
     const previousOnClose = transport.onclose;
     transport.onclose = () => {
       previousOnClose?.call(transport);
-      resolve6();
+      resolve5();
     };
   });
 }
 
 // src/cli.ts
-import * as fs9 from "node:fs";
+import * as fs10 from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // src/cli/serve-cmd.ts
@@ -18803,7 +18914,7 @@ function parseDate(s) {
 
 // src/cli/hooks-cmd.ts
 import * as crypto4 from "node:crypto";
-import * as fs7 from "node:fs";
+import * as fs8 from "node:fs";
 import * as os from "node:os";
 import * as path8 from "node:path";
 var META_EDIT_HOOK_COMMANDS = {
@@ -18838,7 +18949,7 @@ function runInstallHooks(options) {
 }
 function runUninstallHooks(options) {
   const target = settingsPathForScope(options.scope, options);
-  if (!fs7.existsSync(target)) {
+  if (!fs8.existsSync(target)) {
     options.out.write(`meta-edit: ${target} does not exist; nothing to uninstall.
 `);
     return 0;
@@ -18956,9 +19067,9 @@ function isMetaEditHookCommand(cmd) {
   return owned.includes(basename3);
 }
 function readSettings(filePath) {
-  if (!fs7.existsSync(filePath))
+  if (!fs8.existsSync(filePath))
     return {};
-  const text = fs7.readFileSync(filePath, "utf8");
+  const text = fs8.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
   try {
@@ -18969,41 +19080,41 @@ function readSettings(filePath) {
 }
 function writeSettings(filePath, settings) {
   const dir = path8.dirname(filePath);
-  fs7.mkdirSync(dir, { recursive: true });
+  fs8.mkdirSync(dir, { recursive: true });
   let mode = 384;
   try {
-    mode = fs7.statSync(filePath).mode & 4095;
+    mode = fs8.statSync(filePath).mode & 4095;
   } catch {}
   const tempName = path8.basename(filePath) + "." + crypto4.randomBytes(8).toString("hex") + ".metaedit-tmp";
   const tempPath = path8.join(dir, tempName);
   let fd = null;
   try {
-    fd = fs7.openSync(tempPath, fs7.constants.O_WRONLY | fs7.constants.O_CREAT | fs7.constants.O_EXCL | (fs7.constants.O_NOFOLLOW ?? 0), 384);
-    fs7.writeFileSync(fd, JSON.stringify(settings, null, 2) + `
+    fd = fs8.openSync(tempPath, fs8.constants.O_WRONLY | fs8.constants.O_CREAT | fs8.constants.O_EXCL | (fs8.constants.O_NOFOLLOW ?? 0), 384);
+    fs8.writeFileSync(fd, JSON.stringify(settings, null, 2) + `
 `, {
       encoding: "utf8"
     });
-    fs7.fsyncSync(fd);
+    fs8.fsyncSync(fd);
   } catch (e) {
     try {
-      fs7.unlinkSync(tempPath);
+      fs8.unlinkSync(tempPath);
     } catch {}
     throw e;
   } finally {
     if (fd !== null) {
       try {
-        fs7.closeSync(fd);
+        fs8.closeSync(fd);
       } catch {}
     }
   }
   try {
-    fs7.chmodSync(tempPath, mode);
+    fs8.chmodSync(tempPath, mode);
   } catch {}
   try {
-    fs7.renameSync(tempPath, filePath);
+    fs8.renameSync(tempPath, filePath);
   } catch (e) {
     try {
-      fs7.unlinkSync(tempPath);
+      fs8.unlinkSync(tempPath);
     } catch {}
     throw e;
   }
@@ -19033,7 +19144,7 @@ function parseHooksArgs(argv) {
 
 // src/cli/opencode-cmd.ts
 import * as crypto5 from "node:crypto";
-import * as fs8 from "node:fs";
+import * as fs9 from "node:fs";
 import * as os2 from "node:os";
 import * as path9 from "node:path";
 var META_EDIT_OPENCODE_RESOURCES = {
@@ -19066,7 +19177,7 @@ function runInstallOpencode(opts) {
 }
 function runUninstallOpencode(opts) {
   const target = configPathForScope(opts.scope, opts);
-  if (!fs8.existsSync(target)) {
+  if (!fs9.existsSync(target)) {
     opts.out.write(`meta-edit: ${target} does not exist; nothing to uninstall.
 `);
     return 0;
@@ -19128,9 +19239,9 @@ function uninstallMetaEditOpencode(config2) {
   return out;
 }
 function readConfig(filePath) {
-  if (!fs8.existsSync(filePath))
+  if (!fs9.existsSync(filePath))
     return {};
-  const text = fs8.readFileSync(filePath, "utf8");
+  const text = fs9.readFileSync(filePath, "utf8");
   if (text.trim().length === 0)
     return {};
   try {
@@ -19141,41 +19252,41 @@ function readConfig(filePath) {
 }
 function writeConfig(filePath, config2) {
   const dir = path9.dirname(filePath);
-  fs8.mkdirSync(dir, { recursive: true });
+  fs9.mkdirSync(dir, { recursive: true });
   let mode = 384;
   try {
-    mode = fs8.statSync(filePath).mode & 4095;
+    mode = fs9.statSync(filePath).mode & 4095;
   } catch {}
   const tempName = path9.basename(filePath) + "." + crypto5.randomBytes(8).toString("hex") + ".metaedit-tmp";
   const tempPath = path9.join(dir, tempName);
   let fd = null;
   try {
-    fd = fs8.openSync(tempPath, fs8.constants.O_WRONLY | fs8.constants.O_CREAT | fs8.constants.O_EXCL | (fs8.constants.O_NOFOLLOW ?? 0), 384);
-    fs8.writeFileSync(fd, JSON.stringify(config2, null, 2) + `
+    fd = fs9.openSync(tempPath, fs9.constants.O_WRONLY | fs9.constants.O_CREAT | fs9.constants.O_EXCL | (fs9.constants.O_NOFOLLOW ?? 0), 384);
+    fs9.writeFileSync(fd, JSON.stringify(config2, null, 2) + `
 `, {
       encoding: "utf8"
     });
-    fs8.fsyncSync(fd);
+    fs9.fsyncSync(fd);
   } catch (e) {
     try {
-      fs8.unlinkSync(tempPath);
+      fs9.unlinkSync(tempPath);
     } catch {}
     throw e;
   } finally {
     if (fd !== null) {
       try {
-        fs8.closeSync(fd);
+        fs9.closeSync(fd);
       } catch {}
     }
   }
   try {
-    fs8.chmodSync(tempPath, mode);
+    fs9.chmodSync(tempPath, mode);
   } catch {}
   try {
-    fs8.renameSync(tempPath, filePath);
+    fs9.renameSync(tempPath, filePath);
   } catch (e) {
     try {
-      fs8.unlinkSync(tempPath);
+      fs9.unlinkSync(tempPath);
     } catch {}
     throw e;
   }
@@ -19404,8 +19515,8 @@ function isMainModule() {
   if (!process.argv[1])
     return false;
   try {
-    const argv1Real = fs9.realpathSync(process.argv[1]);
-    const moduleReal = fs9.realpathSync(fileURLToPath(import.meta.url));
+    const argv1Real = fs10.realpathSync(process.argv[1]);
+    const moduleReal = fs10.realpathSync(fileURLToPath(import.meta.url));
     return argv1Real === moduleReal;
   } catch {
     return false;
@@ -19423,4 +19534,4 @@ export {
   main
 };
 
-//# debugId=92B0C3FAF3737A2A64756E2164756E21
+//# debugId=C30536047CBFB22064756E2164756E21

@@ -44,3 +44,66 @@ export function realpathOfDeepestExisting(p: string): string | null {
     }
   }
 }
+
+/**
+ * Existence-INDEPENDENT canonicalization. Realpaths the deepest existing
+ * *directory* ancestor of `p` and re-attaches every remaining component
+ * — INCLUDING the leaf basename — lexically. Unlike
+ * `realpathOfDeepestExisting`, this never calls `fs.realpathSync` on the
+ * leaf itself, so the result is byte-identical whether or not the leaf
+ * (or its not-yet-created intermediate parent dirs) exists on disk —
+ * the property the grant issue/consume binding parity depends on
+ * (issues/2026-05-17-grant-binding-canonicalization-parity.md).
+ *
+ * A real symlink in the agent-created (not-yet-existing) portion of the
+ * path would still be resolved differently between the two calls, but
+ * agent-created directories are plain `mkdir` dirs, never symlinks, so
+ * under the non-adversarial threat model (SPEC Article 3) the canonical
+ * form is stable across the declare→write window.
+ *
+ * Returns null on EACCES / EPERM / ELOOP / EMFILE (fail-closed), matching
+ * `realpathOfDeepestExisting`'s contract.
+ */
+export function canonicalDirRealpath(p: string): string | null {
+  let cur = path.dirname(p);
+  const tail: string[] = [path.basename(p)];
+  while (true) {
+    let st: fs.Stats | null = null;
+    try {
+      st = fs.statSync(cur);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        // EACCES / EPERM / ELOOP / EMFILE — cannot canonicalize safely.
+        return null;
+      }
+      st = null;
+    }
+    if (st !== null && st.isDirectory()) {
+      let real: string;
+      try {
+        real = fs.realpathSync(cur);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          // Raced away between statSync and realpathSync — treat as
+          // non-existent and keep walking up.
+          real = "";
+        } else {
+          return null;
+        }
+      }
+      if (real !== "") {
+        return path.join(real, ...tail.reverse());
+      }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      // Reached the filesystem root without an existing directory
+      // (degenerate; "/" normally exists). Fall back to the lexical form.
+      return path.join(cur, ...tail.reverse());
+    }
+    tail.push(path.basename(cur));
+    cur = parent;
+  }
+}

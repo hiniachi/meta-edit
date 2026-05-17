@@ -22,23 +22,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readStdin, replyAllow } from "./hook-runtime.js";
+import { resolveRepoRoot } from "../utils/repo-paths.js";
 
 type SessionStartEvent = {
   session_id?: unknown;
   cwd?: unknown;
   hook_event_name?: unknown;
 };
-
-function resolveRepoRoot(eventCwd: unknown): string {
-  if (typeof eventCwd === "string" && eventCwd.length > 0) {
-    return path.resolve(eventCwd);
-  }
-  const envRoot = process.env["META_EDIT_REPO_ROOT"];
-  if (typeof envRoot === "string" && envRoot.length > 0) {
-    return path.resolve(envRoot);
-  }
-  return process.cwd();
-}
 
 /**
  * Atomically claim the marker for this session_id. Returns true when
@@ -113,7 +103,9 @@ async function main(): Promise<number> {
     return replyAllow();
   }
 
-  const repoRoot = resolveRepoRoot(event.cwd);
+  const repoRoot = resolveRepoRoot(
+    typeof event.cwd === "string" ? event.cwd : undefined,
+  );
   const markerPath = path.join(
     repoRoot,
     ".meta-edit",

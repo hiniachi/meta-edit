@@ -194,12 +194,17 @@ describe("makeIssuingHandler — validation rejection", () => {
     );
   });
 
-  it("rejects modify-only call when target file does not exist on disk", async () => {
-    await expectRejection(
+  it("accepts a declaration against a non-existent target file, binding sha256(\"\")", async () => {
+    const { handler, grants } = makeHandler();
+    const result = await handler(
       "edit_boundary_condition",
       modifyRequest({ target_file: "src/missing.ts" }),
-      (w) => w.some((s) => s.includes("does not exist")),
     );
+    expect(result.warnings).toEqual([]);
+    expect(result.token.length).toBeGreaterThan(0);
+    const grant = await grants.lookup(result.token);
+    expect(grant?.binding[0]?.file).toBe("src/missing.ts");
+    expect(grant?.binding[0]?.before_sha256).toBe(SHA256_EMPTY);
   });
 
   // v0.3.1 removal: edit_create_file is gone. Empty file creation is
@@ -274,9 +279,9 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(byFile.get("docs/c.md")).toBe(sha256Hex("gamma\n"));
   });
 
-  it("rejects edit_docs_only when an additional_files entry does not exist", async () => {
+  it("accepts edit_docs_only when additional_files entries do not exist yet, binding sha256(\"\")", async () => {
     writeFile("docs/a.md", "alpha\n");
-    const { handler } = makeHandler();
+    const { handler, grants } = makeHandler();
     const additional = [];
     for (let i = 0; i < 32; i++) {
       additional.push({ file: `docs/extra${i}.md` });
@@ -288,10 +293,16 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
       test_files: [],
       additional_files: additional,
     });
-    // 32 entries do not exist on disk; for edit_docs_only that's a modify-
-    // only target so each missing file produces a warning.
-    expect(result.token).toBe("");
-    expect(result.warnings.length).toBeGreaterThan(0);
+    // v0.4.2: non-existent additional_files entries are valid forward
+    // declarations; each binds sha256("") just like target_file.
+    expect(result.warnings).toEqual([]);
+    expect(result.token.length).toBeGreaterThan(0);
+    const grant = await grants.lookup(result.token);
+    const byFile = new Map(grant!.binding.map((b) => [b.file, b.before_sha256]));
+    expect(byFile.get("docs/a.md")).toBe(sha256Hex("alpha\n"));
+    expect(byFile.get("docs/extra0.md")).toBe(SHA256_EMPTY);
+    expect(byFile.get("docs/extra31.md")).toBe(SHA256_EMPTY);
+    expect(grant?.binding.length).toBe(33);
   });
 });
 
