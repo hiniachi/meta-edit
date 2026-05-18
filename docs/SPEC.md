@@ -408,28 +408,37 @@ The **repository root** is the single directory that all `target_file`
 the boundary the path-safety check enforces. Every path in this spec is
 repository-relative to it.
 
-The MCP server resolves the repository root once at startup, in this
-precedence:
+Resolution precedence (the chosen value is then upward-discovered and
+realpath-normalized):
 
-1. the explicit `--repo-root <path>` flag passed to `meta-edit serve`
+1. the explicit `--repo-root <path>` flag (`meta-edit serve`) — on the
+   hook side, the Claude Code hook event's `cwd`
 2. the `META_EDIT_REPO_ROOT` environment variable
-3. `process.cwd()` (the default; unchanged)
+3. `process.cwd()` (the default)
 
-The resolved value is normalized with `path.resolve`. The hooks
-(`deny-raw-edit`, session onboarding) resolve their root with the
-**same precedence and normalization**. This parity is a correctness
-requirement, not incidental: if the server and the hooks land on
-different roots, their canonical forms diverge and the single-use
-binding lookup fails (the request is rejected as not covered, or a
-legitimate path is rejected as escaping the root).
+Whichever branch wins is passed through one shared resolver
+(`src/utils/repo-paths.ts resolveRepoRoot`) that (a) walks **up** the
+directory tree to the nearest ancestor containing a `.git` or `.jj`
+marker (a sub-directory or jj-workspace launch resolves to the actual
+workspace root), then (b) `realpath`-normalizes it. The MCP server and
+**both** hooks call this one implementation — parity is structural, not
+comment-enforced across copies. This is a correctness requirement: if
+the server (issuer) and the hooks (consumer) land on different roots,
+the grant binding key diverges and the single-use lookup fails.
 
-When the launch working directory is not the repository top-level — a
-`jj` workspace, a git worktree, or a sub-directory launch — the
-remediation is to point `--repo-root` or `META_EDIT_REPO_ROOT` at the
-actual repository root. The server does not walk up the directory tree
-or parse VCS layouts to discover the root; VCS-adapter abstraction and
-jj-specific support remain out of scope (Article 7). The override is
-VCS-agnostic plumbing only.
+The same module provides the one **existence-independent**
+canonicalizer (`canonicalizeRepoRelative`) used by both the issuer
+(`checkPathSafety`) and the consumer (`canonicalizeForBinding`): it
+realpaths the deepest existing **directory** ancestor and re-attaches
+the remaining components — including the leaf — lexically, so a
+declaration against a not-yet-created file binds the same key the
+later native write resolves to (the file's existence state at each
+moment no longer changes the canonical form).
+
+`.git`/`.jj` upward discovery is VCS-agnostic plumbing — meta-edit
+still does not parse VCS layouts or add a VCS adapter (Article 7).
+`--repo-root` / `META_EDIT_REPO_ROOT` remain available to override
+discovery explicitly.
 
 ### Argument validation
 
@@ -439,8 +448,8 @@ The MCP server enforces:
 - `rationale` is non-empty after trim.
 - `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived production tools that impose test obligations; empty for `edit_refactor_only` / `edit_test_only_change` / `edit_docs_only`.
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via subsequent `edit_test_only_change` calls. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
-- For modify-only tools, `target_file` MUST exist on disk; the server reads it and binds `before_sha256 := sha256(disk_content_utf8)`.
-- v0.3.1: there is no longer a CREATE-flagged tool. Empty file creation is authorized at the deny-raw-edit hook level (Write with `content === ""` to a non-existent in-repo path; see §5.1). Content fills run in modify mode against the now-empty file via the appropriate type-specific tool, treating `before_sha256 := sha256("")`.
+- The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
+- v0.4.2 removed the v0.3.1 "create the empty file first via a `content === ""` Write, THEN declare" requirement. That ordering-sensitive dance was a primary cause of binding failures (issues/2026-05-17-grant-binding-canonicalization-parity.md). The free empty-`content` Write to a non-existent in-repo path is still authorized at the hook (it remains a convenient scaffold), but it is no longer a prerequisite for declaring against a new file.
 - `additional_files` is accepted only for the 1 workflow tool, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 
@@ -1269,27 +1278,56 @@ on_pre_tool_use(toolName, toolInput):
   if file_path is outside repoRoot:
     return allow()  # 1102: out-of-repo writes are not governed
 
-  match = grants.findActiveBindingForFile(file_path)
-  if match is None:
-    return deny("no active typed_edit declaration covers this file")
-
-  # Pre-condition: declared starting state matches disk.
+  # Pre-condition read FIRST so the disk sha can both steer grant
+  # selection (anti-hijack) and categorize the deny. An absent file
+  # reads as "" (a declaration against a not-yet-created file binds
+  # sha256("")); any other read failure fails closed.
   disk_content = read(file_path) if exists(file_path) else b""
-  if sha256(disk_content) != match.binding.before_sha256:
-    return deny("disk has drifted from declaration (staleness)")
+  disk_sha = sha256(disk_content)
 
-  grants.consume(match.grant.token_id, file_path)
-  appendConsumed(edit_log, {
-    edit_id: match.grant.edit_id,
-    consuming_tool: toolName,
-    ts: now(),
-  })
+  match = grants.findActiveBindingForFile(file_path,
+                                          preferBeforeSha=disk_sha)
+  if match is None:
+    return deny("[meta-edit:undeclared] ...")
+  if disk_sha != match.binding.before_sha256:
+    return deny("[meta-edit:stale] ...")
+
+  grants.consume(match.grant.token_id, file_path)   # cross-process locked
+  appendConsumed(edit_log, { edit_id, consuming_tool, ts })
   return allow()
 ```
 
-`findActiveBindingForFile` scans every grant file in `.meta-edit/state/grants/`, skips expired entries, skips bindings already in `consumed_files`, and returns the most-recently-issued match (LIFO on `issued_at`). If multiple grants cover the same file, the agent's freshest intent wins.
+`findActiveBindingForFile` scans every grant file in
+`.meta-edit/state/grants/`, skips expired entries and bindings already
+in `consumed_files`. Selection: when `preferBeforeSha` is supplied and
+any candidate's `before_sha256` matches the current disk, selection is
+restricted to those candidates, so an interleaved **later** declaration
+(whose `before_sha256` reflects a different disk state) cannot hijack
+this file's pending write. Within the chosen set the most-recently-
+issued grant wins (LIFO).
 
-The pre-condition check is **staleness detection**, not a TOCTOU defense: it catches declarations made against a prior disk state but does not eliminate the residual race between hook approval and the native write. The residual race is accepted under the threat model in Article 3.
+`grants.consume` is serialized by an in-process mutex **and** a
+cross-process O_EXCL advisory lock keyed per grant file (v0.4.2). The
+hook is a fresh single-shot process per native edit; without the
+cross-process lock, N parallel native writes against one multi-file
+grant race the grant file's `consumed_files` read-modify-write and only
+one survives. The lock is best-effort and bounded: a lock older than a
+staleness window is presumed orphaned and stolen; on lock-acquire
+timeout the consume proceeds without the lock rather than deny a
+legitimate write (the residual race under pathological contention is
+accepted under Article 3 — silently denying the agent is worse).
+
+Deny reasons are **categorized** with a `[meta-edit:<category>]`
+prefix — `path-mismatch`, `unreadable`, `undeclared`, `stale`,
+`expired`, `consumed`, `consume-failed` — and surface the computed
+canonical path and `repoRoot` so a path/root divergence is
+diagnosable from the transcript.
+
+The pre-condition check is **staleness detection**, not a TOCTOU
+defense: it catches declarations made against a prior disk state but
+does not eliminate the residual race between hook approval and the
+native write. The residual race is accepted under the threat model in
+Article 3.
 
 > **v0.2.2 fix.** The v0.2.0 / v0.2.1 hook required the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check entirely server-side: the agent makes a normal native call after `typed_edit`, and the hook resolves the active declaration on its own by file path. The constitutional principles (Article 5: declaration → presence-check → consume) are unchanged; only the implementation of the presence-check changed.
 

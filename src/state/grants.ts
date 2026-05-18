@@ -94,14 +94,22 @@ export interface GrantsStore {
   consume(token_id: string, file_path: string): Promise<ConsumeResult>;
 
   /**
-   * Scan all on-disk grants and return the most-recently-issued unconsumed
-   * binding that matches `canonicalFile`. Skips expired grants and bindings
-   * already in `consumed_files`. Returns null if none match. (v0.2.2: Claude
-   * Code's native Edit/Write/MultiEdit input schemas reject extra fields, so
-   * the agent cannot surface a token to the hook; the hook resolves the
-   * declaration server-side by file path instead.)
+   * Scan all on-disk grants and return an unconsumed binding matching
+   * `canonicalFile`. Skips expired grants and bindings already in
+   * `consumed_files`. Returns null if none match.
+   *
+   * Selection: when `opts.preferBeforeSha` is supplied and any candidate
+   * binding's `before_sha256` equals it, selection is restricted to
+   * those candidates (so an interleaved later declaration whose
+   * before_sha256 reflects a different disk state cannot hijack this
+   * file's pending write — issues/2026-05-17). Within the chosen set
+   * the most-recently-issued grant wins (LIFO = agent's freshest
+   * intent). With no `preferBeforeSha`, pure LIFO (legacy behavior).
    */
-  findActiveBindingForFile(canonicalFile: string): Promise<ActiveBindingMatch | null>;
+  findActiveBindingForFile(
+    canonicalFile: string,
+    opts?: { preferBeforeSha?: string },
+  ): Promise<ActiveBindingMatch | null>;
 
   /** Best-effort housekeeping. Returns the number of grant files removed. */
   reapExpired(): Promise<number>;
@@ -172,11 +180,11 @@ function isGrant(value: unknown): value is Grant {
  * tail promise settles so we don't leak memory across a long-running
  * server process.
  *
- * Per Article 3 (non-adversarial), in-process serialisation is
- * sufficient — the typical deployment has one MCP server issuing
- * tokens and one Claude Code instance consuming them. Cross-process
- * coordination would need a file lock; we deliberately avoid that
- * complexity per Article 7.
+ * This in-process mutex covers same-process concurrency. Concurrent
+ * single-shot hook PROCESSES are serialised separately by the
+ * cross-process advisory file lock in `withInterProcessLock` below
+ * (v0.4.2 — parallel native writes against one multi-file grant used
+ * to race the grant file's `consumed_files` and only one survived).
  */
 const SHARED_MUTEX_TAILS = new Map<string, Promise<unknown>>();
 
@@ -206,6 +214,81 @@ async function withSharedLock<T>(
     // compare identity so we never clobber a newer queue.
     if (SHARED_MUTEX_TAILS.get(key) === myTail) {
       SHARED_MUTEX_TAILS.delete(key);
+    }
+  }
+}
+
+/**
+ * Cross-process advisory lock via an O_EXCL lock file. The deny-raw-edit
+ * hook is a fresh single-shot process per native edit, so the in-process
+ * `withSharedLock` above serialises nothing across concurrent hook
+ * invocations. N parallel native writes against one multi-file grant
+ * each spawn a hook process; without this lock their consume()
+ * read-modify-write cycles race on the grant file's `consumed_files`
+ * list and only one survives (issues/2026-05-17). The lock serialises
+ * the consume critical section across processes.
+ *
+ * Best-effort + bounded: a lock older than `staleMs` is presumed
+ * orphaned (a crashed hook process) and stolen. On timeout the caller
+ * proceeds WITHOUT the lock rather than fail-closed-denying a
+ * legitimate write — per Article 3 the residual race under pathological
+ * contention is acceptable; silently denying the agent is not.
+ */
+async function withInterProcessLock<T>(
+  lockPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  // staleMs MUST stay >> worst-case consumeLocked duration: a holder
+  // whose critical section outlives staleMs can have its lock stolen
+  // mid-flight. consumeLocked is a single small JSON read/modify/write
+  // (sub-millisecond typically), so 15s is ~4 orders of margin.
+  const timeoutMs = 5_000;
+  const staleMs = 15_000;
+  const start = Date.now();
+  let held = false;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const fh = await fs.open(lockPath, "wx", 0o600);
+      await fh.close();
+      held = true;
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+        // ENOENT on the parent dir / EACCES / etc: cannot lock — proceed
+        // best-effort rather than deny.
+        break;
+      }
+      // Lock held. Steal it if stale (orphaned by a crashed process).
+      try {
+        const st = await fs.stat(lockPath);
+        if (Date.now() - st.mtimeMs > staleMs) {
+          await fs.unlink(lockPath).catch(() => undefined);
+          continue;
+        }
+      } catch {
+        // Lock vanished between open and stat — retry immediately.
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, 25 + Math.random() * 40));
+    }
+  }
+  if (!held) {
+    // Proceeding WITHOUT the lock (acquire timed out or lockfile dir
+    // unwritable). The consume still runs — denying a legitimate write
+    // is worse than the residual race (Article 3) — but make the
+    // degradation observable instead of silent, matching the codebase's
+    // stderr-WARN discipline.
+    process.stderr.write(
+      `[meta-edit] WARN: grant consume proceeding WITHOUT cross-process lock ` +
+        `(could not acquire ${lockPath} within ${timeoutMs}ms); ` +
+        `concurrent native writes against this grant may race.\n`,
+    );
+  }
+  try {
+    return await fn();
+  } finally {
+    if (held) {
+      await fs.unlink(lockPath).catch(() => undefined);
     }
   }
 }
@@ -364,8 +447,14 @@ class GrantsStoreImpl implements GrantsStore {
     // lose updates, even if they come from different GrantsStoreImpl
     // instances. Different tokens proceed in parallel. (Codex review:
     // HIGH, in-scope under Article 3.)
+    // In-process mutex (same-process concurrency) wrapping a
+    // cross-process O_EXCL file lock (concurrent hook processes). Both
+    // are keyed per grant file so different tokens still proceed in
+    // parallel.
     return withSharedLock(this.mutexKey(token_id), () =>
-      this.consumeLocked(token_id, file_path),
+      withInterProcessLock(`${this.grantPath(token_id)}.lock`, () =>
+        this.consumeLocked(token_id, file_path),
+      ),
     );
   }
 
@@ -455,6 +544,7 @@ class GrantsStoreImpl implements GrantsStore {
 
   async findActiveBindingForFile(
     canonicalFile: string,
+    opts?: { preferBeforeSha?: string },
   ): Promise<ActiveBindingMatch | null> {
     if (typeof canonicalFile !== "string" || canonicalFile.length === 0) {
       return null;
@@ -467,8 +557,8 @@ class GrantsStoreImpl implements GrantsStore {
       throw e;
     }
     const now = Date.now();
-    let best: ActiveBindingMatch | null = null;
-    let bestIssuedMs = -Infinity;
+    const candidates: Array<{ match: ActiveBindingMatch; issuedScore: number }> =
+      [];
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
       const filePath = path.join(this.grantsDir, name);
@@ -496,18 +586,30 @@ class GrantsStoreImpl implements GrantsStore {
       const binding = parsed.binding.find((b) => b.file === canonicalFile);
       if (!binding) continue;
 
-      // LIFO: prefer the most-recently-issued grant (agent's freshest
-      // intent). Date.parse can return NaN for malformed input; isGrant
-      // already guarantees issued_at is a string but does not validate
-      // ISO format, so guard against NaN by treating it as "very old".
+      // Date.parse can return NaN for malformed input; isGrant guarantees
+      // issued_at is a string but not ISO format, so treat NaN as "very
+      // old".
       const issuedMs = Date.parse(parsed.issued_at);
       const issuedScore = Number.isFinite(issuedMs) ? issuedMs : -Infinity;
-      if (issuedScore > bestIssuedMs) {
-        bestIssuedMs = issuedScore;
-        best = { grant: parsed, binding };
-      }
+      candidates.push({ match: { grant: parsed, binding }, issuedScore });
     }
-    return best;
+    if (candidates.length === 0) return null;
+
+    // Anti-hijack: if a disk-matching candidate exists, only consider
+    // those. Otherwise fall back to the full set (preserves legacy LIFO
+    // and the staleness-deny path in the hook).
+    let pool = candidates;
+    if (opts?.preferBeforeSha !== undefined) {
+      const matching = candidates.filter(
+        (c) => c.match.binding.before_sha256 === opts.preferBeforeSha,
+      );
+      if (matching.length > 0) pool = matching;
+    }
+    let best = pool[0]!;
+    for (const c of pool) {
+      if (c.issuedScore > best.issuedScore) best = c;
+    }
+    return best.match;
   }
 
   async reapExpired(): Promise<number> {

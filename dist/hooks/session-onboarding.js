@@ -45,8 +45,8 @@ var __export = (target, all) => {
 };
 
 // src/hooks/session-onboarding.ts
-import * as fs from "node:fs";
-import * as path from "node:path";
+import * as fs4 from "node:fs";
+import * as path4 from "node:path";
 
 // src/hooks/hook-runtime.ts
 async function readStdin() {
@@ -98,23 +98,218 @@ function replyAllowWithWarning(reason) {
   return 0;
 }
 
-// src/hooks/session-onboarding.ts
-function resolveRepoRoot(eventCwd) {
-  if (typeof eventCwd === "string" && eventCwd.length > 0) {
-    return path.resolve(eventCwd);
+// src/utils/repo-paths.ts
+import * as fs3 from "node:fs";
+import * as path3 from "node:path";
+
+// src/utils/realpath.ts
+import * as fs from "node:fs";
+import * as path from "node:path";
+function realpathOfDeepestExisting(p) {
+  let cur = p;
+  const tail = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync(cur);
+      if (tail.length === 0) {
+        return real;
+      }
+      return path.join(real, ...tail.reverse());
+    } catch (e) {
+      const code = e?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        const parent = path.dirname(cur);
+        if (parent === cur) {
+          return p;
+        }
+        tail.push(path.basename(cur));
+        cur = parent;
+        continue;
+      }
+      return null;
+    }
+  }
+}
+function canonicalDirRealpath(p) {
+  let cur = path.dirname(p);
+  const tail = [path.basename(p)];
+  while (true) {
+    let st = null;
+    try {
+      st = fs.statSync(cur);
+    } catch (e) {
+      const code = e?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return null;
+      }
+      st = null;
+    }
+    if (st !== null && st.isDirectory()) {
+      let real;
+      try {
+        real = fs.realpathSync(cur);
+      } catch (e) {
+        const code = e?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          real = "";
+        } else {
+          return null;
+        }
+      }
+      if (real !== "") {
+        return path.join(real, ...[...tail].reverse());
+      }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      return path.join(cur, ...[...tail].reverse());
+    }
+    tail.push(path.basename(cur));
+    cur = parent;
+  }
+}
+
+// src/state/protected-paths.ts
+import * as fs2 from "node:fs";
+import * as path2 from "node:path";
+var PROTECTED_PREFIXES = [
+  ".meta-edit/state/",
+  ".meta-edit/tmp/"
+];
+function normalizeRepoRelative(p) {
+  if (p.includes("\x00")) {
+    throw new Error("path contains NUL byte");
+  }
+  let n = p.replace(/\\/g, "/");
+  while (n.startsWith("./")) {
+    n = n.slice(2);
+  }
+  while (n.startsWith("/")) {
+    n = n.slice(1);
+  }
+  return n.replace(/\/+/g, "/");
+}
+var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function matchesProtectedPrefix(norm) {
+  const folded = CASE_INSENSITIVE_FS ? norm.toLowerCase() : null;
+  return PROTECTED_PREFIXES.some((prefix) => {
+    const dir = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    if (norm.startsWith(prefix) || norm === dir) {
+      return true;
+    }
+    if (folded !== null && (folded.startsWith(prefix) || folded === dir)) {
+      return true;
+    }
+    return false;
+  });
+}
+function isProtectedPath(p, options = {}) {
+  let norm;
+  try {
+    norm = normalizeRepoRelative(p);
+  } catch {
+    return true;
+  }
+  if (matchesProtectedPrefix(norm)) {
+    return true;
+  }
+  const repoRoot = options.repoRoot;
+  if (repoRoot && !path2.isAbsolute(p)) {
+    try {
+      const absInput = path2.resolve(repoRoot, norm);
+      const realResolved = realpathOfDeepestExisting(absInput);
+      if (realResolved === null) {
+        return false;
+      }
+      let realRoot;
+      try {
+        realRoot = fs2.realpathSync(repoRoot);
+      } catch {
+        realRoot = path2.resolve(repoRoot);
+      }
+      if (realResolved === realRoot || realResolved.startsWith(realRoot + path2.sep)) {
+        const canonicalRel = normalizeRepoRelative(path2.relative(realRoot, realResolved));
+        if (matchesProtectedPrefix(canonicalRel)) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+// src/utils/repo-paths.ts
+function discoverRepoRoot(start) {
+  let dir = path3.resolve(start);
+  let found = null;
+  for (;; ) {
+    if (fs3.existsSync(path3.join(dir, ".git")) || fs3.existsSync(path3.join(dir, ".jj"))) {
+      found = dir;
+      break;
+    }
+    const parent = path3.dirname(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  const base = found ?? path3.resolve(start);
+  return realpathOfDeepestExisting(base) ?? path3.resolve(base);
+}
+function resolveRepoRoot(primary) {
+  if (typeof primary === "string" && primary.length > 0) {
+    return discoverRepoRoot(primary);
   }
   const envRoot = process.env["META_EDIT_REPO_ROOT"];
   if (typeof envRoot === "string" && envRoot.length > 0) {
-    return path.resolve(envRoot);
+    return discoverRepoRoot(envRoot);
   }
-  return process.cwd();
+  return discoverRepoRoot(process.cwd());
 }
+function canonicalizeRepoRelative(inputPath, repoRoot) {
+  const resolved = path3.isAbsolute(inputPath) ? path3.normalize(inputPath) : path3.resolve(repoRoot, inputPath);
+  const realRoot = realpathOfDeepestExisting(path3.resolve(repoRoot)) ?? path3.resolve(repoRoot);
+  const realResolved = canonicalDirRealpath(resolved);
+  if (realResolved === null) {
+    return {
+      ok: false,
+      code: "uncanonicalizable",
+      error: `path "${inputPath}" could not be canonicalized via realpath; failing closed`
+    };
+  }
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path3.sep)) {
+    return {
+      ok: false,
+      code: "escapes",
+      error: `path "${inputPath}" escapes repository root after symlink resolution`
+    };
+  }
+  let rel;
+  try {
+    rel = normalizeRepoRelative(path3.relative(realRoot, realResolved));
+  } catch (e) {
+    return {
+      ok: false,
+      code: "uncanonicalizable",
+      error: `path "${inputPath}" is invalid: ${e.message}`
+    };
+  }
+  if (rel.length === 0) {
+    return {
+      ok: false,
+      code: "is_root",
+      error: `path "${inputPath}" resolves to the repository root`
+    };
+  }
+  return { ok: true, canonical: rel };
+}
+
+// src/hooks/session-onboarding.ts
 function claimOnboardingMarker(markerPath, sessionId) {
   try {
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs4.mkdirSync(path4.dirname(markerPath), { recursive: true });
   } catch {}
   try {
-    fs.writeFileSync(markerPath, JSON.stringify({
+    fs4.writeFileSync(markerPath, JSON.stringify({
       session_id: sessionId,
       ts: new Date().toISOString()
     }, null, 2), { encoding: "utf8", flag: "wx" });
@@ -146,8 +341,8 @@ async function main() {
   if (sessionId === null) {
     return replyAllow();
   }
-  const repoRoot = resolveRepoRoot(event.cwd);
-  const markerPath = path.join(repoRoot, ".meta-edit", "state", "sessions", `${sessionId}.json`);
+  const repoRoot = resolveRepoRoot(typeof event.cwd === "string" ? event.cwd : undefined);
+  const markerPath = path4.join(repoRoot, ".meta-edit", "state", "sessions", `${sessionId}.json`);
   if (!claimOnboardingMarker(markerPath, sessionId)) {
     return replyAllow();
   }
@@ -166,4 +361,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=8CBE2DB458B527B364756E2164756E21
+//# debugId=B2145BC8B2EDEB9364756E2164756E21

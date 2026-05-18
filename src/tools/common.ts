@@ -27,11 +27,8 @@ import {
   TOOLS_REQUIRING_TEST_FILES,
   type ToolName,
 } from "./descriptions.js";
-import {
-  isProtectedPath,
-  normalizeRepoRelative,
-} from "../state/protected-paths.js";
-import { realpathOfDeepestExisting } from "../utils/realpath.js";
+import { isProtectedPath } from "../state/protected-paths.js";
+import { canonicalizeRepoRelative } from "../utils/repo-paths.js";
 import { repoIsValid } from "./repo-validity.js";
 
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
@@ -346,6 +343,8 @@ export function checkPathSafety(
   p: string,
   repoRoot: string,
 ): { ok: true; canonical: string } | { ok: false; error: string } {
+  // Issue-side policy (NOT shared with the consume side): the typed_edit
+  // request must carry an already-canonical repository-relative path.
   if (path.isAbsolute(p)) {
     return {
       ok: false,
@@ -359,66 +358,35 @@ export function checkPathSafety(
         `path "${p}" contains a ".." traversal segment; pass an already-canonical repository-relative path so the resolved target is unambiguous`,
     };
   }
-  let norm: string;
-  try {
-    norm = normalizeRepoRelative(p);
-  } catch (err) {
-    return {
-      ok: false,
-      error: `path "${p}" is invalid: ${(err as Error).message}`,
-    };
-  }
-  if (norm.length === 0) {
-    return { ok: false, error: "path is empty after normalization" };
-  }
-  const lexicalRoot = path.resolve(repoRoot);
-  const lexicalResolved = path.resolve(lexicalRoot, norm);
-  if (
-    lexicalResolved !== lexicalRoot &&
-    !lexicalResolved.startsWith(lexicalRoot + path.sep)
-  ) {
-    return { ok: false, error: `path "${p}" escapes repository root` };
-  }
 
-  const realRoot = realpathOrSelf(lexicalRoot);
-  const realResolved = realpathOfDeepestExisting(lexicalResolved);
-
-  if (realResolved === null) {
+  // Canonical form via the ONE shared canonicalizer — byte-identical to
+  // what the deny-raw-edit hook computes at consume time
+  // (src/utils/repo-paths.ts canonicalizeRepoRelative). Existence-
+  // independent, so a declaration against a not-yet-created file binds
+  // the same key the later native Write resolves to.
+  const res = canonicalizeRepoRelative(p, repoRoot);
+  if (!res.ok) {
+    if (res.code === "escapes") {
+      return { ok: false, error: `path "${p}" escapes repository root` };
+    }
+    if (res.code === "is_root") {
+      return {
+        ok: false,
+        error: `path "${p}" resolves to the repository root`,
+      };
+    }
     return {
       ok: false,
       error: `path "${p}" could not be canonicalized via realpath; failing closed`,
     };
   }
-
-  if (
-    realResolved !== realRoot &&
-    !realResolved.startsWith(realRoot + path.sep)
-  ) {
-    return {
-      ok: false,
-      error: `path "${p}" escapes repository root after symlink resolution`,
-    };
-  }
-
-  const canonical = normalizeRepoRelative(path.relative(realRoot, realResolved));
-  if (canonical.length === 0) {
-    return { ok: false, error: `path "${p}" resolves to the repository root` };
-  }
-  if (isProtectedPath(canonical)) {
+  if (isProtectedPath(res.canonical)) {
     return {
       ok: false,
       error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`,
     };
   }
-  return { ok: true, canonical };
-}
-
-function realpathOrSelf(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
-  }
+  return { ok: true, canonical: res.canonical };
 }
 
 function containsParentTraversal(p: string): boolean {
@@ -464,23 +432,16 @@ function computeBeforeSha256(
   } catch (e) {
     const code = (e as NodeJS.ErrnoException | undefined)?.code;
     if (code === "ENOENT") {
-      // v0.3.1: there is no longer a CREATE-mode tool. ENOENT here
-      // means the agent declared a typed_edit against a file that
-      // doesn't yet exist. Expected flow:
-      //   1. Native Write with content === "" creates the empty file
-      //      (free at deny-raw-edit; parent dirs auto-mkdir-ed).
-      //   2. Typed_edit declares against the now-empty file.
-      //   3. Native Edit / Write fills the content under the hook.
-      // If you're hit here, step 1 was skipped or the path is wrong.
-      return {
-        ok: false,
-        error:
-          `${fieldLabel} "${canonical}" does not exist on disk. ` +
-          `v0.3.1 expects you to create the empty file first via a ` +
-          `native Write with content === "" (no MCP declaration needed; ` +
-          `the deny-raw-edit hook authorizes empty creates and auto-mkdirs ` +
-          `parent directories), THEN declare the typed_edit for the content fill.`,
-      };
+      // v0.4.2: a declaration against a not-yet-existing file is valid.
+      // It binds before_sha256 := sha256("") — the same value the
+      // deny-raw-edit hook computes for an absent file
+      // (raw-edit-policy.ts readFileForBinding returns "" on ENOENT).
+      // The subsequent native Write creates the file (auto-mkdir-ing
+      // parents) and the binding resolves. This drops the fragile
+      // v0.3.1 "create the empty file first, THEN declare" dance whose
+      // ordering sensitivity was a primary cause of binding failures
+      // (issues/2026-05-17-grant-binding-canonicalization-parity.md).
+      return { ok: true, before_sha256: SHA256_EMPTY };
     }
     return {
       ok: false,

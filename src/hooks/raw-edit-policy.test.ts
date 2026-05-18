@@ -1055,3 +1055,122 @@ describe("canonicalizeForBinding", () => {
     expect(c).toBe("real/foo.ts");
   });
 });
+
+// =====================================================================
+// v0.4.2: existence-independent binding + categorized deny reasons
+// (issues/2026-05-17-grant-binding-canonicalization-parity.md)
+// =====================================================================
+
+describe("evaluateTokenedEdit — v0.4.2 grant-binding fixes", () => {
+  it("allows a Write to a file that did NOT exist at declaration time (sha256(\"\") binding, no empty-create dance)", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    // Declared against a not-yet-created file: binds sha256("").
+    await issueGrant(grants, "edit_20260517_0001", [
+      { file: "docs/new/page.md", before_sha256: sha256("") },
+    ]);
+    // The file still does not exist on disk when the native Write lands.
+    const r = await evaluateTokenedEdit({
+      toolName: "Write",
+      toolInput: {
+        file_path: path.join(tmpRoot, "docs/new/page.md"),
+        content: "# hello\n",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("resolves the same binding whether the file is absent or present at consume time (canonicalization parity)", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    await issueGrant(grants, "edit_20260517_0002", [
+      { file: "src/created.ts", before_sha256: sha256("") },
+    ]);
+    // First consume: file absent → allowed (binds sha256("")).
+    const r1 = await evaluateTokenedEdit({
+      toolName: "Write",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/created.ts"),
+        content: "export const x = 1;\n",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r1.decision).toBe("allow");
+  });
+
+  it("categorizes the deny reason: undeclared", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "x\n");
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        old_string: "x",
+        new_string: "y",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("[meta-edit:undeclared]");
+  });
+
+  it("categorizes the deny reason: stale (disk drifted from declaration)", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "before\n");
+    await issueGrant(grants, "edit_20260517_0003", [
+      { file: "src/foo.ts", before_sha256: sha256("before\n") },
+    ]);
+    writeFile("src/foo.ts", "MUTATED\n"); // interleaved change
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        old_string: "MUTATED",
+        new_string: "y",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("[meta-edit:stale]");
+  });
+
+  it("anti-hijack: an interleaved later declaration does not steal an earlier file's pending write", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "ORIG\n");
+    // Correct declaration for the current disk state.
+    await issueGrant(grants, "edit_20260517_0004", [
+      { file: "src/foo.ts", before_sha256: sha256("ORIG\n") },
+    ]);
+    // Interleaved, later declaration whose before_sha256 reflects a
+    // DIFFERENT (wrong) disk state — must not be selected.
+    await issueGrant(grants, "edit_20260517_0005", [
+      { file: "src/foo.ts", before_sha256: sha256("SOMETHING ELSE\n") },
+    ]);
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        old_string: "ORIG",
+        new_string: "y",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    // The disk-matching grant is chosen, so the write is allowed even
+    // though a newer (LIFO-preferred) declaration exists.
+    expect(r.decision).toBe("allow");
+  });
+});

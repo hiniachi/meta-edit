@@ -47,8 +47,6 @@
 // ground truth for whether bytes landed; the edit log records
 // "the hook authorized this write at <ts>", not "the write succeeded".
 
-import * as path from "node:path";
-
 import {
   readStdin,
   replyAllow,
@@ -62,24 +60,7 @@ import {
 } from "./raw-edit-policy.js";
 import { EditLog } from "../state/edit-log.js";
 import { createGrantsStore } from "../state/grants.js";
-
-/**
- * Resolve the repository root for the hook process. Claude Code provides
- * `cwd` in the hook event payload (used by deny-bash-write-bypass too);
- * we prefer that over process.cwd() so the hook works correctly when
- * launched from outside the repo. Falls back to META_EDIT_REPO_ROOT env
- * var (handy for tests) and finally process.cwd().
- */
-function resolveRepoRoot(eventCwd: string | undefined): string {
-  if (typeof eventCwd === "string" && eventCwd.length > 0) {
-    return path.resolve(eventCwd);
-  }
-  const envRoot = process.env["META_EDIT_REPO_ROOT"];
-  if (typeof envRoot === "string" && envRoot.length > 0) {
-    return path.resolve(envRoot);
-  }
-  return process.cwd();
-}
+import { resolveRepoRoot } from "../utils/repo-paths.js";
 
 async function main(): Promise<number> {
   const event = await readStdin();

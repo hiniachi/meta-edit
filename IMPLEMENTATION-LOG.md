@@ -1079,3 +1079,46 @@ mis-marshals non-empty string arrays.
   resolution-precedence describe 4, ~13 net). `tsc --noEmit` clean;
   `bun run build` green; full suite green.
 - Spec deviations: none.
+
+## v0.4.2: grant-binding canonicalization parity + drop empty-create-first + cross-process lock
+
+- Completed: 2026-05-17
+- Root cause + scope: see
+  `issues/2026-05-17-grant-binding-canonicalization-parity.md`. Full
+  scope, user-approved (parity unification + drop empty-create-first +
+  parallel cross-process lock + categorized errors).
+- What works:
+  - `src/utils/repo-paths.ts` (new): one `resolveRepoRoot` (upward
+    `.git`/`.jj` discovery + realpath) and one existence-independent
+    `canonicalizeRepoRelative`, both used by server + both hooks +
+    `checkPathSafety` + `canonicalizeForBinding`. The three local
+    `resolveRepoRoot` copies (server, deny-raw-edit, session-
+    onboarding) are deleted — issue/consume + server/hook parity is
+    now structural, not comment-enforced.
+  - `src/utils/realpath.ts`: added `canonicalDirRealpath` — realpaths
+    the deepest existing *directory* and re-attaches the rest
+    (including the leaf) lexically, so the canonical key is identical
+    whether or not the file exists yet.
+  - `computeBeforeSha256` (common.ts): ENOENT → bind
+    `before_sha256 = sha256("")` instead of rejecting. The v0.3.1
+    "create empty file first, THEN declare" dance is gone.
+  - `grants.findActiveBindingForFile(file, {preferBeforeSha})`:
+    disk-matching candidates win over a newer interleaved declaration
+    (anti-hijack). `grants.consume` now also takes a cross-process
+    O_EXCL advisory lock so parallel writes against a multi-file grant
+    all land.
+  - deny reasons categorized `[meta-edit:<category>]` with
+    canonical + repoRoot for diagnosis.
+  - SPEC §3 "Repository root" + argument validation + §5.1 rewritten;
+    stale "no cross-process lock / out of scope per Article 7"
+    comments corrected.
+- Known issues:
+  - Pre-existing latent bug `src/state/protected-paths.ts:54`
+    (`p.includes(" ")` where `"\0"` was intended) left as-is — out
+    of this fix's scope; recorded in the issue file.
+- Tests added: 747 → 764 (+17: `src/utils/repo-paths.test.ts` 13,
+  raw-edit-policy v0.4.2 describe 5; existing non-existent-file
+  rejection tests flipped to assert the new sha256("") binding).
+  `tsc --noEmit` clean; `bun run build` green; full suite green.
+- Spec deviations: none (descriptions.ts untouched — verbatim rule
+  preserved; no §4 tool-description text changed).
