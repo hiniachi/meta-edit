@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>meta-edit — eighteen typed edit tools for AI coding agents</title>
+    <title>meta-edit — type the action, not the check</title>
     <meta
       name="description"
-      content="An MCP server that replaces a coding agent's generic file-edit tool with eighteen kind-specific edit tools, each encoding its testing obligations in the tool description."
+      content="meta-edit puts obligations on the tool surface, not in the prompt. An MCP server that splits one Edit into eighteen typed edits — and a general pattern for AI actions."
     />
     <meta name="theme-color" content="#0d1117" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
-    <meta property="og:title" content="meta-edit" />
+    <meta property="og:title" content="meta-edit — type the action, not the check" />
     <meta
       property="og:description"
-      content="Eighteen typed edit tools for AI coding agents. The shape of the tool surface changes how AIs edit code."
+      content="Put obligations on the tool, not in the prompt. A general pattern for AI actions."
     />
     <meta property="og:type" content="website" />
   </head>
@@ -41,9 +41,9 @@
         <span>meta-edit</span>
       </a>
       <nav class="nav">
-        <a href="#tools" data-i18n="nav.tools">Tools</a>
-        <a href="#why" data-i18n="nav.why">Why</a>
-        <a href="#install" data-i18n="nav.install">Install</a>
+        <a href="#idea" data-i18n="nav.idea">The idea</a>
+        <a href="#proof" data-i18n="nav.proof">The proof</a>
+        <a href="#beyond" data-i18n="nav.beyond">Beyond edits</a>
         <a
           href="https://github.com/hiniachi/meta-edit"
           rel="noopener"
@@ -67,83 +67,80 @@
     <main id="top">
       <section class="hero">
         <p class="eyebrow" data-i18n="hero.eyebrow">
-          MCP server · Claude Code plugin · opencode plugin
+          A different place to put obligations
         </p>
         <h1 data-i18n="hero.title">
-          Eighteen typed edits.<br />
-          One disciplined surface.
+          Type the action,<br />not the check.
         </h1>
         <p class="lede" data-i18n="hero.lede">
-          <code>meta-edit</code> replaces a coding agent's generic
-          <code>Edit</code> tool with eighteen kind-specific edit tools. Each
-          tool's description encodes when to use it, when not to use it, and
-          what tests must accompany the change.
+          AI coding agents have one editing primitive: <code>Edit</code>. A
+          single tool means there is nothing to think about before writing —
+          typo fix or billing engine, the path is the same. <strong
+            >meta-edit</strong
+          >
+          replaces that one tool with <strong>eighteen typed edits</strong>,
+          each carrying its own obligations inside its description. The
+          obligation now lives in the tool surface itself, where the model
+          cannot miss it.
         </p>
         <div class="cta">
-          <a class="btn btn-primary" href="#install" data-i18n="hero.cta.install"
-            >Install</a
-          >
           <a
-            class="btn"
+            class="btn btn-primary"
             href="https://github.com/hiniachi/meta-edit"
             target="_blank"
             rel="noopener"
             data-i18n="hero.cta.github"
             >View on GitHub</a
           >
-          <a
-            class="btn btn-ghost"
-            href="https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md"
-            target="_blank"
-            rel="noopener"
-            data-i18n="hero.cta.spec"
-            >Read the spec</a
+          <a class="btn" href="#beyond" data-i18n="hero.cta.beyond"
+            >Why this generalizes</a
           >
         </div>
-        <p class="status">
-          <span class="dot" aria-hidden="true"></span>
-          <span data-i18n="hero.status"
-            >v0.3.1 pre-release · MIT licensed · Node 20+</span
-          >
+      </section>
+
+      <section id="idea" class="section">
+        <h2 data-i18n="idea.title">The thing that doesn't decay</h2>
+
+        <p data-i18n="idea.p1">
+          The usual places to put obligations on an AI agent are all texts the
+          agent <em>might</em> re-read: a long <code>CLAUDE.md</code>, a Skill,
+          a system prompt, a review checklist pasted into a comment. They drift
+          out of attention as the conversation grows. By the time the agent
+          calls <code>Edit</code>, that text has effectively expired.
+        </p>
+
+        <p data-i18n="idea.p2">
+          One surface is different. The schema and description of the tool the
+          agent is about to call are loaded <strong>at every invocation</strong>,
+          immediately before the call. They are the only place where an
+          instruction is guaranteed to be in front of the model at the moment of
+          action.
+        </p>
+
+        <p data-i18n="idea.p3">
+          <strong>The thesis:</strong> if obligations are placed there — in the
+          tool surface, not in surrounding text — they will hold. To test that,
+          we need a tool surface rich enough for the obligation to <em>fit</em>
+          it. A single generic <code>Edit</code> tool is not rich enough; there
+          is no place to put the obligation "write a boundary test when you
+          change <code>&lt;</code> to <code>&lt;=</code>" that doesn't apply
+          falsely to a typo fix.
+        </p>
+
+        <p data-i18n="idea.p4">
+          So we split. <code>Edit</code> becomes eighteen edits, one per kind
+          of change. Each carries its own obligations in its own description.
+          And critically, <strong>the agent must pick a kind before it can
+          edit</strong>. Picking the kind <em>is</em> the reasoning step.
         </p>
       </section>
 
-      <section id="why" class="section">
-        <h2 data-i18n="why.title">Why typed edits?</h2>
-        <p data-i18n="why.body1">
-          Instructions in <code>CLAUDE.md</code> decay across turns. Skills only
-          fire when the agent decides to invoke them. Both rely on text the
-          model <em>might</em> re-read — neither has structural force at the
-          moment of action.
-        </p>
-        <p data-i18n="why.body2">
-          Tool definitions don't decay. The schema and description of the tool
-          the agent is about to call are loaded at every invocation. Instead of
-          hoping the agent remembers "add boundary tests", <code>meta-edit</code>
-          splits the single <code>Edit</code> primitive into eighteen
-          kind-specific tools.
-        </p>
-        <blockquote class="quote">
-          <p data-i18n="why.bet">
-            The bet: <strong>the shape of the tool surface is what changes AI
-            editing behavior</strong>, not detection or post-hoc verification.
-            The conceptual ancestor is
-            <a
-              href="https://sqlite.org/testing.html"
-              target="_blank"
-              rel="noopener"
-              >SQLite's testing strategy</a
-            >, translated from C library quality into application-level edit
-            categories.
-          </p>
-        </blockquote>
-      </section>
-
-      <section id="tools" class="section">
-        <h2 data-i18n="tools.title">The eighteen tools</h2>
-        <p class="section-lede" data-i18n="tools.lede">
-          Each description specifies: when to use it, when not to use it, which
-          tests must accompany the edit, and when to stop and ask the user.
+      <section id="proof" class="section">
+        <h2 data-i18n="proof.title">The eighteen typed edits</h2>
+        <p class="section-lede" data-i18n="proof.lede">
+          The current set of kinds. Each tool's description says when to use
+          it, when not to use it, which tests must accompany the edit, and when
+          to stop and ask the user.
         </p>
         <ul class="tool-grid" aria-label="Tools">
           <li><span class="tool-name">edit_refactor_only</span></li>
@@ -165,116 +162,118 @@
           <li><span class="tool-name">edit_policy_change</span></li>
           <li><span class="tool-name">edit_docs_only</span></li>
         </ul>
+
+        <h3 class="sub" data-i18n="proof.evidence.title">
+          What we've observed
+        </h3>
+        <p data-i18n="proof.evidence.body">
+          When no kind cleanly fits a requested change, the agent
+          <strong>stops and asks</strong>, instead of forcing the change
+          through the nearest tool. We have observed this happen at ~80%
+          context utilisation — exactly the regime where instructions in
+          <code>CLAUDE.md</code> normally lose their grip. Tool-shaped
+          instructions, reloaded at every call, kept working when text-shaped
+          instructions did not.
+        </p>
       </section>
 
-      <section id="install" class="section">
-        <h2 data-i18n="install.title">Install</h2>
+      <section id="beyond" class="section section-beyond">
+        <h2 data-i18n="beyond.title">From typed edits to typed execution</h2>
 
-        <article class="card">
-          <h3 data-i18n="install.a.title">
-            Option A — Claude Code plugin marketplace
-          </h3>
-          <p data-i18n="install.a.body">
-            This repository <em>is</em> a single-plugin marketplace. Add it once,
-            then install meta-edit:
-          </p>
-          <pre><code>/plugin marketplace add hiniachi/meta-edit
+        <p data-i18n="beyond.p1">
+          File editing is only the first instance. The same shape applies to
+          any high-stakes verb an AI agent can perform on a real system: deploy,
+          delete, call, commit, grant. The recipe repeats:
+        </p>
+
+        <ol class="recipe">
+          <li data-i18n="beyond.step1">
+            Take one generic, high-stakes verb that an AI agent can invoke.
+          </li>
+          <li data-i18n="beyond.step2">
+            Split it by risk category, not by surface syntax.
+          </li>
+          <li data-i18n="beyond.step3">
+            Move the obligations of each category into the tool's description
+            — the only place that doesn't decay.
+          </li>
+          <li data-i18n="beyond.step4">
+            Let the act of <em>picking the right type</em> do the thinking.
+          </li>
+        </ol>
+
+        <p data-i18n="beyond.p2">
+          A few sketches of where this leads:
+        </p>
+
+        <dl class="sketch">
+          <dt data-i18n="beyond.s1.t">Typed deploy</dt>
+          <dd data-i18n="beyond.s1.b">
+            <code>deploy_static_assets</code>, <code>deploy_db_migration</code>,
+            <code>deploy_canary_rollout</code>, <code>deploy_full_rollout</code>.
+            A static-asset deploy is reversible and cheap; a DB migration must
+            be backward-compatible and accompanied by a rollback plan. Each
+            tool's description carries the pre-checks, the required artifacts,
+            and the approvals that kind of deploy requires.
+          </dd>
+
+          <dt data-i18n="beyond.s2.t">Typed delete</dt>
+          <dd data-i18n="beyond.s2.b">
+            <code>delete_temp_artifact</code>, <code>delete_user_record</code>,
+            <code>delete_production_table</code>. The blast radius rises as
+            you move down the list, and so do the obligations encoded in the
+            descriptions: from "none" to "produce a soft-delete-first migration
+            with a documented retention window".
+          </dd>
+
+          <dt data-i18n="beyond.s3.t">Typed external call</dt>
+          <dd data-i18n="beyond.s3.b">
+            <code>call_idempotent_read</code>, <code>call_side_effecting</code>,
+            <code>call_payment</code>. A read is free; a payment cannot be
+            retried blindly. The payment tool's schema can require an
+            idempotency key as a top-level argument, surfacing the obligation
+            structurally rather than as a comment in the prompt.
+          </dd>
+
+          <dt data-i18n="beyond.s4.t">Typed commit / revert</dt>
+          <dd data-i18n="beyond.s4.b">
+            <code>commit_refactor</code>, <code>commit_breaking_change</code>,
+            <code>commit_hotfix</code>, <code>revert</code>. The agent must
+            classify its own change before it can land it; the description for
+            <code>commit_breaking_change</code> requires a changelog entry and
+            a migration note in the same call.
+          </dd>
+        </dl>
+
+        <p class="note" data-i18n="beyond.p3">
+          None of this is detection. There is no classifier reading the diff
+          or the payload. The only mechanism is the shape of the tool surface —
+          and the obligation of the agent to choose a tool before acting.
+        </p>
+      </section>
+
+      <section id="try" class="section section-try">
+        <h2 data-i18n="try.title">Try it</h2>
+        <pre><code>/plugin marketplace add hiniachi/meta-edit
 /plugin install meta-edit@meta-edit</code></pre>
-          <p data-i18n="install.a.note">
-            Auto-registers the meta-edit MCP server (eighteen
-            <code>edit_*</code> tools) and the two safety hooks. Runs prebuilt
-            JavaScript shipped under <code>dist/</code> — Node 20+ is the only
-            runtime requirement.
-          </p>
-        </article>
-
-        <article class="card">
-          <h3 data-i18n="install.b.title">Option B — npm package</h3>
-          <pre><code>npm install -g @hiniachi/meta-edit
-meta-edit install-hooks --scope user</code></pre>
-          <p data-i18n="install.b.body">
-            Then add the server to your Claude Code MCP configuration:
-          </p>
-          <pre><code>{
-  "mcpServers": {
-    "meta-edit": { "command": "meta-edit", "args": ["serve"] }
-  }
-}</code></pre>
-        </article>
-
-        <article class="card">
-          <h3 data-i18n="install.c.title">Option C — opencode</h3>
-          <pre><code>npm install -g @hiniachi/meta-edit
-meta-edit install-opencode --scope user</code></pre>
-          <p data-i18n="install.c.body">
-            The same npm package ships an opencode plugin under the
-            <code>./opencode</code> subpath. Same eighteen typed-edit tool
-            descriptions, same audit log, same grant flow as the Claude Code
-            path.
-          </p>
-        </article>
-      </section>
-
-      <section id="observed" class="section">
-        <h2 data-i18n="observed.title">Observed: the agent stops and asks</h2>
-        <p data-i18n="observed.body">
-          The first time <code>meta-edit</code> was self-applied to its own
-          repository, with the conversation context already ~80% full, an
-          <code>OBSERVED-FAILURES.md</code> append was requested. None of the
-          (then) seventeen tools cleanly matched a docs-only edit. Instead of
-          stretching one to fit, the agent paused and asked. That entry
-          subsequently became the eighteenth tool, <code>edit_docs_only</code>.
+        <p data-i18n="try.body">
+          Claude Code plugin marketplace path. npm and opencode paths are also
+          available — see the
+          <a
+            href="https://github.com/hiniachi/meta-edit#install"
+            target="_blank"
+            rel="noopener"
+            >README</a
+          >
+          for the full set, and
+          <a
+            href="https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md"
+            target="_blank"
+            rel="noopener"
+            >docs/SPEC.md</a
+          >
+          for the design in full.
         </p>
-        <p data-i18n="observed.takeaway">
-          Tool-shaped instructions read at every call won out over text-shaped
-          instructions read once at session start.
-        </p>
-      </section>
-
-      <section class="section section-links">
-        <h2 data-i18n="links.title">Read more</h2>
-        <ul class="link-list">
-          <li>
-            <a
-              href="https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md"
-              target="_blank"
-              rel="noopener"
-              >docs/SPEC.md</a
-            >
-            — <span data-i18n="links.spec">full specification</span>
-          </li>
-          <li>
-            <a
-              href="https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md"
-              target="_blank"
-              rel="noopener"
-              >OBSERVED-FAILURES.md</a
-            >
-            — <span data-i18n="links.failures">post-v0.2 detection backlog</span>
-          </li>
-          <li>
-            <a
-              href="https://github.com/hiniachi/meta-edit/blob/main/README.md"
-              target="_blank"
-              rel="noopener"
-              >README</a
-            >
-            — <span data-i18n="links.readme">English</span> ·
-            <a
-              href="https://github.com/hiniachi/meta-edit/blob/main/README.ja.md"
-              target="_blank"
-              rel="noopener"
-              >日本語</a
-            >
-            ·
-            <a
-              href="https://github.com/hiniachi/meta-edit/blob/main/README.zh-CN.md"
-              target="_blank"
-              rel="noopener"
-              >简体中文</a
-            >
-          </li>
-        </ul>
       </section>
     </main>
 
@@ -302,139 +301,172 @@ meta-edit install-opencode --scope user</code></pre>
     <script>
       const I18N = {
         en: {
-          "nav.tools": "Tools",
-          "nav.why": "Why",
-          "nav.install": "Install",
-          "hero.eyebrow": "MCP server · Claude Code plugin · opencode plugin",
-          "hero.title": "Eighteen typed edits.<br>One disciplined surface.",
+          "nav.idea": "The idea",
+          "nav.proof": "The proof",
+          "nav.beyond": "Beyond edits",
+          "hero.eyebrow": "A different place to put obligations",
+          "hero.title": "Type the action,<br>not the check.",
           "hero.lede":
-            "<code>meta-edit</code> replaces a coding agent's generic <code>Edit</code> tool with eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the change.",
-          "hero.cta.install": "Install",
+            "AI coding agents have one editing primitive: <code>Edit</code>. A single tool means there is nothing to think about before writing — typo fix or billing engine, the path is the same. <strong>meta-edit</strong> replaces that one tool with <strong>eighteen typed edits</strong>, each carrying its own obligations inside its description. The obligation now lives in the tool surface itself, where the model cannot miss it.",
           "hero.cta.github": "View on GitHub",
-          "hero.cta.spec": "Read the spec",
-          "hero.status": "v0.3.1 pre-release · MIT licensed · Node 20+",
-          "why.title": "Why typed edits?",
-          "why.body1":
-            "Instructions in <code>CLAUDE.md</code> decay across turns. Skills only fire when the agent decides to invoke them. Both rely on text the model <em>might</em> re-read — neither has structural force at the moment of action.",
-          "why.body2":
-            "Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers \"add boundary tests\", <code>meta-edit</code> splits the single <code>Edit</code> primitive into eighteen kind-specific tools.",
-          "why.bet":
-            "The bet: <strong>the shape of the tool surface is what changes AI editing behavior</strong>, not detection or post-hoc verification. The conceptual ancestor is <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite's testing strategy</a>, translated from C library quality into application-level edit categories.",
-          "tools.title": "The eighteen tools",
-          "tools.lede":
-            "Each description specifies: when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user.",
-          "install.title": "Install",
-          "install.a.title": "Option A — Claude Code plugin marketplace",
-          "install.a.body":
-            "This repository <em>is</em> a single-plugin marketplace. Add it once, then install meta-edit:",
-          "install.a.note":
-            "Auto-registers the meta-edit MCP server (eighteen <code>edit_*</code> tools) and the two safety hooks. Runs prebuilt JavaScript shipped under <code>dist/</code> — Node 20+ is the only runtime requirement.",
-          "install.b.title": "Option B — npm package",
-          "install.b.body":
-            "Then add the server to your Claude Code MCP configuration:",
-          "install.c.title": "Option C — opencode",
-          "install.c.body":
-            "The same npm package ships an opencode plugin under the <code>./opencode</code> subpath. Same eighteen typed-edit tool descriptions, same audit log, same grant flow as the Claude Code path.",
-          "observed.title": "Observed: the agent stops and asks",
-          "observed.body":
-            "The first time <code>meta-edit</code> was self-applied to its own repository, with the conversation context already ~80% full, an <code>OBSERVED-FAILURES.md</code> append was requested. None of the (then) seventeen tools cleanly matched a docs-only edit. Instead of stretching one to fit, the agent paused and asked. That entry subsequently became the eighteenth tool, <code>edit_docs_only</code>.",
-          "observed.takeaway":
-            "Tool-shaped instructions read at every call won out over text-shaped instructions read once at session start.",
-          "links.title": "Read more",
-          "links.spec": "full specification",
-          "links.failures": "post-v0.2 detection backlog",
-          "links.readme": "English",
+          "hero.cta.beyond": "Why this generalizes",
+          "idea.title": "The thing that doesn't decay",
+          "idea.p1":
+            "The usual places to put obligations on an AI agent are all texts the agent <em>might</em> re-read: a long <code>CLAUDE.md</code>, a Skill, a system prompt, a review checklist pasted into a comment. They drift out of attention as the conversation grows. By the time the agent calls <code>Edit</code>, that text has effectively expired.",
+          "idea.p2":
+            "One surface is different. The schema and description of the tool the agent is about to call are loaded <strong>at every invocation</strong>, immediately before the call. They are the only place where an instruction is guaranteed to be in front of the model at the moment of action.",
+          "idea.p3":
+            "<strong>The thesis:</strong> if obligations are placed there — in the tool surface, not in surrounding text — they will hold. To test that, we need a tool surface rich enough for the obligation to <em>fit</em> it. A single generic <code>Edit</code> tool is not rich enough; there is no place to put the obligation \"write a boundary test when you change <code>&lt;</code> to <code>&lt;=</code>\" that doesn't apply falsely to a typo fix.",
+          "idea.p4":
+            "So we split. <code>Edit</code> becomes eighteen edits, one per kind of change. Each carries its own obligations in its own description. And critically, <strong>the agent must pick a kind before it can edit</strong>. Picking the kind <em>is</em> the reasoning step.",
+          "proof.title": "The eighteen typed edits",
+          "proof.lede":
+            "The current set of kinds. Each tool's description says when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user.",
+          "proof.evidence.title": "What we've observed",
+          "proof.evidence.body":
+            "When no kind cleanly fits a requested change, the agent <strong>stops and asks</strong>, instead of forcing the change through the nearest tool. We have observed this happen at ~80% context utilisation — exactly the regime where instructions in <code>CLAUDE.md</code> normally lose their grip. Tool-shaped instructions, reloaded at every call, kept working when text-shaped instructions did not.",
+          "beyond.title": "From typed edits to typed execution",
+          "beyond.p1":
+            "File editing is only the first instance. The same shape applies to any high-stakes verb an AI agent can perform on a real system: deploy, delete, call, commit, grant. The recipe repeats:",
+          "beyond.step1":
+            "Take one generic, high-stakes verb that an AI agent can invoke.",
+          "beyond.step2": "Split it by risk category, not by surface syntax.",
+          "beyond.step3":
+            "Move the obligations of each category into the tool's description — the only place that doesn't decay.",
+          "beyond.step4":
+            "Let the act of <em>picking the right type</em> do the thinking.",
+          "beyond.p2": "A few sketches of where this leads:",
+          "beyond.s1.t": "Typed deploy",
+          "beyond.s1.b":
+            "<code>deploy_static_assets</code>, <code>deploy_db_migration</code>, <code>deploy_canary_rollout</code>, <code>deploy_full_rollout</code>. A static-asset deploy is reversible and cheap; a DB migration must be backward-compatible and accompanied by a rollback plan. Each tool's description carries the pre-checks, the required artifacts, and the approvals that kind of deploy requires.",
+          "beyond.s2.t": "Typed delete",
+          "beyond.s2.b":
+            "<code>delete_temp_artifact</code>, <code>delete_user_record</code>, <code>delete_production_table</code>. The blast radius rises as you move down the list, and so do the obligations encoded in the descriptions: from \"none\" to \"produce a soft-delete-first migration with a documented retention window\".",
+          "beyond.s3.t": "Typed external call",
+          "beyond.s3.b":
+            "<code>call_idempotent_read</code>, <code>call_side_effecting</code>, <code>call_payment</code>. A read is free; a payment cannot be retried blindly. The payment tool's schema can require an idempotency key as a top-level argument, surfacing the obligation structurally rather than as a comment in the prompt.",
+          "beyond.s4.t": "Typed commit / revert",
+          "beyond.s4.b":
+            "<code>commit_refactor</code>, <code>commit_breaking_change</code>, <code>commit_hotfix</code>, <code>revert</code>. The agent must classify its own change before it can land it; the description for <code>commit_breaking_change</code> requires a changelog entry and a migration note in the same call.",
+          "beyond.p3":
+            "None of this is detection. There is no classifier reading the diff or the payload. The only mechanism is the shape of the tool surface — and the obligation of the agent to choose a tool before acting.",
+          "try.title": "Try it",
+          "try.body":
+            "Claude Code plugin marketplace path. npm and opencode paths are also available — see the <a href=\"https://github.com/hiniachi/meta-edit#install\" target=\"_blank\" rel=\"noopener\">README</a> for the full set, and <a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a> for the design in full.",
           "footer.license": "MIT licensed.",
           "footer.coffee": "Buy the author a coffee",
         },
         ja: {
-          "nav.tools": "ツール",
-          "nav.why": "なぜ",
-          "nav.install": "導入",
-          "hero.eyebrow":
-            "MCP サーバー · Claude Code プラグイン · opencode プラグイン",
-          "hero.title": "型付き編集を 18 個。<br>規律ある単一のインターフェース。",
+          "nav.idea": "発想",
+          "nav.proof": "実証",
+          "nav.beyond": "編集の先へ",
+          "hero.eyebrow": "「義務」の置き場所を変える",
+          "hero.title": "行動に型を。<br>後付けの検査ではなく。",
           "hero.lede":
-            "<code>meta-edit</code> は、コーディングエージェントの汎用 <code>Edit</code> ツールを、種類別に分かれた 18 個の編集ツールに置き換えます。各ツールの説明文には「いつ使うか」「いつ使ってはいけないか」「どのテストを伴うべきか」が記述されています。",
-          "hero.cta.install": "インストール",
-          "hero.cta.github": "GitHub を見る",
-          "hero.cta.spec": "仕様を読む",
-          "hero.status": "v0.3.1 プレリリース · MIT ライセンス · Node 20+",
-          "why.title": "なぜ型付き編集か?",
-          "why.body1":
-            "<code>CLAUDE.md</code> の指示はターンを重ねるごとに薄れます。スキルはエージェントが呼び出すと判断したときにしか発動しません。どちらもモデルが「再読するかもしれない」テキストに依存しており、行動の瞬間に構造的な強制力を持ちません。",
-          "why.body2":
-            "ツール定義は薄れません。エージェントが呼び出そうとしているツールのスキーマと説明は、呼び出しごとに必ず読み込まれます。「境界値テストを追加することを覚えていてほしい」と願う代わりに、<code>meta-edit</code> は単一の <code>Edit</code> プリミティブを 18 個の種類別ツールに分割します。",
-          "why.bet":
-            "賭けはこうです: <strong>AI の編集挙動を変えるのは、ツールサーフェスの形そのもの</strong>であって、検出や事後検証ではない。発想の源流は <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite のテスト戦略</a>を、C ライブラリ品質からアプリケーションレベルの編集カテゴリへと翻訳したものです。",
-          "tools.title": "18 個のツール",
-          "tools.lede":
-            "各ツールの説明には次が明記されています: いつ使うか、いつ使ってはいけないか、どのテストを伴うべきか、いつユーザーに確認して止まるか。",
-          "install.title": "インストール",
-          "install.a.title": "オプション A — Claude Code プラグインマーケットプレース",
-          "install.a.body":
-            "このリポジトリ自体が単一プラグインのマーケットプレースです。一度追加して、meta-edit をインストールします:",
-          "install.a.note":
-            "meta-edit MCP サーバー(18 個の <code>edit_*</code> ツール)と 2 つの安全フックを自動登録します。<code>dist/</code> に同梱されたビルド済み JavaScript で動作するため、必要な実行環境は Node 20+ のみです。",
-          "install.b.title": "オプション B — npm パッケージ",
-          "install.b.body": "Claude Code の MCP 設定にサーバーを追加します:",
-          "install.c.title": "オプション C — opencode",
-          "install.c.body":
-            "同じ npm パッケージが <code>./opencode</code> サブパスで opencode 用プラグインを提供します。型付き編集ツールの説明、監査ログ、グラントフローは Claude Code 版と同一です。",
-          "observed.title": "観察: エージェントは立ち止まり、尋ねる",
-          "observed.body":
-            "<code>meta-edit</code> を自身のリポジトリに初めて自己適用したとき、会話コンテキストはすでに約 80% 使用されていました。そこで <code>OBSERVED-FAILURES.md</code> への追記が要求されたものの、(当時の)17 個のツールはいずれもドキュメント専用の編集に正確には合致しませんでした。エージェントは無理に既存ツールに当てはめず、立ち止まって確認しました。このやり取りがそのまま 18 個目のツール <code>edit_docs_only</code> に発展しました。",
-          "observed.takeaway":
-            "毎回読み込まれるツール型の指示は、セッション開始時に一度だけ読まれるテキスト型の指示に勝りました。",
-          "links.title": "もっと読む",
-          "links.spec": "完全仕様",
-          "links.failures": "v0.2 以降の検出バックログ",
-          "links.readme": "英語",
-          "footer.license": "MIT ライセンス。",
+            "AIコーディングエージェントは、編集のプリミティブを1つしか持たない――<code>Edit</code>だ。タイポ修正でも課金処理の書き換えでも、辿る道は同じ。書く前に「何を考えるべきか」がツール側から与えられない。<strong>meta-edit</strong>はこの1つを、種類ごとに分かれた<strong>18個の型付き編集</strong>に置き換える。各ツールの説明文には、その種類の編集に伴うべき義務が書かれている。義務はもう周辺テキストではなく、ツール表面そのものに乗っている。",
+          "hero.cta.github": "GitHubで見る",
+          "hero.cta.beyond": "なぜ一般化できるのか",
+          "idea.title": "唯一、薄れないもの",
+          "idea.p1":
+            "AIエージェントに義務を負わせる場所は、ふつう「再読されるかもしれないテキスト」のどこかだ。長大な<code>CLAUDE.md</code>、Skill、システムプロンプト、コメントに貼ったレビュー用チェックリスト――どれも会話が進むにつれて注意から外れる。実際に<code>Edit</code>が呼ばれる頃には、その指示は事実上、期限切れになっている。",
+          "idea.p2":
+            "ところがツールの説明だけは違う。エージェントがいま呼ぼうとしているツールのスキーマと説明は、<strong>呼び出しのたびに必ずロードされる</strong>。行動の瞬間にモデルの目の前にあることが保証されている唯一の場所だ。",
+          "idea.p3":
+            "<strong>主張はこうだ。</strong>義務をそこに――周辺テキストではなく、ツール表面に――置けば、義務は持続する。それを試すには、義務が<em>収まる</em>だけの解像度を持ったツール表面が必要だ。汎用の<code>Edit</code>ひとつでは粗すぎる。「<code>&lt;</code>を<code>&lt;=</code>に変えるときは境界テストを書く」という義務を書き込む場所が、タイポ修正にまで誤って適用されない形で確保できない。",
+          "idea.p4":
+            "だから分ける。<code>Edit</code>は18個の編集に分解される。変更の「種類」ごとに1つずつ、それぞれの説明にそれぞれの義務が乗る。そして決定的なのは、<strong>エージェントは種類を選ばなければ編集できない</strong>という点だ。種類を選ぶこと自体が、思考のステップになる。",
+          "proof.title": "18個の型付き編集",
+          "proof.lede":
+            "現時点の種類一覧。各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、どんなときに立ち止まってユーザーに尋ねるかが書かれている。",
+          "proof.evidence.title": "観察されたこと",
+          "proof.evidence.body":
+            "依頼された変更にどの種類もきれいに当てはまらないとき、エージェントは近い型に無理やり押し込まずに<strong>立ち止まって尋ねる</strong>。これがコンテキスト使用率およそ80%――<code>CLAUDE.md</code>の指示が通常効かなくなる領域――でも起こることを確認している。毎回ロードされる「ツール型」の指示は、セッション開始時にしか読まれない「テキスト型」の指示が機能しなくなった後でも、機能し続けた。",
+          "beyond.title": "型付き編集から、型付き実行へ",
+          "beyond.p1":
+            "ファイル編集は最初の事例にすぎない。同じ形は、AIエージェントが実システムに対して行う他のリスクある動詞にも当てはまる――デプロイする、削除する、呼び出す、コミットする、権限を付与する。手順はいつも同じだ。",
+          "beyond.step1":
+            "AIエージェントが呼べる、汎用でリスクのある動詞をひとつ取る。",
+          "beyond.step2":
+            "表面の構文ではなく、リスクのカテゴリで分割する。",
+          "beyond.step3":
+            "各カテゴリの義務を、ツールの説明文――唯一、薄れない場所――に移す。",
+          "beyond.step4":
+            "「正しい型を選ぶ」というその行為自体に、思考を担わせる。",
+          "beyond.p2": "この発想が向かう先のスケッチをいくつか。",
+          "beyond.s1.t": "型付きデプロイ",
+          "beyond.s1.b":
+            "<code>deploy_static_assets</code>、<code>deploy_db_migration</code>、<code>deploy_canary_rollout</code>、<code>deploy_full_rollout</code>。静的アセットのデプロイは可逆で安価だが、DBマイグレーションは後方互換でなければならず、ロールバック計画が必要だ。各ツールの説明には、その種類のデプロイに必要な事前チェック、必須の成果物、承認者を書く。",
+          "beyond.s2.t": "型付き削除",
+          "beyond.s2.b":
+            "<code>delete_temp_artifact</code>、<code>delete_user_record</code>、<code>delete_production_table</code>。下に行くほど被害範囲が広がり、説明文に書かれる義務も重くなる――「特になし」から「ソフトデリート先行で、保持期間を明文化したマイグレーションを必ず付ける」まで。",
+          "beyond.s3.t": "型付き外部呼び出し",
+          "beyond.s3.b":
+            "<code>call_idempotent_read</code>、<code>call_side_effecting</code>、<code>call_payment</code>。読み取りはコストゼロだが、決済は安易に再試行できない。決済ツールのスキーマは、冪等キーをトップレベル引数として要求でき、義務をプロンプト中の注意書きではなく構造そのものとして表に出せる。",
+          "beyond.s4.t": "型付きコミット / リバート",
+          "beyond.s4.b":
+            "<code>commit_refactor</code>、<code>commit_breaking_change</code>、<code>commit_hotfix</code>、<code>revert</code>。エージェントは自分の変更を分類してからでないとマージできない。<code>commit_breaking_change</code>の説明は、同じ呼び出しの中でchangelog項目と移行ノートの記載を要求する。",
+          "beyond.p3":
+            "ここには検出器はひとつもない。diffやペイロードを読む分類器も存在しない。仕組みはツール表面の「形」だけ――そしてエージェントが行動前に必ずツールを選ばなければならない、という制約だ。",
+          "try.title": "試す",
+          "try.body":
+            "Claude Codeプラグインマーケットプレース経由のインストール例。npmやopencode経由もある――一通りは<a href=\"https://github.com/hiniachi/meta-edit/blob/main/README.ja.md\" target=\"_blank\" rel=\"noopener\">README</a>に、設計の全体像は<a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a>にある。",
+          "footer.license": "MITライセンス。",
           "footer.coffee": "作者にコーヒーを奢る",
         },
         zh: {
-          "nav.tools": "工具",
-          "nav.why": "为何",
-          "nav.install": "安装",
-          "hero.eyebrow": "MCP 服务器 · Claude Code 插件 · opencode 插件",
-          "hero.title": "十八种类型化编辑。<br>一个有纪律的接口。",
+          "nav.idea": "核心想法",
+          "nav.proof": "实证",
+          "nav.beyond": "超越编辑",
+          "hero.eyebrow": "把「义务」放在另一个地方",
+          "hero.title": "给行为分型,<br>而不是事后检查。",
           "hero.lede":
-            "<code>meta-edit</code> 用十八个按类型划分的编辑工具,替代了编码代理的通用 <code>Edit</code> 工具。每个工具的描述中都规定了:何时使用、何时不该使用,以及该编辑必须附带的测试。",
-          "hero.cta.install": "安装",
+            "AI 编码代理只有一个编辑原语 ——<code>Edit</code>。无论是改一个错字,还是动计费引擎,通往动作的路径都一样。代理在落键之前,工具一侧没有任何「该想什么」的提示。<strong>meta-edit</strong> 把这一个工具,替换为按种类划分的<strong>十八个类型化编辑</strong>。每个工具的描述里,都写明了该类编辑所附带的义务。义务不再寄身于周边文本,而是直接长在工具表面本身。",
           "hero.cta.github": "在 GitHub 查看",
-          "hero.cta.spec": "阅读规范",
-          "hero.status": "v0.3.1 预发布 · MIT 许可 · Node 20+",
-          "why.title": "为何采用类型化编辑?",
-          "why.body1":
-            "<code>CLAUDE.md</code> 中的指令会随对话轮次而衰减。Skills 仅在代理决定调用时才生效。两者都依赖模型<em>可能</em>会再次阅读的文本 —— 在动作发生的那一刻,它们都没有结构性约束力。",
-          "why.body2":
-            "工具定义不会衰减。代理即将调用的工具,其 schema 和 description 在每次调用时都会被加载。与其指望代理记得「补上边界测试」,<code>meta-edit</code> 直接将单一的 <code>Edit</code> 原语拆分成 18 个类型化工具。",
-          "why.bet":
-            "我们押注: <strong>真正改变 AI 编辑行为的是工具表面的形状</strong>,而非检测或事后验证。其思想源自 <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite 的测试策略</a>,将 C 库的质量实践翻译到应用层的编辑类别。",
-          "tools.title": "十八个工具",
-          "tools.lede":
-            "每个描述都规定了:何时使用、何时不该使用、该编辑必须附带的测试,以及何时停下来询问用户。",
-          "install.title": "安装",
-          "install.a.title": "方式 A — Claude Code 插件市场",
-          "install.a.body":
-            "本仓库本身就是一个单插件市场。添加一次后即可安装 meta-edit:",
-          "install.a.note":
-            "自动注册 meta-edit MCP 服务器(十八个 <code>edit_*</code> 工具)和两个安全 hook。运行 <code>dist/</code> 中预构建的 JavaScript —— 唯一运行时要求是 Node 20+。",
-          "install.b.title": "方式 B — npm 包",
-          "install.b.body": "然后将服务器添加到 Claude Code 的 MCP 配置:",
-          "install.c.title": "方式 C — opencode",
-          "install.c.body":
-            "同一个 npm 包在 <code>./opencode</code> 子路径下提供 opencode 插件。与 Claude Code 路径共享相同的十八个类型化编辑工具描述、审计日志和 grant 流程。",
-          "observed.title": "观察:代理会停下来询问",
-          "observed.body":
-            "<code>meta-edit</code> 第一次自我应用到本仓库时,对话上下文已经使用了约 80%。在被要求向 <code>OBSERVED-FAILURES.md</code> 追加内容时,当时的十七个工具中没有一个能够干净地匹配「仅文档」编辑。代理没有强行套用某个工具,而是停下来询问。那次对话直接催生了第十八个工具 <code>edit_docs_only</code>。",
-          "observed.takeaway":
-            "在每次调用时都被加载的「工具形」指令,胜过仅在会话开始时读取一次的「文本形」指令。",
-          "links.title": "深入阅读",
-          "links.spec": "完整规范",
-          "links.failures": "v0.2 之后的检测待办",
-          "links.readme": "英文",
+          "hero.cta.beyond": "为什么可以推广",
+          "idea.title": "唯一不会褪色的地方",
+          "idea.p1":
+            "通常给 AI 代理施加义务的地方,都是「它也许会再次读到」的文本:厚厚的 <code>CLAUDE.md</code>、Skills、系统提示、贴在评论里的审查清单——随着对话推进,它们逐渐从注意力中滑出。等到 <code>Edit</code> 真正被调用时,那些文字基本上已经过期。",
+          "idea.p2":
+            "只有一种表面不一样。代理即将调用的那个工具的 schema 和描述,会在<strong>每次调用时被重新加载</strong>,就在调用发生的前一刻。这是动作发生时,指令唯一保证摆在模型眼前的位置。",
+          "idea.p3":
+            "<strong>主张是:</strong>把义务放在那里——放在工具表面,而不是周围的文本——义务就能站得住。要验证这件事,工具表面必须有足够的分辨率,让义务能<em>嵌进去</em>。一个通用的 <code>Edit</code> 太粗了:你没办法在它里面写「把 <code>&lt;</code> 改成 <code>&lt;=</code> 时要补一个边界测试」这样的义务,而又不至于错误地连改错字也一并适用。",
+          "idea.p4":
+            "所以拆。<code>Edit</code> 拆成十八个编辑,每种变更对应一个,各自的义务写进各自的描述。关键的一步是:<strong>代理必须先选一个类型,才能编辑</strong>。选类型这件事本身,就是思考的那一步。",
+          "proof.title": "十八个类型化编辑",
+          "proof.lede":
+            "当前的种类清单。每个工具的描述都写明:何时使用、何时不该使用、必须附带哪些测试、何时停下来询问用户。",
+          "proof.evidence.title": "我们观察到的现象",
+          "proof.evidence.body":
+            "当请求的改动没有类型能干净匹配时,代理不会硬塞进最近的工具,而是<strong>停下来询问</strong>。我们在上下文使用率约 80% 的会话里观察到了这一点——这正是 <code>CLAUDE.md</code> 中的指令通常已经失去约束力的区段。每次调用都会被重新加载的「工具型」指令,在「文本型」指令失效之后仍然继续起作用。",
+          "beyond.title": "从类型化编辑,到类型化执行",
+          "beyond.p1":
+            "文件编辑只是第一个例子。同样的形态,适用于 AI 代理在真实系统上能做的任何高风险动作——部署、删除、调用、提交、授权。配方是一样的:",
+          "beyond.step1":
+            "选一个 AI 代理可以调用的、通用且高风险的动词。",
+          "beyond.step2":
+            "按风险类别拆分,而不是按表面语法拆分。",
+          "beyond.step3":
+            "把每一类的义务,搬到工具的描述里——那个唯一不褪色的地方。",
+          "beyond.step4":
+            "让「挑选正确的类型」这一动作本身,承担思考的工作。",
+          "beyond.p2": "几个走向上的草图:",
+          "beyond.s1.t": "类型化部署",
+          "beyond.s1.b":
+            "<code>deploy_static_assets</code>、<code>deploy_db_migration</code>、<code>deploy_canary_rollout</code>、<code>deploy_full_rollout</code>。静态资源部署是可逆且便宜的;数据库迁移必须向后兼容,并附带回滚方案。每个工具的描述里写清楚:该类部署需要的前置检查、必备产物、审批人。",
+          "beyond.s2.t": "类型化删除",
+          "beyond.s2.b":
+            "<code>delete_temp_artifact</code>、<code>delete_user_record</code>、<code>delete_production_table</code>。越往下走,影响半径越大,描述中写入的义务也越重——从「无要求」,到「必须先做软删除,并附明确保留期」。",
+          "beyond.s3.t": "类型化外部调用",
+          "beyond.s3.b":
+            "<code>call_idempotent_read</code>、<code>call_side_effecting</code>、<code>call_payment</code>。读操作没有成本;支付不能盲目重试。支付工具的 schema 可以把幂等键作为顶层参数强制要求,把义务从「提示中的注释」提升为「结构本身」。",
+          "beyond.s4.t": "类型化提交 / 回滚",
+          "beyond.s4.b":
+            "<code>commit_refactor</code>、<code>commit_breaking_change</code>、<code>commit_hotfix</code>、<code>revert</code>。代理必须先给自己的改动分类,才能落地;<code>commit_breaking_change</code> 的描述会要求在同一次调用中给出 changelog 条目和迁移说明。",
+          "beyond.p3":
+            "这里没有任何检测器。没有去读 diff 或负载的分类器。机制只有一个:工具表面的形状——再加上一条约束:代理必须先选工具,才能行动。",
+          "try.title": "试一下",
+          "try.body":
+            "Claude Code 插件市场路径。npm 与 opencode 路径也可用 —— 完整说明见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/README.zh-CN.md\" target=\"_blank\" rel=\"noopener\">README</a>,完整设计见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a>。",
           "footer.license": "MIT 许可。",
           "footer.coffee": "请作者喝杯咖啡",
         },
@@ -442,8 +474,7 @@ meta-edit install-opencode --scope user</code></pre>
 
       function applyLang(lang) {
         const dict = I18N[lang] || I18N.en;
-        document.documentElement.lang =
-          lang === "zh" ? "zh-CN" : lang;
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : lang;
         document.documentElement.dataset.lang = lang;
         document.querySelectorAll("[data-i18n]").forEach((el) => {
           const key = el.getAttribute("data-i18n");
