@@ -1110,17 +1110,35 @@ function redirectsToProtected(s, opts = {}) {
   }
   return false;
 }
+function* operandPathCandidates(token) {
+  if (token.length === 0)
+    return;
+  if (!token.startsWith("-")) {
+    yield token;
+    return;
+  }
+  const eq = token.indexOf("=");
+  if (eq >= 0) {
+    yield token.slice(eq + 1);
+    return;
+  }
+  if (token.length > 2 && /[A-Za-z]/.test(token[1])) {
+    yield token.slice(2);
+  }
+}
 function commandOperandResolvesProtected(normalized, opts) {
   const cwd = opts.cwd;
   if (!cwd)
     return false;
   for (const token of tokenizeSegment(normalized)) {
-    if (token.length === 0 || token.startsWith("-"))
-      continue;
-    const absolute = path3.isAbsolute(token) ? token : path3.resolve(cwd, token);
-    const rel = path3.relative(cwd, absolute);
-    if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
-      return true;
+    for (const candidate of operandPathCandidates(token)) {
+      if (candidate.length === 0)
+        continue;
+      const absolute = path3.isAbsolute(candidate) ? candidate : path3.resolve(cwd, candidate);
+      const rel = path3.relative(cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+        return true;
+      }
     }
   }
   return false;
@@ -1745,4 +1763,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=D6E80E6495DCAFC064756E2164756E21
+//# debugId=0CF7EFFC9FC415D664756E2164756E21

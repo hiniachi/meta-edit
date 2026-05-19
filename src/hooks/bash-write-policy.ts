@@ -1674,9 +1674,9 @@ function redirectsToProtected(
   return false;
 }
 
-// v0.4.3 / Codex PR#76 P1: mv/cp/rsync were relaxed from blanket deny
-// to warn (SPEC §5.2). Their *operands* can still reach a protected
-// directory through a symlink alias (`link -> .meta-edit`;
+// v0.4.3 / Codex PR#76 P1 (+ follow-up): mv/cp/rsync were relaxed from
+// blanket deny to warn (SPEC §5.2). Their *operands* can still reach a
+// protected directory through a symlink alias (`link -> .meta-edit`;
 // `mv payload link/state/x`). The lexical touchesProtectedPathTokenized
 // catches only literal `.meta-edit/...` operands, and the symlink-aware
 // redirectsToProtected only inspects `>`/`>>`/`>|` redirect targets —
@@ -1684,10 +1684,37 @@ function redirectsToProtected(
 // this gap; re-close it so the documented "protected-path stays deny
 // regardless of verb" invariant holds. cwd-gated exactly like the
 // redirectsToProtected symlink branch: realpath-resolve every operand
-// token through the symlink-aware isProtectedPath and report protected
-// if any lands in .meta-edit/state|tmp. Over-including non-path tokens
-// (the verb, flag values) is safe — they do not realpath into a
-// protected directory.
+// (including the path carried *inside* an option token —
+// `--target-directory=alias/tmp`, `-talias/state`; same option-glue
+// surface issue 1106 already handles for the lexical check) through the
+// symlink-aware isProtectedPath and report protected if any lands in
+// .meta-edit/state|tmp. Over-including non-path candidates is safe —
+// they do not realpath into a protected directory.
+function* operandPathCandidates(token: string): Generator<string> {
+  if (token.length === 0) return;
+  if (!token.startsWith("-")) {
+    // Plain operand (`alias/state`, `payload`) or env-assignment
+    // (`FOO=bar`). Yield the whole token; env-assignment values are NOT
+    // split out — `FOO=alias/state mv x` does not write into the value.
+    yield token;
+    return;
+  }
+  // Option token. The path may be glued to the flag:
+  //   long  : `--target-directory=alias/tmp` / `--output=alias/state/x`
+  //   short : `-talias/state` / `-O.meta-edit/state/x`
+  const eq = token.indexOf("=");
+  if (eq >= 0) {
+    yield token.slice(eq + 1);
+    return;
+  }
+  // Short-option glue: dash + a single option letter + value. Grouped
+  // pure flags (`-rf`) yield a non-path remainder that simply will not
+  // realpath into a protected dir, so this stays best-effort-safe.
+  if (token.length > 2 && /[A-Za-z]/.test(token[1]!)) {
+    yield token.slice(2);
+  }
+}
+
 function commandOperandResolvesProtected(
   normalized: string,
   opts: EvaluateBashOptions,
@@ -1695,13 +1722,15 @@ function commandOperandResolvesProtected(
   const cwd = opts.cwd;
   if (!cwd) return false;
   for (const token of tokenizeSegment(normalized)) {
-    if (token.length === 0 || token.startsWith("-")) continue;
-    const absolute = path.isAbsolute(token)
-      ? token
-      : path.resolve(cwd, token);
-    const rel = path.relative(cwd, absolute);
-    if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
-      return true;
+    for (const candidate of operandPathCandidates(token)) {
+      if (candidate.length === 0) continue;
+      const absolute = path.isAbsolute(candidate)
+        ? candidate
+        : path.resolve(cwd, candidate);
+      const rel = path.relative(cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+        return true;
+      }
     }
   }
   return false;

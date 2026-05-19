@@ -6419,17 +6419,35 @@ function redirectsToProtected(s, opts = {}) {
   }
   return false;
 }
+function* operandPathCandidates(token) {
+  if (token.length === 0)
+    return;
+  if (!token.startsWith("-")) {
+    yield token;
+    return;
+  }
+  const eq = token.indexOf("=");
+  if (eq >= 0) {
+    yield token.slice(eq + 1);
+    return;
+  }
+  if (token.length > 2 && /[A-Za-z]/.test(token[1])) {
+    yield token.slice(2);
+  }
+}
 function commandOperandResolvesProtected(normalized, opts) {
   const cwd = opts.cwd;
   if (!cwd)
     return false;
   for (const token of tokenizeSegment(normalized)) {
-    if (token.length === 0 || token.startsWith("-"))
-      continue;
-    const absolute = path8.isAbsolute(token) ? token : path8.resolve(cwd, token);
-    const rel = path8.relative(cwd, absolute);
-    if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
-      return true;
+    for (const candidate of operandPathCandidates(token)) {
+      if (candidate.length === 0)
+        continue;
+      const absolute = path8.isAbsolute(candidate) ? candidate : path8.resolve(cwd, candidate);
+      const rel = path8.relative(cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+        return true;
+      }
     }
   }
   return false;
@@ -7587,4 +7605,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=D2784BD6787B76F164756E2164756E21
+//# debugId=5FF6E184DEC1FAC164756E2164756E21

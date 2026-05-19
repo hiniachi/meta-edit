@@ -2577,5 +2577,83 @@ describe("evaluateBashCommand — v0.4.3 symlink-aliased protected operand (Code
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  // Codex PR#76 follow-up P1: the path may be carried INSIDE an option
+  // token (`--target-directory=alias/tmp`, `-talias/state`), which the
+  // first fix's leading-`-` skip missed. Same option-glue surface issue
+  // 1106 handles for the lexical check.
+  it("denies cp --target-directory=<symlinked .meta-edit/tmp> (long-opt glue)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "tmp"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "alias"));
+      const r = evaluateBashCommand(
+        "cp --target-directory=alias/tmp payload",
+        { cwd: tmpDir },
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected meta-edit path");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies mv -t<symlinked .meta-edit/state> (short-opt glue)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "state"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "alias"));
+      const r = evaluateBashCommand("mv -talias/state payload", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("deny");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies mv --target-directory=<symlinked .meta-edit/state> (space-free long opt)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "state"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "alias"));
+      const r = evaluateBashCommand(
+        "mv --target-directory=alias/state payload",
+        { cwd: tmpDir },
+      );
+      expect(r.decision).toBe("deny");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still WARNS on cp --target-directory=dist payload (option-glued path, no protected alias)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      fs.mkdirSync(path.join(tmpDir, "dist"), { recursive: true });
+      const r = evaluateBashCommand(
+        "cp --target-directory=dist payload",
+        { cwd: tmpDir },
+      );
+      expect(r.decision).toBe("warn");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
