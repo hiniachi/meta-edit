@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>meta-edit — eighteen typed edit tools for AI coding agents</title>
+    <meta
+      name="description"
+      content="An MCP server that replaces a coding agent's generic file-edit tool with eighteen kind-specific edit tools, each encoding its testing obligations in the tool description."
+    />
+    <meta name="theme-color" content="#0d1117" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <meta property="og:title" content="meta-edit" />
+    <meta
+      property="og:description"
+      content="Eighteen typed edit tools for AI coding agents. The shape of the tool surface changes how AIs edit code."
+    />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a href="#top" class="brand">
+        <svg
+          class="brand-mark"
+          viewBox="0 0 32 32"
+          aria-hidden="true"
+          width="28"
+          height="28"
+        >
+          <rect x="2" y="2" width="28" height="28" rx="7" fill="#7c5cff" />
+          <path
+            d="M9 21V11l4 6 4-6v10M21 11h2v10h-2z"
+            stroke="#fff"
+            stroke-width="2"
+            fill="none"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span>meta-edit</span>
+      </a>
+      <nav class="nav">
+        <a href="#tools" data-i18n="nav.tools">Tools</a>
+        <a href="#why" data-i18n="nav.why">Why</a>
+        <a href="#install" data-i18n="nav.install">Install</a>
+        <a
+          href="https://github.com/hiniachi/meta-edit"
+          rel="noopener"
+          target="_blank"
+          >GitHub</a
+        >
+      </nav>
+      <div class="lang-switch" role="tablist" aria-label="Language">
+        <button type="button" data-lang-btn="en" aria-selected="true">
+          EN
+        </button>
+        <button type="button" data-lang-btn="ja" aria-selected="false">
+          日本語
+        </button>
+        <button type="button" data-lang-btn="zh" aria-selected="false">
+          简体中文
+        </button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <p class="eyebrow" data-i18n="hero.eyebrow">
+          MCP server · Claude Code plugin · opencode plugin
+        </p>
+        <h1 data-i18n="hero.title">
+          Eighteen typed edits.<br />
+          One disciplined surface.
+        </h1>
+        <p class="lede" data-i18n="hero.lede">
+          <code>meta-edit</code> replaces a coding agent's generic
+          <code>Edit</code> tool with eighteen kind-specific edit tools. Each
+          tool's description encodes when to use it, when not to use it, and
+          what tests must accompany the change.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#install" data-i18n="hero.cta.install"
+            >Install</a
+          >
+          <a
+            class="btn"
+            href="https://github.com/hiniachi/meta-edit"
+            target="_blank"
+            rel="noopener"
+            data-i18n="hero.cta.github"
+            >View on GitHub</a
+          >
+          <a
+            class="btn btn-ghost"
+            href="https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md"
+            target="_blank"
+            rel="noopener"
+            data-i18n="hero.cta.spec"
+            >Read the spec</a
+          >
+        </div>
+        <p class="status">
+          <span class="dot" aria-hidden="true"></span>
+          <span data-i18n="hero.status"
+            >v0.3.1 pre-release · MIT licensed · Node 20+</span
+          >
+        </p>
+      </section>
+
+      <section id="why" class="section">
+        <h2 data-i18n="why.title">Why typed edits?</h2>
+        <p data-i18n="why.body1">
+          Instructions in <code>CLAUDE.md</code> decay across turns. Skills only
+          fire when the agent decides to invoke them. Both rely on text the
+          model <em>might</em> re-read — neither has structural force at the
+          moment of action.
+        </p>
+        <p data-i18n="why.body2">
+          Tool definitions don't decay. The schema and description of the tool
+          the agent is about to call are loaded at every invocation. Instead of
+          hoping the agent remembers "add boundary tests", <code>meta-edit</code>
+          splits the single <code>Edit</code> primitive into eighteen
+          kind-specific tools.
+        </p>
+        <blockquote class="quote">
+          <p data-i18n="why.bet">
+            The bet: <strong>the shape of the tool surface is what changes AI
+            editing behavior</strong>, not detection or post-hoc verification.
+            The conceptual ancestor is
+            <a
+              href="https://sqlite.org/testing.html"
+              target="_blank"
+              rel="noopener"
+              >SQLite's testing strategy</a
+            >, translated from C library quality into application-level edit
+            categories.
+          </p>
+        </blockquote>
+      </section>
+
+      <section id="tools" class="section">
+        <h2 data-i18n="tools.title">The eighteen tools</h2>
+        <p class="section-lede" data-i18n="tools.lede">
+          Each description specifies: when to use it, when not to use it, which
+          tests must accompany the edit, and when to stop and ask the user.
+        </p>
+        <ul class="tool-grid" aria-label="Tools">
+          <li><span class="tool-name">edit_refactor_only</span></li>
+          <li><span class="tool-name">edit_test_only_change</span></li>
+          <li><span class="tool-name">edit_boundary_condition</span></li>
+          <li><span class="tool-name">edit_boolean_condition</span></li>
+          <li><span class="tool-name">edit_state_transition</span></li>
+          <li><span class="tool-name">edit_db_schema</span></li>
+          <li><span class="tool-name">edit_data_migration</span></li>
+          <li><span class="tool-name">edit_api_contract</span></li>
+          <li><span class="tool-name">edit_serialization</span></li>
+          <li><span class="tool-name">edit_error_handling</span></li>
+          <li><span class="tool-name">edit_retry_timeout</span></li>
+          <li><span class="tool-name">edit_concurrency</span></li>
+          <li><span class="tool-name">edit_external_side_effect</span></li>
+          <li><span class="tool-name">edit_cache_invalidation</span></li>
+          <li><span class="tool-name">edit_permission_logic</span></li>
+          <li><span class="tool-name">edit_dependency_config</span></li>
+          <li><span class="tool-name">edit_policy_change</span></li>
+          <li><span class="tool-name">edit_docs_only</span></li>
+        </ul>
+      </section>
+
+      <section id="install" class="section">
+        <h2 data-i18n="install.title">Install</h2>
+
+        <article class="card">
+          <h3 data-i18n="install.a.title">
+            Option A — Claude Code plugin marketplace
+          </h3>
+          <p data-i18n="install.a.body">
+            This repository <em>is</em> a single-plugin marketplace. Add it once,
+            then install meta-edit:
+          </p>
+          <pre><code>/plugin marketplace add hiniachi/meta-edit
+/plugin install meta-edit@meta-edit</code></pre>
+          <p data-i18n="install.a.note">
+            Auto-registers the meta-edit MCP server (eighteen
+            <code>edit_*</code> tools) and the two safety hooks. Runs prebuilt
+            JavaScript shipped under <code>dist/</code> — Node 20+ is the only
+            runtime requirement.
+          </p>
+        </article>
+
+        <article class="card">
+          <h3 data-i18n="install.b.title">Option B — npm package</h3>
+          <pre><code>npm install -g @hiniachi/meta-edit
+meta-edit install-hooks --scope user</code></pre>
+          <p data-i18n="install.b.body">
+            Then add the server to your Claude Code MCP configuration:
+          </p>
+          <pre><code>{
+  "mcpServers": {
+    "meta-edit": { "command": "meta-edit", "args": ["serve"] }
+  }
+}</code></pre>
+        </article>
+
+        <article class="card">
+          <h3 data-i18n="install.c.title">Option C — opencode</h3>
+          <pre><code>npm install -g @hiniachi/meta-edit
+meta-edit install-opencode --scope user</code></pre>
+          <p data-i18n="install.c.body">
+            The same npm package ships an opencode plugin under the
+            <code>./opencode</code> subpath. Same eighteen typed-edit tool
+            descriptions, same audit log, same grant flow as the Claude Code
+            path.
+          </p>
+        </article>
+      </section>
+
+      <section id="observed" class="section">
+        <h2 data-i18n="observed.title">Observed: the agent stops and asks</h2>
+        <p data-i18n="observed.body">
+          The first time <code>meta-edit</code> was self-applied to its own
+          repository, with the conversation context already ~80% full, an
+          <code>OBSERVED-FAILURES.md</code> append was requested. None of the
+          (then) seventeen tools cleanly matched a docs-only edit. Instead of
+          stretching one to fit, the agent paused and asked. That entry
+          subsequently became the eighteenth tool, <code>edit_docs_only</code>.
+        </p>
+        <p data-i18n="observed.takeaway">
+          Tool-shaped instructions read at every call won out over text-shaped
+          instructions read once at session start.
+        </p>
+      </section>
+
+      <section class="section section-links">
+        <h2 data-i18n="links.title">Read more</h2>
+        <ul class="link-list">
+          <li>
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md"
+              target="_blank"
+              rel="noopener"
+              >docs/SPEC.md</a
+            >
+            — <span data-i18n="links.spec">full specification</span>
+          </li>
+          <li>
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md"
+              target="_blank"
+              rel="noopener"
+              >OBSERVED-FAILURES.md</a
+            >
+            — <span data-i18n="links.failures">post-v0.2 detection backlog</span>
+          </li>
+          <li>
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/README.md"
+              target="_blank"
+              rel="noopener"
+              >README</a
+            >
+            — <span data-i18n="links.readme">English</span> ·
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/README.ja.md"
+              target="_blank"
+              rel="noopener"
+              >日本語</a
+            >
+            ·
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/README.zh-CN.md"
+              target="_blank"
+              rel="noopener"
+              >简体中文</a
+            >
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        <span data-i18n="footer.license">MIT licensed.</span>
+        <a
+          href="https://github.com/hiniachi/meta-edit"
+          target="_blank"
+          rel="noopener"
+          >github.com/hiniachi/meta-edit</a
+        >
+      </p>
+      <p class="muted">
+        <a
+          href="https://buymeacoffee.com/hiniachi"
+          target="_blank"
+          rel="noopener"
+          data-i18n="footer.coffee"
+          >Buy the author a coffee</a
+        >
+      </p>
+    </footer>
+
+    <script>
+      const I18N = {
+        en: {
+          "nav.tools": "Tools",
+          "nav.why": "Why",
+          "nav.install": "Install",
+          "hero.eyebrow": "MCP server · Claude Code plugin · opencode plugin",
+          "hero.title": "Eighteen typed edits.<br>One disciplined surface.",
+          "hero.lede":
+            "<code>meta-edit</code> replaces a coding agent's generic <code>Edit</code> tool with eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the change.",
+          "hero.cta.install": "Install",
+          "hero.cta.github": "View on GitHub",
+          "hero.cta.spec": "Read the spec",
+          "hero.status": "v0.3.1 pre-release · MIT licensed · Node 20+",
+          "why.title": "Why typed edits?",
+          "why.body1":
+            "Instructions in <code>CLAUDE.md</code> decay across turns. Skills only fire when the agent decides to invoke them. Both rely on text the model <em>might</em> re-read — neither has structural force at the moment of action.",
+          "why.body2":
+            "Tool definitions don't decay. The schema and description of the tool the agent is about to call are loaded at every invocation. Instead of hoping the agent remembers \"add boundary tests\", <code>meta-edit</code> splits the single <code>Edit</code> primitive into eighteen kind-specific tools.",
+          "why.bet":
+            "The bet: <strong>the shape of the tool surface is what changes AI editing behavior</strong>, not detection or post-hoc verification. The conceptual ancestor is <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite's testing strategy</a>, translated from C library quality into application-level edit categories.",
+          "tools.title": "The eighteen tools",
+          "tools.lede":
+            "Each description specifies: when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user.",
+          "install.title": "Install",
+          "install.a.title": "Option A — Claude Code plugin marketplace",
+          "install.a.body":
+            "This repository <em>is</em> a single-plugin marketplace. Add it once, then install meta-edit:",
+          "install.a.note":
+            "Auto-registers the meta-edit MCP server (eighteen <code>edit_*</code> tools) and the two safety hooks. Runs prebuilt JavaScript shipped under <code>dist/</code> — Node 20+ is the only runtime requirement.",
+          "install.b.title": "Option B — npm package",
+          "install.b.body":
+            "Then add the server to your Claude Code MCP configuration:",
+          "install.c.title": "Option C — opencode",
+          "install.c.body":
+            "The same npm package ships an opencode plugin under the <code>./opencode</code> subpath. Same eighteen typed-edit tool descriptions, same audit log, same grant flow as the Claude Code path.",
+          "observed.title": "Observed: the agent stops and asks",
+          "observed.body":
+            "The first time <code>meta-edit</code> was self-applied to its own repository, with the conversation context already ~80% full, an <code>OBSERVED-FAILURES.md</code> append was requested. None of the (then) seventeen tools cleanly matched a docs-only edit. Instead of stretching one to fit, the agent paused and asked. That entry subsequently became the eighteenth tool, <code>edit_docs_only</code>.",
+          "observed.takeaway":
+            "Tool-shaped instructions read at every call won out over text-shaped instructions read once at session start.",
+          "links.title": "Read more",
+          "links.spec": "full specification",
+          "links.failures": "post-v0.2 detection backlog",
+          "links.readme": "English",
+          "footer.license": "MIT licensed.",
+          "footer.coffee": "Buy the author a coffee",
+        },
+        ja: {
+          "nav.tools": "ツール",
+          "nav.why": "なぜ",
+          "nav.install": "導入",
+          "hero.eyebrow":
+            "MCP サーバー · Claude Code プラグイン · opencode プラグイン",
+          "hero.title": "型付き編集を 18 個。<br>規律ある単一のインターフェース。",
+          "hero.lede":
+            "<code>meta-edit</code> は、コーディングエージェントの汎用 <code>Edit</code> ツールを、種類別に分かれた 18 個の編集ツールに置き換えます。各ツールの説明文には「いつ使うか」「いつ使ってはいけないか」「どのテストを伴うべきか」が記述されています。",
+          "hero.cta.install": "インストール",
+          "hero.cta.github": "GitHub を見る",
+          "hero.cta.spec": "仕様を読む",
+          "hero.status": "v0.3.1 プレリリース · MIT ライセンス · Node 20+",
+          "why.title": "なぜ型付き編集か?",
+          "why.body1":
+            "<code>CLAUDE.md</code> の指示はターンを重ねるごとに薄れます。スキルはエージェントが呼び出すと判断したときにしか発動しません。どちらもモデルが「再読するかもしれない」テキストに依存しており、行動の瞬間に構造的な強制力を持ちません。",
+          "why.body2":
+            "ツール定義は薄れません。エージェントが呼び出そうとしているツールのスキーマと説明は、呼び出しごとに必ず読み込まれます。「境界値テストを追加することを覚えていてほしい」と願う代わりに、<code>meta-edit</code> は単一の <code>Edit</code> プリミティブを 18 個の種類別ツールに分割します。",
+          "why.bet":
+            "賭けはこうです: <strong>AI の編集挙動を変えるのは、ツールサーフェスの形そのもの</strong>であって、検出や事後検証ではない。発想の源流は <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite のテスト戦略</a>を、C ライブラリ品質からアプリケーションレベルの編集カテゴリへと翻訳したものです。",
+          "tools.title": "18 個のツール",
+          "tools.lede":
+            "各ツールの説明には次が明記されています: いつ使うか、いつ使ってはいけないか、どのテストを伴うべきか、いつユーザーに確認して止まるか。",
+          "install.title": "インストール",
+          "install.a.title": "オプション A — Claude Code プラグインマーケットプレース",
+          "install.a.body":
+            "このリポジトリ自体が単一プラグインのマーケットプレースです。一度追加して、meta-edit をインストールします:",
+          "install.a.note":
+            "meta-edit MCP サーバー(18 個の <code>edit_*</code> ツール)と 2 つの安全フックを自動登録します。<code>dist/</code> に同梱されたビルド済み JavaScript で動作するため、必要な実行環境は Node 20+ のみです。",
+          "install.b.title": "オプション B — npm パッケージ",
+          "install.b.body": "Claude Code の MCP 設定にサーバーを追加します:",
+          "install.c.title": "オプション C — opencode",
+          "install.c.body":
+            "同じ npm パッケージが <code>./opencode</code> サブパスで opencode 用プラグインを提供します。型付き編集ツールの説明、監査ログ、グラントフローは Claude Code 版と同一です。",
+          "observed.title": "観察: エージェントは立ち止まり、尋ねる",
+          "observed.body":
+            "<code>meta-edit</code> を自身のリポジトリに初めて自己適用したとき、会話コンテキストはすでに約 80% 使用されていました。そこで <code>OBSERVED-FAILURES.md</code> への追記が要求されたものの、(当時の)17 個のツールはいずれもドキュメント専用の編集に正確には合致しませんでした。エージェントは無理に既存ツールに当てはめず、立ち止まって確認しました。このやり取りがそのまま 18 個目のツール <code>edit_docs_only</code> に発展しました。",
+          "observed.takeaway":
+            "毎回読み込まれるツール型の指示は、セッション開始時に一度だけ読まれるテキスト型の指示に勝りました。",
+          "links.title": "もっと読む",
+          "links.spec": "完全仕様",
+          "links.failures": "v0.2 以降の検出バックログ",
+          "links.readme": "英語",
+          "footer.license": "MIT ライセンス。",
+          "footer.coffee": "作者にコーヒーを奢る",
+        },
+        zh: {
+          "nav.tools": "工具",
+          "nav.why": "为何",
+          "nav.install": "安装",
+          "hero.eyebrow": "MCP 服务器 · Claude Code 插件 · opencode 插件",
+          "hero.title": "十八种类型化编辑。<br>一个有纪律的接口。",
+          "hero.lede":
+            "<code>meta-edit</code> 用十八个按类型划分的编辑工具,替代了编码代理的通用 <code>Edit</code> 工具。每个工具的描述中都规定了:何时使用、何时不该使用,以及该编辑必须附带的测试。",
+          "hero.cta.install": "安装",
+          "hero.cta.github": "在 GitHub 查看",
+          "hero.cta.spec": "阅读规范",
+          "hero.status": "v0.3.1 预发布 · MIT 许可 · Node 20+",
+          "why.title": "为何采用类型化编辑?",
+          "why.body1":
+            "<code>CLAUDE.md</code> 中的指令会随对话轮次而衰减。Skills 仅在代理决定调用时才生效。两者都依赖模型<em>可能</em>会再次阅读的文本 —— 在动作发生的那一刻,它们都没有结构性约束力。",
+          "why.body2":
+            "工具定义不会衰减。代理即将调用的工具,其 schema 和 description 在每次调用时都会被加载。与其指望代理记得「补上边界测试」,<code>meta-edit</code> 直接将单一的 <code>Edit</code> 原语拆分成 18 个类型化工具。",
+          "why.bet":
+            "我们押注: <strong>真正改变 AI 编辑行为的是工具表面的形状</strong>,而非检测或事后验证。其思想源自 <a href=\"https://sqlite.org/testing.html\" target=\"_blank\" rel=\"noopener\">SQLite 的测试策略</a>,将 C 库的质量实践翻译到应用层的编辑类别。",
+          "tools.title": "十八个工具",
+          "tools.lede":
+            "每个描述都规定了:何时使用、何时不该使用、该编辑必须附带的测试,以及何时停下来询问用户。",
+          "install.title": "安装",
+          "install.a.title": "方式 A — Claude Code 插件市场",
+          "install.a.body":
+            "本仓库本身就是一个单插件市场。添加一次后即可安装 meta-edit:",
+          "install.a.note":
+            "自动注册 meta-edit MCP 服务器(十八个 <code>edit_*</code> 工具)和两个安全 hook。运行 <code>dist/</code> 中预构建的 JavaScript —— 唯一运行时要求是 Node 20+。",
+          "install.b.title": "方式 B — npm 包",
+          "install.b.body": "然后将服务器添加到 Claude Code 的 MCP 配置:",
+          "install.c.title": "方式 C — opencode",
+          "install.c.body":
+            "同一个 npm 包在 <code>./opencode</code> 子路径下提供 opencode 插件。与 Claude Code 路径共享相同的十八个类型化编辑工具描述、审计日志和 grant 流程。",
+          "observed.title": "观察:代理会停下来询问",
+          "observed.body":
+            "<code>meta-edit</code> 第一次自我应用到本仓库时,对话上下文已经使用了约 80%。在被要求向 <code>OBSERVED-FAILURES.md</code> 追加内容时,当时的十七个工具中没有一个能够干净地匹配「仅文档」编辑。代理没有强行套用某个工具,而是停下来询问。那次对话直接催生了第十八个工具 <code>edit_docs_only</code>。",
+          "observed.takeaway":
+            "在每次调用时都被加载的「工具形」指令,胜过仅在会话开始时读取一次的「文本形」指令。",
+          "links.title": "深入阅读",
+          "links.spec": "完整规范",
+          "links.failures": "v0.2 之后的检测待办",
+          "links.readme": "英文",
+          "footer.license": "MIT 许可。",
+          "footer.coffee": "请作者喝杯咖啡",
+        },
+      };
+
+      function applyLang(lang) {
+        const dict = I18N[lang] || I18N.en;
+        document.documentElement.lang =
+          lang === "zh" ? "zh-CN" : lang;
+        document.documentElement.dataset.lang = lang;
+        document.querySelectorAll("[data-i18n]").forEach((el) => {
+          const key = el.getAttribute("data-i18n");
+          if (dict[key]) el.innerHTML = dict[key];
+        });
+        document.querySelectorAll("[data-lang-btn]").forEach((btn) => {
+          const active = btn.getAttribute("data-lang-btn") === lang;
+          btn.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        try {
+          localStorage.setItem("meta-edit.lang", lang);
+        } catch (_) {}
+      }
+
+      function pickInitialLang() {
+        try {
+          const saved = localStorage.getItem("meta-edit.lang");
+          if (saved && I18N[saved]) return saved;
+        } catch (_) {}
+        const nav = (navigator.language || "en").toLowerCase();
+        if (nav.startsWith("ja")) return "ja";
+        if (nav.startsWith("zh")) return "zh";
+        return "en";
+      }
+
+      document.querySelectorAll("[data-lang-btn]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          applyLang(btn.getAttribute("data-lang-btn"));
+        });
+      });
+
+      applyLang(pickInitialLang());
+    </script>
+  </body>
+</html>
