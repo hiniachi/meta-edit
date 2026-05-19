@@ -114,11 +114,24 @@ one declaration). Cap is 32 entries. SQLite-derived tools MUST NOT
 include `additional_files` — per-tool cognitive intervention assumes
 one declaration per change.
 
+**`edit_docs_only` supports consecutive editing across the batch.**
+One `edit_docs_only` declaration binds `target_file` + every
+`additional_files` entry under a single grant. You then issue
+*consecutive* native Edit / Write calls against the bound files **in
+any order — one per bound file — without re-declaring per file**,
+until every bound file is consumed or the 10-minute TTL expires. This
+is the one tool where a single declaration covers many native edits;
+the 17 SQLite-derived tools are strictly one declaration → one native
+edit per file (see "Single-use binding" below).
+
 ## Things to keep in mind
 
 - **Single-use binding**: each typed_edit declaration authorizes ONE
   native Edit / Write per bound file. After consumption, re-declare
-  for further edits to the same file.
+  for further edits to the same file. Exception: `edit_docs_only`
+  binds a whole batch under one declaration and authorizes one native
+  edit per bound file — consecutive edits across the batch, in any
+  order, no per-file re-declaration (see "`additional_files`" above).
 - **TTL is 10 minutes** post-issuance. Garbage-collection only — the
   single-use property is the integrity guarantee.
 - **Out-of-repo writes pass through**: the hook is repo-scoped. Plan

@@ -245,6 +245,14 @@ var DENY_SUBSTRINGS = [
   "cat >>",
   "git apply"
 ];
+var VERB_ARG_SEPARATORS = [" ", "\t"];
+var DENY_VERB_NAMES = ["patch"];
+var WARN_VERB_NAMES = ["mv", "cp", "rsync"];
+function expandVerbPrefixes(verbs) {
+  return verbs.flatMap((v) => VERB_ARG_SEPARATORS.map((s) => v + s));
+}
+var DENY_PREFIX_PATTERNS = expandVerbPrefixes(DENY_VERB_NAMES);
+var WARN_PREFIX_PATTERNS = expandVerbPrefixes(WARN_VERB_NAMES);
 var PROTECTED_PATH_NEEDLES = [
   ".meta-edit/state",
   ".meta-edit/tmp"
@@ -401,6 +409,20 @@ function evaluateSegment(rawSegment, opts = {}) {
       decision: "deny",
       reason: denyReason(verb)
     };
+  }
+  if (verb !== null && WARN_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
+    if (commandOperandResolvesProtected(normalized, opts)) {
+      return {
+        decision: "deny",
+        reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " + "operand; writes to these paths must go through an " + "edit_policy_change tool call."
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason: warnVerbReason(verb)
+      };
+    }
   }
   if (matchesDangerousDd(rawSegment)) {
     return {
@@ -824,6 +846,9 @@ function stripQuotedContent(s) {
 function denyReason(pattern) {
   return `command matches deny pattern "${pattern}".`;
 }
+function warnVerbReason(verb) {
+  return `command verb "${verb}" can write into the repository (rename/move, ` + `copy, or sync). For in-repo content changes prefer an edit_* tool ` + `(e.g. edit_refactor_only / edit_state_transition / edit_docs_only ` + `for content; for new files, native Write with content = "" is ` + `hook-authorized first, then declare the typed edit_* for the ` + `content). This ${verb} is permitted — legitimate non-edit uses ` + `(rename/move, copy templates/fixtures, backup, deploy/sync) ` + `dominate — but is recorded as a bypass-risk and may be tightened ` + `back to deny in a future version. Writes to .meta-edit/state/** ` + `and .meta-edit/tmp/** remain hard-denied regardless of verb. See ` + `OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
+}
 var FIND_VERBS = new Set([
   "find",
   "fdfind",
@@ -848,12 +873,8 @@ var WRAPPER_VERBS = new Set([
   "busybox",
   "toybox"
 ]);
-var DENY_VERBS = new Set([
-  "mv",
-  "cp",
-  "patch",
-  "rsync"
-]);
+var DENY_VERBS = new Set(DENY_VERB_NAMES);
+var WARN_VERBS = new Set(WARN_VERB_NAMES);
 var SAFE_ABSOLUTE_PREFIXES = [
   "/tmp/",
   "/var/tmp/",
@@ -1086,6 +1107,39 @@ function redirectsToProtected(s, opts = {}) {
       }
     }
     i = j;
+  }
+  return false;
+}
+function* operandPathCandidates(token) {
+  if (token.length === 0)
+    return;
+  if (!token.startsWith("-")) {
+    yield token;
+    return;
+  }
+  const eq = token.indexOf("=");
+  if (eq >= 0) {
+    yield token.slice(eq + 1);
+    return;
+  }
+  if (token.length > 2 && /[A-Za-z]/.test(token[1])) {
+    yield token.slice(2);
+  }
+}
+function commandOperandResolvesProtected(normalized, opts) {
+  const cwd = opts.cwd;
+  if (!cwd)
+    return false;
+  for (const token of tokenizeSegment(normalized)) {
+    for (const candidate of operandPathCandidates(token)) {
+      if (candidate.length === 0)
+        continue;
+      const absolute = path3.isAbsolute(candidate) ? candidate : path3.resolve(cwd, candidate);
+      const rel = path3.relative(cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -1709,4 +1763,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=2DE9979B0464A4AE64756E2164756E21
+//# debugId=0CF7EFFC9FC415D664756E2164756E21

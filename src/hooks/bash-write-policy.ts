@@ -79,19 +79,50 @@ export const DENY_SUBSTRINGS: readonly string[] = [
   "git apply",
 ];
 
-// Patterns that are "verb path" forms — denied when they look like they
-// move/copy/patch files (rather than reading or operating on a single
-// argument that is unlikely to be a repo path). Both space and tab
-// argument separators are covered: shells accept either, so a malicious
-// caller could otherwise sneak `mv\tfoo\tbar` past a space-only matcher.
-export const DENY_PREFIX_PATTERNS: readonly string[] = [
-  "mv ",
-  "mv\t",
-  "cp ",
-  "cp\t",
-  "patch ",
-  "patch\t",
-];
+// Single source of truth for verb-based write policy. The decision path
+// (evaluateSegment) consults DENY_VERBS / WARN_VERBS via
+// extractCommandVerb; the *_PREFIX_PATTERNS arrays below are the
+// mechanically derived "verb<sep>" forms kept for documentation /
+// parity / tests (they are NOT consumed in the decision path). Both
+// ASCII space and tab separators are expanded because shells accept
+// either, so a caller could otherwise sneak `mv\tfoo\tbar` past a
+// space-only matcher. Adding a verb to one of the name arrays
+// propagates to the Set AND the prefix array without hand-enumerating
+// every separator variant.
+//
+// `mv`/`cp`/`rsync` were relaxed from deny to WARN in v0.4.3
+// (SPEC §5.2): they dominate legitimate non-edit dev workflows
+// (rename/move, copy templates/fixtures, backup, deploy/sync) and a
+// hard deny was over-hardening friction under Article 3's
+// non-adversarial threat model. Protected-path writes
+// (.meta-edit/state/**, .meta-edit/tmp/**) still deny earlier in
+// evaluateSegment regardless of verb. `patch` stays on deny. See
+// OBSERVED-FAILURES.md for the warn→deny restore trigger.
+const VERB_ARG_SEPARATORS: readonly string[] = [" ", "\t"];
+
+// Verbs whose mere invocation is denied (after env-assignment / wrapper
+// peeling and absolute-path basename reduction in extractCommandVerb).
+// `dd` and `tee` are deliberately NOT here — their write side-effect is
+// target-dependent (`dd of=/tmp/swap`, `tee /dev/null` are legitimate)
+// so they are scoped via matchesDangerousDd / matchesDangerousTee.
+const DENY_VERB_NAMES: readonly string[] = ["patch"];
+
+// Verbs that emit a structured warn (allow-with-nudge) instead of a
+// deny, mirroring the v0.1.5 structural-redirect-warn precedent.
+// Relaxed from DENY_VERB_NAMES in v0.4.3. Unicode-whitespace robustness
+// (issue 1042-rsync) is preserved: extractCommandVerb's tokenizer still
+// extracts the verb regardless of the separator, so the warn fires on
+// the exact surface the deny used to.
+const WARN_VERB_NAMES: readonly string[] = ["mv", "cp", "rsync"];
+
+function expandVerbPrefixes(verbs: readonly string[]): readonly string[] {
+  return verbs.flatMap((v) => VERB_ARG_SEPARATORS.map((s) => v + s));
+}
+
+export const DENY_PREFIX_PATTERNS: readonly string[] =
+  expandVerbPrefixes(DENY_VERB_NAMES);
+export const WARN_PREFIX_PATTERNS: readonly string[] =
+  expandVerbPrefixes(WARN_VERB_NAMES);
 
 // Match the protected directory roots regardless of whether the command
 // uses a trailing slash. `cat > .meta-edit/state` (no slash, treating
@@ -434,9 +465,10 @@ function evaluateSegment(
   // every new write verb (printf, echo, jq with --rawfile, ...).
   //
   // Loosened from `deny` to `warn` in v0.1.5 (SPEC §5.2): the verb-
-  // denylist (DENY_SUBSTRINGS / DENY_VERBS / DENY_PREFIX_PATTERNS) keeps
-  // the well-known bypasses (`cat >`, `sed -i`, `tee`, `mv`, `dd of=`,
-  // ...) on `deny`, and protected-path writes (.meta-edit/state/**,
+  // denylist (DENY_SUBSTRINGS / DENY_VERBS) keeps the well-known
+  // bypasses (`cat >`, `sed -i`, `tee`, `dd of=`, `patch`, ...) on
+  // `deny`; `mv`/`cp`/`rsync` were further relaxed to `warn` in v0.4.3
+  // (WARN_VERBS, SPEC §5.2). Protected-path writes (.meta-edit/state/**,
   // .meta-edit/tmp/**) are still denied earlier in this function via
   // touchesProtectedPathTokenized + redirectsToProtected. The remaining
   // case — an unenumerated write verb (`printf`, `echo`, `jq --rawfile`,
@@ -500,14 +532,58 @@ function evaluateSegment(
   // leading env assignments (`FOO=bar mv a b` -> `mv`), peeling wrapper
   // verbs (`sudo mv a b`, `env mv a b`, `xargs mv -t /tmp`,
   // `nice mv a b`, ...) and taking the basename of any absolute-path
-  // invocation (`/usr/bin/mv` -> `mv`). The deny set is the basename
-  // form of every prefix in DENY_PREFIX_PATTERNS.
+  // invocation (`/usr/bin/mv` -> `mv`). The deny set is `DENY_VERBS`
+  // (`patch`); `mv`/`cp`/`rsync` warn via `WARN_VERBS` (v0.4.3,
+  // SPEC §5.2). Both derive from the single verb-name source at the
+  // top of this file.
   const verb = extractCommandVerb(normalized.trimStart());
   if (verb !== null && DENY_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
     return {
       decision: "deny",
       reason: denyReason(verb),
     };
+  }
+  // mv/cp/rsync verb-warn (relaxed from deny in v0.4.3, SPEC §5.2).
+  // These three dominate legitimate non-edit dev workflows
+  // (rename/move, copy templates/fixtures, backup, deploy/sync); a hard
+  // deny was over-hardening friction under Article 3's non-adversarial
+  // threat model. The protected-path deny (touchesProtectedPathTokenized
+  // + redirectsToProtected) ran earlier in this function, so
+  // `mv payload .meta-edit/state/x` is already denied above and never
+  // reaches here — the load-bearing audit-log invariant is preserved.
+  // hasSafetyFlag is still honored so this only warns where the code
+  // would previously have denied. Held on firstWarn (not an early
+  // return) so a later deny on a chained segment / shell-hosted payload
+  // still wins; surfaced at the end of evaluateSegment if nothing
+  // denies. Mirrors the v0.1.5 structural-redirect-warn precedent.
+  if (
+    verb !== null &&
+    WARN_VERBS.has(verb) &&
+    !hasSafetyFlag(normalized, verb)
+  ) {
+    // Protected-path invariant must hold regardless of verb (SPEC
+    // §5.2). touchesProtectedPathTokenized already denied literal
+    // `.meta-edit/...` operands; redirectsToProtected covered `>`
+    // targets. The remaining gap for the now-warned verbs is a
+    // symlink-aliased operand — close it here so the warn never
+    // reaches a protected destination (Codex PR#76 P1). Deny wins
+    // even if an earlier check already captured a warn.
+    if (commandOperandResolvesProtected(normalized, opts)) {
+      return {
+        decision: "deny",
+        reason:
+          "command would write to a protected meta-edit path " +
+          "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " +
+          "operand; writes to these paths must go through an " +
+          "edit_policy_change tool call.",
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason: warnVerbReason(verb),
+      };
+    }
   }
   // Scoped deny: `dd of=<in-repo-path>` writes to source. Allow
   // `dd of=/dev/null`, `dd of=/tmp/swap`, and dd invocations with no
@@ -1117,6 +1193,27 @@ function denyReason(pattern: string): string {
   return `command matches deny pattern "${pattern}".`;
 }
 
+// Allow-with-nudge reason for the v0.4.3 mv/cp/rsync verb relaxation.
+// Mirrors the structural-redirect-warn wording: nudge toward an edit_*
+// tool, state it is permitted but recorded as a bypass-risk that may be
+// tightened back to deny, and point at the OBSERVED-FAILURES.md restore
+// trigger.
+function warnVerbReason(verb: string): string {
+  return (
+    `command verb "${verb}" can write into the repository (rename/move, ` +
+    `copy, or sync). For in-repo content changes prefer an edit_* tool ` +
+    `(e.g. edit_refactor_only / edit_state_transition / edit_docs_only ` +
+    `for content; for new files, native Write with content = "" is ` +
+    `hook-authorized first, then declare the typed edit_* for the ` +
+    `content). This ${verb} is permitted — legitimate non-edit uses ` +
+    `(rename/move, copy templates/fixtures, backup, deploy/sync) ` +
+    `dominate — but is recorded as a bypass-risk and may be tightened ` +
+    `back to deny in a future version. Writes to .meta-edit/state/** ` +
+    `and .meta-edit/tmp/** remain hard-denied regardless of verb. See ` +
+    `OBSERVED-FAILURES.md for the warn→deny restore trigger.`
+  );
+}
+
 // Verbs whose `-exec ... \;` / `-execdir ... \;` argument should be
 // treated as an embedded sub-command. Limiting to find / fdfind avoids
 // false-positives where `-exec` is just a literal argument to a
@@ -1153,20 +1250,14 @@ const WRAPPER_VERBS: ReadonlySet<string> = new Set([
   "toybox",
 ]);
 
-// Verbs whose mere invocation is denied. `dd` and `tee` are NOT in
-// this set: their write side-effect is target-dependent (e.g.
-// `dd of=/tmp/swap`, `tee /dev/null` are legitimate), so they are
-// scoped via matchesDangerousDd / matchesDangerousTee. Codex round-2
-// review on PR #27 caught both false-positives.
-const DENY_VERBS: ReadonlySet<string> = new Set([
-  "mv",
-  "cp",
-  "patch",
-  // Issue 1042-rsync: `rsync` migrated from DENY_SUBSTRINGS so Unicode
-  // whitespace separators (U+00A0, U+2009, U+3000, U+000B, …) between
-  // the verb and its arguments cannot bypass the deny.
-  "rsync",
-]);
+// Derived from the single source of truth at the top of this file
+// (DENY_VERB_NAMES / WARN_VERB_NAMES). See that block for the dd/tee
+// exclusion rationale and the v0.4.3 mv/cp/rsync deny→warn relaxation
+// (issue 1042-rsync's Unicode-whitespace robustness is preserved: the
+// verb is extracted by extractCommandVerb's tokenizer regardless of
+// the separator, so rsync now warns on the exact surface it denied).
+const DENY_VERBS: ReadonlySet<string> = new Set(DENY_VERB_NAMES);
+const WARN_VERBS: ReadonlySet<string> = new Set(WARN_VERB_NAMES);
 
 // Path-classification helper used by dd / tee scoped denies. Conservative:
 // relative paths default to "in-repo" (deny). Absolute paths default to
@@ -1579,6 +1670,68 @@ function redirectsToProtected(
       }
     }
     i = j;
+  }
+  return false;
+}
+
+// v0.4.3 / Codex PR#76 P1 (+ follow-up): mv/cp/rsync were relaxed from
+// blanket deny to warn (SPEC §5.2). Their *operands* can still reach a
+// protected directory through a symlink alias (`link -> .meta-edit`;
+// `mv payload link/state/x`). The lexical touchesProtectedPathTokenized
+// catches only literal `.meta-edit/...` operands, and the symlink-aware
+// redirectsToProtected only inspects `>`/`>>`/`>|` redirect targets —
+// not verb operands. Before the relaxation the blanket verb deny masked
+// this gap; re-close it so the documented "protected-path stays deny
+// regardless of verb" invariant holds. cwd-gated exactly like the
+// redirectsToProtected symlink branch: realpath-resolve every operand
+// (including the path carried *inside* an option token —
+// `--target-directory=alias/tmp`, `-talias/state`; same option-glue
+// surface issue 1106 already handles for the lexical check) through the
+// symlink-aware isProtectedPath and report protected if any lands in
+// .meta-edit/state|tmp. Over-including non-path candidates is safe —
+// they do not realpath into a protected directory.
+function* operandPathCandidates(token: string): Generator<string> {
+  if (token.length === 0) return;
+  if (!token.startsWith("-")) {
+    // Plain operand (`alias/state`, `payload`) or env-assignment
+    // (`FOO=bar`). Yield the whole token; env-assignment values are NOT
+    // split out — `FOO=alias/state mv x` does not write into the value.
+    yield token;
+    return;
+  }
+  // Option token. The path may be glued to the flag:
+  //   long  : `--target-directory=alias/tmp` / `--output=alias/state/x`
+  //   short : `-talias/state` / `-O.meta-edit/state/x`
+  const eq = token.indexOf("=");
+  if (eq >= 0) {
+    yield token.slice(eq + 1);
+    return;
+  }
+  // Short-option glue: dash + a single option letter + value. Grouped
+  // pure flags (`-rf`) yield a non-path remainder that simply will not
+  // realpath into a protected dir, so this stays best-effort-safe.
+  if (token.length > 2 && /[A-Za-z]/.test(token[1]!)) {
+    yield token.slice(2);
+  }
+}
+
+function commandOperandResolvesProtected(
+  normalized: string,
+  opts: EvaluateBashOptions,
+): boolean {
+  const cwd = opts.cwd;
+  if (!cwd) return false;
+  for (const token of tokenizeSegment(normalized)) {
+    for (const candidate of operandPathCandidates(token)) {
+      if (candidate.length === 0) continue;
+      const absolute = path.isAbsolute(candidate)
+        ? candidate
+        : path.resolve(cwd, candidate);
+      const rel = path.relative(cwd, absolute);
+      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+        return true;
+      }
+    }
   }
   return false;
 }

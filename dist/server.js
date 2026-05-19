@@ -18079,7 +18079,8 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
   const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
   const nFiles = bindings.length;
   const fileNoun = nFiles === 1 ? "file" : "files";
-  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.`;
+  const batchNote = toolName === "edit_docs_only" ? ` Because this is edit_docs_only (the batch-friendly workflow ` + `tool), this one declaration covers the whole batch: issue ` + `consecutive native Edit / Write calls against the bound ` + `${fileNoun} in any order — one per bound file, no per-file ` + `re-declaration — until every bound file is consumed or the ` + `TTL expires.` : "";
+  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,
@@ -18508,7 +18509,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.4.2",
+  version: "0.4.3",
   description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18624,4 +18625,4 @@ export {
   createServer
 };
 
-//# debugId=FD07E86D29A00E4264756E2164756E21
+//# debugId=316BAA4092D800D964756E2164756E21
