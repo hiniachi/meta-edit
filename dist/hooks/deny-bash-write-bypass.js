@@ -410,11 +410,19 @@ function evaluateSegment(rawSegment, opts = {}) {
       reason: denyReason(verb)
     };
   }
-  if (verb !== null && WARN_VERBS.has(verb) && !hasSafetyFlag(normalized, verb) && firstWarn === null) {
-    firstWarn = {
-      decision: "warn",
-      reason: warnVerbReason(verb)
-    };
+  if (verb !== null && WARN_VERBS.has(verb) && !hasSafetyFlag(normalized, verb)) {
+    if (commandOperandResolvesProtected(normalized, opts)) {
+      return {
+        decision: "deny",
+        reason: "command would write to a protected meta-edit path " + "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " + "operand; writes to these paths must go through an " + "edit_policy_change tool call."
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason: warnVerbReason(verb)
+      };
+    }
   }
   if (matchesDangerousDd(rawSegment)) {
     return {
@@ -1102,6 +1110,21 @@ function redirectsToProtected(s, opts = {}) {
   }
   return false;
 }
+function commandOperandResolvesProtected(normalized, opts) {
+  const cwd = opts.cwd;
+  if (!cwd)
+    return false;
+  for (const token of tokenizeSegment(normalized)) {
+    if (token.length === 0 || token.startsWith("-"))
+      continue;
+    const absolute = path3.isAbsolute(token) ? token : path3.resolve(cwd, token);
+    const rel = path3.relative(cwd, absolute);
+    if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+      return true;
+    }
+  }
+  return false;
+}
 function* iterRedirectTargets(s, opts = {}) {
   const skipSub = opts.skipSubstitutionInternal === true;
   let i = 0;
@@ -1722,4 +1745,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=9504123BB8C4AC3D64756E2164756E21
+//# debugId=D6E80E6495DCAFC064756E2164756E21

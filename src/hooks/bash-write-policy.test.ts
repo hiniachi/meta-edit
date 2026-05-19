@@ -2503,3 +2503,79 @@ describe("evaluateBashCommand — v0.4.3 mv/cp/rsync verb-warn (relaxed from den
   });
 });
 
+// Codex PR#76 P1: mv/cp/rsync relaxed to warn must still hard-deny a
+// protected destination reached through a symlink alias (the lexical
+// touchesProtectedPathTokenized and the `>`-only redirectsToProtected
+// did not cover verb operands; the blanket verb deny used to mask it).
+describe("evaluateBashCommand — v0.4.3 symlink-aliased protected operand (Codex PR#76 P1)", () => {
+  it("denies mv whose destination is a symlink resolving into .meta-edit/state/", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "state"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "link"));
+      const r = evaluateBashCommand("mv payload link/state/x", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected meta-edit path");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies cp into a symlinked .meta-edit/tmp alias", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "tmp"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "alias"));
+      const r = evaluateBashCommand("cp secret alias/tmp/exfil", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("deny");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies rsync into a symlinked protected alias", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const metaEditDir = path.join(tmpDir, ".meta-edit");
+      fs.mkdirSync(path.join(metaEditDir, "state"), { recursive: true });
+      fs.symlinkSync(metaEditDir, path.join(tmpDir, "ln"));
+      const r = evaluateBashCommand("rsync -a src/ ln/state/", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("deny");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still WARNS (no false positive) on a legitimate mv when cwd is supplied and no protected alias is involved", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-pr76-"));
+    try {
+      const r = evaluateBashCommand("mv src/a.ts src/b.ts", {
+        cwd: tmpDir,
+      });
+      expect(r.decision).toBe("warn");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+

@@ -559,13 +559,31 @@ function evaluateSegment(
   if (
     verb !== null &&
     WARN_VERBS.has(verb) &&
-    !hasSafetyFlag(normalized, verb) &&
-    firstWarn === null
+    !hasSafetyFlag(normalized, verb)
   ) {
-    firstWarn = {
-      decision: "warn",
-      reason: warnVerbReason(verb),
-    };
+    // Protected-path invariant must hold regardless of verb (SPEC
+    // §5.2). touchesProtectedPathTokenized already denied literal
+    // `.meta-edit/...` operands; redirectsToProtected covered `>`
+    // targets. The remaining gap for the now-warned verbs is a
+    // symlink-aliased operand — close it here so the warn never
+    // reaches a protected destination (Codex PR#76 P1). Deny wins
+    // even if an earlier check already captured a warn.
+    if (commandOperandResolvesProtected(normalized, opts)) {
+      return {
+        decision: "deny",
+        reason:
+          "command would write to a protected meta-edit path " +
+          "(.meta-edit/state/** or .meta-edit/tmp/**) via a symlinked " +
+          "operand; writes to these paths must go through an " +
+          "edit_policy_change tool call.",
+      };
+    }
+    if (firstWarn === null) {
+      firstWarn = {
+        decision: "warn",
+        reason: warnVerbReason(verb),
+      };
+    }
   }
   // Scoped deny: `dd of=<in-repo-path>` writes to source. Allow
   // `dd of=/dev/null`, `dd of=/tmp/swap`, and dd invocations with no
@@ -1652,6 +1670,39 @@ function redirectsToProtected(
       }
     }
     i = j;
+  }
+  return false;
+}
+
+// v0.4.3 / Codex PR#76 P1: mv/cp/rsync were relaxed from blanket deny
+// to warn (SPEC §5.2). Their *operands* can still reach a protected
+// directory through a symlink alias (`link -> .meta-edit`;
+// `mv payload link/state/x`). The lexical touchesProtectedPathTokenized
+// catches only literal `.meta-edit/...` operands, and the symlink-aware
+// redirectsToProtected only inspects `>`/`>>`/`>|` redirect targets —
+// not verb operands. Before the relaxation the blanket verb deny masked
+// this gap; re-close it so the documented "protected-path stays deny
+// regardless of verb" invariant holds. cwd-gated exactly like the
+// redirectsToProtected symlink branch: realpath-resolve every operand
+// token through the symlink-aware isProtectedPath and report protected
+// if any lands in .meta-edit/state|tmp. Over-including non-path tokens
+// (the verb, flag values) is safe — they do not realpath into a
+// protected directory.
+function commandOperandResolvesProtected(
+  normalized: string,
+  opts: EvaluateBashOptions,
+): boolean {
+  const cwd = opts.cwd;
+  if (!cwd) return false;
+  for (const token of tokenizeSegment(normalized)) {
+    if (token.length === 0 || token.startsWith("-")) continue;
+    const absolute = path.isAbsolute(token)
+      ? token
+      : path.resolve(cwd, token);
+    const rel = path.relative(cwd, absolute);
+    if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+      return true;
+    }
   }
   return false;
 }
