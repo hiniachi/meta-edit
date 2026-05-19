@@ -163,11 +163,27 @@ async function issueOnce(
   // message tells the agent it can just call the native tool normally.
   const nFiles = bindings.length;
   const fileNoun = nFiles === 1 ? "file" : "files";
+  // edit_docs_only is the one batch-friendly workflow tool: a single
+  // declaration binds the whole batch and authorizes consecutive native
+  // edits (one per bound file, any order, no per-file re-declaration)
+  // until the batch is exhausted or the TTL expires (SPEC Article 6).
+  // Surface that at declaration time so the agent does not re-declare
+  // per file.
+  const batchNote =
+    toolName === "edit_docs_only"
+      ? ` Because this is edit_docs_only (the batch-friendly workflow ` +
+        `tool), this one declaration covers the whole batch: issue ` +
+        `consecutive native Edit / Write calls against the bound ` +
+        `${fileNoun} in any order — one per bound file, no per-file ` +
+        `re-declaration — until every bound file is consumed or the ` +
+        `TTL expires.`
+      : "";
   const nextAction =
     `On your next native Edit / Write / MultiEdit call against ${fileList}, ` +
     `the deny-raw-edit hook will resolve this declaration automatically (no ` +
     `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` +
-    `and expires at ${grant.expires_at}.`;
+    `and expires at ${grant.expires_at}.` +
+    batchNote;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,

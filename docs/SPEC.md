@@ -1343,13 +1343,13 @@ Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through 
 
 Fires on Claude Code's `Bash` tool. Denies write patterns that would route bytes into the repository without going through native Edit/Write:
 
-- **Verb denylist**: `cat >`, `sed -i`, `tee`, `dd of=`, `mv`, `cp`, `patch`, `rsync`, `git apply`, ...
+- **Verb denylist**: `cat >`, `sed -i`, `tee`, `dd of=`, `patch`, `git apply`, ...
 - **Heredoc-with-redirect**: `cat <<EOF > target`
 - **Inline interpreter writes**: `python -c '...write'`, `node -e '...write'`, `perl -e ...`, `ruby -e ...`, `php -r ...`
 - **Decode-and-execute pipelines**: `base64 -d | bash`, `eval "$(...)"`
 - **Protected-path writes**: `printf > .meta-edit/state/...` (always denied regardless of redirect target)
 
-The structural redirect-target check (a redirect to a path outside the safe-sink allowlist) is **warned, not denied** since v0.1.5. The call proceeds with a `permissionDecisionReason` nudging the agent toward an `edit_*` tool. The verb-denylist and protected-path checks remain `deny`.
+The structural redirect-target check (a redirect to a path outside the safe-sink allowlist) is **warned, not denied** since v0.1.5; the verbs `mv`, `cp`, and `rsync` are likewise **warned, not denied** since v0.4.3. In each case the call proceeds with a `permissionDecisionReason` (and model-facing `additionalContext`) nudging the agent toward an `edit_*` tool. `mv`/`cp`/`rsync` were relaxed because they dominate legitimate non-edit dev workflows (rename/move, copy templates/fixtures, backup, deploy/sync) and a hard deny was over-hardening friction under Article 3's non-adversarial threat model; `patch` stays on `deny`. The rest of the verb denylist and **all protected-path checks (`.meta-edit/state/**`, `.meta-edit/tmp/**`) remain `deny` regardless of verb** — `mv payload .meta-edit/state/x` is still denied. See `OBSERVED-FAILURES.md` for the warn→deny restore trigger.
 
 Substring-matching is the bypass-resistance limit. Determined commands (alternative interpreters, encoded payloads, exotic constructs) can evade. Per Article 3's non-adversarial assumption, the goal is to make the typed surface easier than honest workaround paths, not to provide a sandbox.
 

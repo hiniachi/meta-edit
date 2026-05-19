@@ -142,6 +142,94 @@ below should be skipped — keep the `warn` member and the
 7. `OBSERVED-FAILURES.md`: move this entry to "Resolved
    (promoted to MVP)" with the trigger that fired.
 
+## Phase 4 (deny-bash-write-bypass) — v0.4.3 mv/cp/rsync verb-deny → warn restore candidate
+
+v0.4.3 loosened the verbs `mv`, `cp`, and `rsync` from the verb-deny
+path to the v0.1.5 `warn` mechanism (SPEC §5.2). Pre-v0.4.3 these
+three verbs were in `DENY_VERBS` and any non-safety-flagged
+invocation was denied outright. Post-v0.4.3 the same invocation
+emits `permissionDecision: "allow"` plus a `permissionDecisionReason`
+and model-facing `additionalContext` nudging the AI toward an
+`edit_*` tool, mirrored on stderr for human-in-the-loop visibility.
+`patch` stays on `deny`. The rest of the verb denylist (`cat >`,
+`sed -i`, `tee`, `dd of=`, heredoc-with-redirect, inline-interpreter
+writes, decode-and-execute) stays on `deny`. The protected-path
+checks (`.meta-edit/state/**`, `.meta-edit/tmp/**`) stay on `deny`
+**regardless of verb** — they fire earlier in `evaluateSegment`
+(`touchesProtectedPathTokenized` + `redirectsToProtected`), strictly
+before the verb block, so `mv payload .meta-edit/state/x` is still
+denied. `deny` always wins over `warn` within a segment and across
+segments.
+
+The reason for the loosening: under Article 3's non-adversarial
+threat model the goal is to make the typed surface easier than
+honest workaround paths, not to sandbox a determined attacker. The
+v0.1.5 bet — that a structured warn preserves the signal channel
+without the friction of a hard deny — held. `mv`, `cp`, and `rsync`
+dominate legitimate non-edit developer workflows (rename/move, copy
+templates/fixtures, backup, deploy/sync); hard-denying all three was
+over-hardening friction that taxed honest work without a
+corresponding bypass-resistance gain (a determined bypass has many
+other routes already on `deny`; an honest rename does not). The warn
+keeps the nudge-toward-typed-tools signal channel intact, and the
+protected-path deny — the actual audit-log integrity boundary — is
+untouched.
+
+### Restore trigger (warn → deny)
+
+Restore the deny for `mv`/`cp`/`rsync` when *any* of the following
+hold:
+
+1. **Edit log signal**: analysis of edit logs across multiple
+   sessions shows that >5% of `mv`/`cp`/`rsync` warnings turn into
+   actual in-repo content writes that the AI then does not follow
+   up with a typed `edit_*` tool call (i.e. the verbs are being used
+   to route content around the typed surface, not for legitimate
+   rename/copy/sync).
+2. **Review signal**: code reviews on PRs produced by AI sessions
+   repeatedly find `bash-write-bypass` `mv`/`cp`/`rsync` warnings in
+   the transcript that the AI ignored (the warn surface treated as a
+   green light rather than a yellow one).
+3. **Protocol signal (objective)**: Claude Code release notes (or
+   updated hook docs) explicitly state that
+   `hookSpecificOutput.additionalContext` is no longer fed to the
+   model for `allow` decisions. The model-facing layer of the warn
+   carrier is `additionalContext`; if the host stops surfacing it,
+   the AI no longer receives the nudge and the warn route is
+   structurally weaker than the v0.4.2 deny. Treat the release-note
+   change as the trigger; do NOT wait for downstream behavioral
+   evidence. (Same protocol dependency as the v0.1.5 entry — a
+   single `additionalContext` regression triggers both restores.)
+
+### Restore procedure
+
+1. `src/hooks/bash-write-policy.ts`:
+   - Move `"mv"`, `"cp"`, `"rsync"` from `WARN_VERB_NAMES` back into
+     `DENY_VERB_NAMES`; delete `WARN_VERB_NAMES` / `WARN_VERBS` /
+     `WARN_PREFIX_PATTERNS` if they have no other members.
+   - In `evaluateSegment`, delete the `WARN_VERBS` warn-capture
+     block; the existing `DENY_VERBS.has(verb)` deny block then
+     covers all four verbs again.
+   - Delete `warnVerbReason`; the existing `denyReason(verb)` covers
+     them. Revert the documentation comments at the verb-name
+     source block / line-437 / line-504 sites.
+   - Keep the `firstWarn` plumbing and `replyAllowWithWarning` — the
+     v0.1.5 structural-redirect warn surface still uses them.
+2. `src/hooks/bash-write-policy.test.ts`: re-flip every test the
+   v0.4.3 change set to expect `warn` back to `deny`, restore the
+   `constants` prefix assertions, and delete the
+   `v0.4.3 mv/cp/rsync verb-warn (relaxed from deny)` describe
+   block (its protected-path / patch / deny-wins invariant guards
+   are also covered by the existing protected-path and chained-
+   segment blocks, so no invariant coverage is lost).
+3. `docs/SPEC.md` §5.2: restore `mv`, `cp`, `rsync` to the verb-
+   denylist bullet and revert the v0.4.3 sentence in the
+   redirect-target-warn paragraph.
+4. `package.json` + `.claude-plugin/plugin.json`: bump version so
+   the restore is visibly a release event.
+5. `OBSERVED-FAILURES.md`: move this entry to "Resolved
+   (promoted to MVP)" with the trigger that fired.
+
 ## Phase 8 (apply) residual gaps
 
 ### MEDIUM: Phase-1 read vs Phase-3 rename TOCTOU on the content-pair flow

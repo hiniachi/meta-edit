@@ -1122,3 +1122,49 @@ mis-marshals non-empty string arrays.
   `tsc --noEmit` clean; `bun run build` green; full suite green.
 - Spec deviations: none (descriptions.ts untouched — verbatim rule
   preserved; no §4 tool-description text changed).
+
+## v0.4.3: mv/cp/rsync deny→warn + mechanical verb-list derivation + edit_docs_only batch hint
+
+- Completed: 2026-05-19
+- What works:
+  - **Loosen (edit_policy_change)**: `mv`/`cp`/`rsync` moved from
+    hard `deny` to the v0.1.5 structured `warn` (allow-with-nudge) in
+    `deny-bash-write-bypass`. `patch` stays `deny`; `cat >`/`sed -i`/
+    `tee`/`dd of=`/heredoc/inline-interpreter stay `deny`;
+    protected-path writes (`.meta-edit/state/**`, `.meta-edit/tmp/**`)
+    stay hard-`deny` regardless of verb (fires earlier in
+    `evaluateSegment`, structurally before the verb block — verified
+    by new invariant guards). Rationale (loosening justification, not
+    "convenience"): Article 3 non-adversarial threat model + the
+    v0.1.5 warn bet held + these three verbs dominate legitimate
+    non-edit workflows; restore trigger recorded in
+    OBSERVED-FAILURES.md.
+  - **Mechanical derivation (task 2)**: single verb-name source of
+    truth (`DENY_VERB_NAMES` / `WARN_VERB_NAMES` × `VERB_ARG_SEPARATORS`
+    via `expandVerbPrefixes`). `DENY_VERBS`/`WARN_VERBS` and
+    `DENY_PREFIX_PATTERNS`/`WARN_PREFIX_PATTERNS` are now derived, no
+    hand-enumerated space/tab variants.
+  - **edit_docs_only batch hint (task 3)**: SKILL.md + `apply.ts`
+    declaration-time `next_action` now state that one
+    `edit_docs_only` declaration covers the whole batch (consecutive
+    native edits, any order, no per-file re-declaration, until
+    exhausted/TTL).
+  - SPEC §5.2 synced; version 0.4.2 → 0.4.3 (package.json +
+    plugin.json; version.ts inlines from package.json). dist rebuilt.
+- Environment note: cloud session had no meta-edit MCP/hook
+  registration, so the self-application typed surface was
+  unavailable. Per explicit user direction this change was applied
+  via direct Edit/Write as a recorded CLAUDE.md §9 environment
+  override (typed-tool routing documented in the commit instead:
+  hook/SPEC/manifest = edit_policy_change, tests =
+  edit_test_only_change, OBSERVED-FAILURES.md = edit_docs_only).
+- Tests added: full suite 764 → 778 (+14: new
+  `v0.4.3 mv/cp/rsync verb-warn` invariant-guard describe; deny→warn
+  flips across the hook suite; constants test re-pointed to the
+  derived prefixes). `tsc --noEmit` clean; `bun run build` green;
+  full suite green; built-hook smoke test confirms
+  mv/cp/rsync→allow+additionalContext, patch→deny,
+  mv→.meta-edit/state→deny.
+- Spec deviations: none (descriptions.ts untouched — verbatim §4 rule
+  preserved; batch-capability text added only to SKILL.md and the
+  server next_action, not to any §4 tool description).

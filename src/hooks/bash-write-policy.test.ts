@@ -4,6 +4,7 @@ import {
   ALLOWLIST_PATTERNS,
   DENY_SUBSTRINGS,
   DENY_PREFIX_PATTERNS,
+  WARN_PREFIX_PATTERNS,
 } from "./bash-write-policy.js";
 
 describe("evaluateBashCommand — deny patterns", () => {
@@ -17,15 +18,28 @@ describe("evaluateBashCommand — deny patterns", () => {
     ["echo hi | tee src/foo.ts", "tee "],
     ["echo hi | tee -a src/log.txt", "tee -a"],
     ["git apply patch.diff", "git apply"],
-    ["rsync -a src/ dst/", "rsync"],
-    ["mv src/old.ts src/new.ts", "mv"],
-    ["cp src/foo.ts src/bar.ts", "cp"],
     ["patch -p1 < changes.diff", "patch"],
   ];
   for (const [command, label] of denyCases) {
     it(`denies "${label}"`, () => {
       const r = evaluateBashCommand(command);
       expect(r.decision).toBe("deny");
+      expect(r.reason).toBeDefined();
+    });
+  }
+
+  // v0.4.3: mv/cp/rsync relaxed from deny to warn (SPEC §5.2). They
+  // are no longer denied standalone; the verb-warn fires instead.
+  // patch stays on deny (above).
+  const warnCases: Array<[string, string]> = [
+    ["rsync -a src/ dst/", "rsync"],
+    ["mv src/old.ts src/new.ts", "mv"],
+    ["cp src/foo.ts src/bar.ts", "cp"],
+  ];
+  for (const [command, label] of warnCases) {
+    it(`warns on "${label}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("warn");
       expect(r.reason).toBeDefined();
     });
   }
@@ -214,29 +228,29 @@ describe("evaluateBashCommand — chained-segment bypass", () => {
 });
 
 describe("evaluateBashCommand — prefix-only deny verbs", () => {
-  it("denies mv with tab argument separator", () => {
+  it("warns on mv with tab argument separator", () => {
     const r = evaluateBashCommand("mv\tsrc/old.ts\tsrc/new.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("denies cp with tab argument separator", () => {
+  it("warns on cp with tab argument separator", () => {
     const r = evaluateBashCommand("cp\tsrc/a.ts\tsrc/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("cp");
   });
 
-  it("denies mv following a backgrounded allowlist segment via bare &", () => {
+  it("warns on mv following a backgrounded allowlist segment via bare &", () => {
     // Without splitting on bare `&`, the whole string is one segment and
     // mv at position N is never seen as a segment-start prefix.
     const r = evaluateBashCommand("cargo fmt & mv src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("denies cp following bare &", () => {
+  it("warns on cp following bare &", () => {
     const r = evaluateBashCommand("eslint --fix src/ & cp src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("cp");
   });
 
@@ -264,21 +278,21 @@ describe("evaluateBashCommand — prefix-only deny verbs", () => {
     expect(r.decision).toBe("allow");
   });
 
-  it("strips leading env assignments before prefix matching (FOO=bar mv ...)", () => {
+  it("strips leading env assignments before prefix matching (FOO=bar mv ... → warn)", () => {
     const r = evaluateBashCommand("FOO=bar mv src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("strips multiple env assignments before prefix matching", () => {
+  it("strips multiple env assignments before prefix matching (→ warn)", () => {
     const r = evaluateBashCommand("FOO=bar BAZ=qux cp src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("cp");
   });
 
-  it("strips quoted env assignment values", () => {
+  it("strips quoted env assignment values (→ warn)", () => {
     const r = evaluateBashCommand('LANG="en US.UTF-8" mv src/a.ts src/b.ts');
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
@@ -361,7 +375,11 @@ describe("evaluateBashCommand — protected paths without trailing slash", () =>
 });
 
 describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () => {
-  const wrapperCases: Array<[string, string, string]> = [
+  // v0.4.3: mv/cp resolve through the wrapper/abs-path machinery the
+  // same way; the verb is still extracted, but the decision is now
+  // `warn` (not `deny`). patch stays `deny`. These tables prove the
+  // wrapper-peeling still reaches the verb on the relaxed path.
+  const wrapperWarnCases: Array<[string, string, string]> = [
     ["sudo mv a b", "mv", "sudo"],
     ["doas mv a b", "mv", "doas"],
     ["env mv a b", "mv", "env"],
@@ -373,9 +391,19 @@ describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () =>
     ["env FOO=bar mv a b", "mv", "env+assignment"],
     ["sudo env FOO=bar mv a b", "mv", "sudo+env+assignment"],
     ["sudo cp a b", "cp", "sudo"],
+  ];
+  for (const [command, verb, label] of wrapperWarnCases) {
+    it(`warns on ${verb} via ${label}: "${command}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("warn");
+      expect(r.reason).toContain(verb);
+    });
+  }
+
+  const wrapperDenyCases: Array<[string, string, string]> = [
     ["xargs patch -p1", "patch", "xargs"],
   ];
-  for (const [command, verb, label] of wrapperCases) {
+  for (const [command, verb, label] of wrapperDenyCases) {
     it(`denies ${verb} via ${label}: "${command}"`, () => {
       const r = evaluateBashCommand(command);
       expect(r.decision).toBe("deny");
@@ -383,62 +411,67 @@ describe("evaluateBashCommand — wrapper verbs and absolute-path bypass", () =>
     });
   }
 
-  const absolutePathCases: Array<[string, string]> = [
+  const absolutePathWarnCases: Array<[string, string]> = [
     ["/usr/bin/mv a b", "mv"],
     ["/bin/cp a b", "cp"],
-    ["/usr/local/bin/patch -p1 < x.diff", "patch"],
     ["sudo /usr/bin/mv a b", "mv"],
   ];
-  for (const [command, verb] of absolutePathCases) {
-    it(`denies basename match for "${command}"`, () => {
+  for (const [command, verb] of absolutePathWarnCases) {
+    it(`warns on basename match for "${command}"`, () => {
       const r = evaluateBashCommand(command);
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
       expect(r.reason).toContain(verb);
     });
   }
+
+  it('denies basename match for "/usr/local/bin/patch -p1 < x.diff"', () => {
+    const r = evaluateBashCommand("/usr/local/bin/patch -p1 < x.diff");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("patch");
+  });
 
   it("does not deny a wrapped allowlist-style verb", () => {
     expect(evaluateBashCommand("sudo cargo fmt").decision).toBe("allow");
     expect(evaluateBashCommand("env prettier --write src/").decision).toBe("allow");
   });
 
-  it("skips wrapper short-options before the verb (sudo -E mv ...)", () => {
+  it("skips wrapper short-options before the verb (sudo -E mv ... → warn)", () => {
     const r = evaluateBashCommand("sudo -E mv src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("skips wrapper short-options grouped (env -i mv ...)", () => {
+  it("skips wrapper short-options grouped (env -i mv ... → warn)", () => {
     const r = evaluateBashCommand("env -i mv src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("skips wrapper long-options (env --ignore-environment mv ...)", () => {
+  it("skips wrapper long-options (env --ignore-environment mv ... → warn)", () => {
     const r = evaluateBashCommand("env --ignore-environment mv src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("skips wrapper long-option=value (env --chdir=/tmp mv ...)", () => {
+  it("skips wrapper long-option=value (env --chdir=/tmp mv ... → warn)", () => {
     const r = evaluateBashCommand("env --chdir=/tmp mv src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("skips multiple flag-only wrapper options before verb", () => {
+  it("skips multiple flag-only wrapper options before verb (→ warn)", () => {
     // Flag-only wrapper options (no value arg) are reliably stripped.
     // Wrappers with required value args (`sudo -u USER`, `env -u VAR`)
     // would need per-wrapper option grammars to peel correctly; that
     // is documented in OBSERVED-FAILURES.md as a v0.2 candidate.
     const r = evaluateBashCommand("sudo -E -n mv src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("mv");
   });
 
-  it("skips command -p prefix before verb", () => {
+  it("skips command -p prefix before verb (→ warn)", () => {
     const r = evaluateBashCommand("command -p cp src/a src/b");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
     expect(r.reason).toContain("cp");
   });
 });
@@ -472,9 +505,21 @@ describe("constants", () => {
     expect(DENY_SUBSTRINGS).toContain("sed -i");
     expect(DENY_SUBSTRINGS).toContain("git apply");
   });
-  it("exposes the documented deny prefixes", () => {
-    expect(DENY_PREFIX_PATTERNS).toContain("mv ");
-    expect(DENY_PREFIX_PATTERNS).toContain("cp ");
+  it("mechanically derives deny/warn prefixes from verb×separator", () => {
+    // v0.4.3: prefix arrays are expandVerbPrefixes(names) over
+    // [" ", "\t"]. patch stays on deny; mv/cp/rsync moved to warn.
+    expect(DENY_PREFIX_PATTERNS).toContain("patch ");
+    expect(DENY_PREFIX_PATTERNS).toContain("patch\t");
+    expect(DENY_PREFIX_PATTERNS).not.toContain("mv ");
+    expect(DENY_PREFIX_PATTERNS).not.toContain("cp ");
+    expect(WARN_PREFIX_PATTERNS).toEqual([
+      "mv ",
+      "mv\t",
+      "cp ",
+      "cp\t",
+      "rsync ",
+      "rsync\t",
+    ]);
   });
 });
 
@@ -744,19 +789,19 @@ describe("evaluateBashCommand - symlink-aware redirect target (a4-01)", () => {
 
 describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
   describe("command substitution expansion (items 1, 2)", () => {
-    it("denies a backtick command substitution containing mv", () => {
+    it("warns on a backtick command substitution containing mv", () => {
       const r = evaluateBashCommand("cargo fmt && echo `mv old new`");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies a $(...) command substitution containing mv", () => {
+    it("warns on a $(...) command substitution containing mv", () => {
       const r = evaluateBashCommand("cargo fmt && echo $(mv old new)");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies $() inside double quotes (POSIX expands it)", () => {
+    it("warns on $() inside double quotes (POSIX expands it)", () => {
       const r = evaluateBashCommand('echo "result $(mv a b)"');
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("allows $() inside single quotes (POSIX leaves it literal)", () => {
@@ -769,47 +814,49 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
       expect(r.decision).toBe("allow");
     });
 
-    it("denies nested $() $(mv a b)", () => {
+    it("warns on nested $() $(mv a b)", () => {
       const r = evaluateBashCommand("echo $(echo $(mv a b))");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
   });
 
   describe("wrapper value-option grammar (item 3)", () => {
-    it("denies sudo -u USER mv a b", () => {
+    it("warns on sudo -u USER mv a b", () => {
       const r = evaluateBashCommand("sudo -u root mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies env -u VAR mv a b", () => {
+    it("warns on env -u VAR mv a b", () => {
       const r = evaluateBashCommand("env -u HOME mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies sudo -g grp cp x y", () => {
+    it("warns on sudo -g grp cp x y", () => {
       const r = evaluateBashCommand("sudo -g admins cp x y");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("still strips wrapper flag-only opts (regression)", () => {
+    it("still strips wrapper flag-only opts (regression → warn)", () => {
       const r = evaluateBashCommand("env -i mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
   });
 
   describe("safety-flag exception (item 5)", () => {
-    it("denies cp --no-clobber a b (still creates new file at dest)", () => {
+    it("warns on cp --no-clobber a b (no cp safety carve-out; still verb-warn)", () => {
       // Codex GitHub bot review on PR #27 (P1): `cp -n` /
       // `--no-clobber` only refuses to OVERWRITE an existing
-      // destination — it still CREATES new files at the destination.
-      // The original carve-out was a write bypass; backed out.
+      // destination — it still CREATES new files at the destination,
+      // so there is no cp safety-flag carve-out. v0.4.3: cp is no
+      // longer a hard deny — it warns (allow-with-nudge) — but the
+      // absence of a carve-out still holds (warn, not allow).
       const r = evaluateBashCommand("cp --no-clobber a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies cp -n a b (short form has the same bypass)", () => {
+    it("warns on cp -n a b (short form; no carve-out, still verb-warn)", () => {
       const r = evaluateBashCommand("cp -n a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("allows patch --dry-run < changes.diff", () => {
@@ -824,14 +871,14 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
       expect(r.decision).toBe("allow");
     });
 
-    it("still denies cp without safety flag (regression)", () => {
+    it("still warns on cp without safety flag (regression)", () => {
       const r = evaluateBashCommand("cp a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("still denies mv with --no-clobber (no exception for mv)", () => {
+    it("still warns on mv with --no-clobber (no safety-flag exception for mv)", () => {
       const r = evaluateBashCommand("mv --no-clobber a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
   });
 
@@ -910,23 +957,24 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
   });
 
   describe("codex round-1 HIGH regressions", () => {
-    it("denies $() with literal '(' inside the substitution body (quoted-paren)", () => {
+    it("warns on $() with literal '(' inside the substitution body (quoted-paren)", () => {
       // Round 1 finding: a literal `'('` inside `$()` shifted the
       // depth count and the closing `)` was missed, so `mv a b` was
       // never extracted as an inner segment. The body now tracks
-      // single/double quotes independently from the outer pass.
+      // single/double quotes independently from the outer pass. The
+      // inner `mv` is still extracted; v0.4.3 makes it warn, not deny.
       const r = evaluateBashCommand('echo "$(printf \'(\'; mv a b)"');
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies sudo -T <timeout> mv (sudo time-limit short option)", () => {
+    it("warns on sudo -T <timeout> mv (sudo time-limit short option)", () => {
       const r = evaluateBashCommand("sudo -T 5 mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
-    it("denies sudo -R <chroot> mv (sudo chroot short option)", () => {
+    it("warns on sudo -R <chroot> mv (sudo chroot short option)", () => {
       const r = evaluateBashCommand("sudo -R /jail mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("denies node -e $'...' (ANSI-C-quoted JS arg) with writeFileSync", () => {
@@ -1078,17 +1126,17 @@ describe("evaluateBashCommand — v0.1.2 hook robustness (PR B)", () => {
   describe("Unicode line separators (item 8)", () => {
     it("treats CR as a segment boundary", () => {
       const r = evaluateBashCommand("cargo fmt\rmv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("treats U+2028 LINE SEPARATOR as a segment boundary", () => {
       const r = evaluateBashCommand("cargo fmt mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
 
     it("treats U+2029 PARAGRAPH SEPARATOR as a segment boundary", () => {
       const r = evaluateBashCommand("cargo fmt mv a b");
-      expect(r.decision).toBe("deny");
+      expect(r.decision).toBe("warn");
     });
   });
 });
@@ -1209,12 +1257,12 @@ describe("evaluateBashCommand — a1-04 find -exec bypass", () => {
     ).toBe("deny");
   });
 
-  it("denies find -exec cp (exec bypass via outer find verb)", () => {
+  it("warns on find -exec cp (exec bypass via outer find verb → cp warn)", () => {
     expect(
       evaluateBashCommand(
         "find src/ -name '*.ts' -exec cp {} /tmp/backup \;",
       ).decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
   it("allows echo -exec mv ... (echo verb, not find)", () => {
@@ -1269,10 +1317,10 @@ describe("evaluateBashCommand — a1-05 perl/ruby/php inline writes", () => {
 });
 
 describe("evaluateBashCommand — a1-06 busybox prefix bypass", () => {
-  it("denies busybox mv (busybox wrapper not recognized)", () => {
+  it("warns on busybox mv (busybox wrapper peeled → mv warn)", () => {
     expect(
       evaluateBashCommand("busybox mv src/a.ts src/b.ts").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 
   it("denies busybox sed -i (busybox wrapper not recognized)", () => {
@@ -1281,10 +1329,10 @@ describe("evaluateBashCommand — a1-06 busybox prefix bypass", () => {
     ).toBe("deny");
   });
 
-  it("denies busybox cp (busybox wrapper not recognized)", () => {
+  it("warns on busybox cp (busybox wrapper peeled → cp warn)", () => {
     expect(
       evaluateBashCommand("busybox cp src/foo.ts src/bar.ts").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 });
 
@@ -1303,10 +1351,10 @@ describe("evaluateBashCommand — a1-07 locale env-var prefix regression", () =>
     ).toBe("deny");
   });
 
-  it("denies LANG=en_US.UTF-8 mv src/a.ts src/b.ts (multi-locale prefix before mv)", () => {
+  it("warns on LANG=en_US.UTF-8 mv src/a.ts src/b.ts (multi-locale prefix before mv → warn)", () => {
     expect(
       evaluateBashCommand("LANG=en_US.UTF-8 mv src/a.ts src/b.ts").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 });
 
@@ -1497,29 +1545,29 @@ describe("evaluateBashCommand — 1100 cp-bypass via read-only verb redirect", (
 describe("evaluateBashCommand — 1042-rsync unicode whitespace bypass", () => {
   it("denies rsync with ASCII space (regression guard)", () => {
     const r = evaluateBashCommand("rsync -a src/ dst/");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
   it("denies rsync with non-breaking space separator (U+00A0)", () => {
     const r = evaluateBashCommand("rsync -a src/ dst/");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
   it("denies rsync with thin space separator (U+2009)", () => {
     const r = evaluateBashCommand(
       "rsync --delete src/ /repo/target/",
     );
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
   it("denies rsync with ideographic space separator (U+3000)", () => {
     const r = evaluateBashCommand("rsync　-a src/ dst/");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
   it("denies rsync with vertical tab separator (U+000B)", () => {
     const r = evaluateBashCommand("rsync-a src/ dst/");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 });
 
@@ -1539,14 +1587,14 @@ describe("evaluateBashCommand — a2-02 eval deferred-string bypass", () => {
 });
 
 describe("evaluateBashCommand — a2-03 env -i wrapper regression", () => {
-  it("denies env -i mv (env -i must not consume mv as value of -i)", () => {
+  it("warns on env -i mv (env -i must not consume mv as value of -i; mv → warn)", () => {
     const r = evaluateBashCommand("env -i mv src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
-  it("denies env -i cp", () => {
+  it("warns on env -i cp", () => {
     const r = evaluateBashCommand("env -i cp src/foo.ts src/bar.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 
   it("denies env -i patch", () => {
@@ -1554,9 +1602,9 @@ describe("evaluateBashCommand — a2-03 env -i wrapper regression", () => {
     expect(r.decision).toBe("deny");
   });
 
-  it("denies env --ignore-environment mv (long form)", () => {
+  it("warns on env --ignore-environment mv (long form → warn)", () => {
     const r = evaluateBashCommand("env --ignore-environment mv src/a.ts src/b.ts");
-    expect(r.decision).toBe("deny");
+    expect(r.decision).toBe("warn");
   });
 });
 
@@ -2026,11 +2074,13 @@ describe("evaluateBashCommand — dogfood-001 self-review fixes", () => {
 
   it("still treats CR as a segment boundary outside the redirect-operator carve-out", () => {
     // `cargo fmt\rmv a b`: \r is NOT after a redirect operator, so the
-    // primary-split CR carve-out still applies and `mv` is denied via
-    // DENY_PREFIX_PATTERNS. Pinning the carve-out's narrow scope.
+    // primary-split CR carve-out still applies and the `mv` segment is
+    // seen on its own. v0.4.3: `mv` now warns (WARN_VERBS) instead of
+    // denying — the CR-boundary behavior under test is unchanged; only
+    // the verb decision is. Pinning the carve-out's narrow scope.
     expect(
       evaluateBashCommand("cargo fmt\rmv a b").decision,
-    ).toBe("deny");
+    ).toBe("warn");
   });
 });
 
@@ -2353,6 +2403,103 @@ describe("evaluateBashCommand — 1107 position-aware verb-window", () => {
       "gh pr create --body 'extends hasSafetyFlag for the patch -oFILE form'",
     );
     expect(r.decision).toBe("allow");
+  });
+});
+
+describe("evaluateBashCommand — v0.4.3 mv/cp/rsync verb-warn (relaxed from deny)", () => {
+  // Loosened mv/cp/rsync from hard deny to the v0.1.5 structured warn
+  // (SPEC §5.2). These guards pin both the relaxation AND the
+  // load-bearing invariants that MUST survive it: protected-path writes
+  // and patch stay hard-deny, deny still wins over warn, and the
+  // hasSafetyFlag semantics are unchanged (warn, not allow).
+
+  it("warns on mv src/a src/b (relaxed from deny in v0.4.3)", () => {
+    const r = evaluateBashCommand("mv src/a src/b");
+    expect(r.decision).toBe("warn");
+    expect(r.reason).toContain("edit_*");
+    expect(r.reason).toContain("mv");
+  });
+
+  it("warns on cp .env.example .env", () => {
+    const r = evaluateBashCommand("cp .env.example .env");
+    expect(r.decision).toBe("warn");
+  });
+
+  it("warns on rsync -a src/ dst/", () => {
+    const r = evaluateBashCommand("rsync -a src/ dst/");
+    expect(r.decision).toBe("warn");
+  });
+
+  it('warns on bash -c "rsync a b" (warn propagates from shell-hosted recursion)', () => {
+    const r = evaluateBashCommand('bash -c "rsync a b"');
+    expect(r.decision).toBe("warn");
+  });
+
+  // --- Load-bearing invariant: protected-path beats verb-warn ---------
+
+  it("still denies mv payload .meta-edit/state/x (protected path beats verb-warn)", () => {
+    const r = evaluateBashCommand("mv payload .meta-edit/state/x");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected meta-edit path");
+  });
+
+  it("still denies cp x .meta-edit/state/edits.jsonl", () => {
+    const r = evaluateBashCommand("cp x .meta-edit/state/edits.jsonl");
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still denies rsync -a src/ .meta-edit/tmp/", () => {
+    const r = evaluateBashCommand("rsync -a src/ .meta-edit/tmp/");
+    expect(r.decision).toBe("deny");
+  });
+
+  it('still denies bash -c "mv payload .meta-edit/state/x" (protected beats verb-warn inside hosted payload)', () => {
+    const r = evaluateBashCommand(
+      'bash -c "mv payload .meta-edit/state/x"',
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  // --- Load-bearing invariant: patch stays deny ----------------------
+
+  it("still denies patch -p1 < changes.diff (patch kept on deny)", () => {
+    const r = evaluateBashCommand("patch -p1 < changes.diff");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("patch");
+  });
+
+  // --- Load-bearing invariant: deny wins over warn -------------------
+
+  it("denies (mv-warn ; sed -i deny) — deny wins across segments", () => {
+    const r = evaluateBashCommand("mv a b ; sed -i s/x/y/ src/foo.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("sed -i");
+  });
+
+  it("denies (cargo fmt ; patch -p1 ; mv a b) — patch deny wins over mv warn", () => {
+    const r = evaluateBashCommand(
+      "cargo fmt ; patch -p1 < x.diff ; mv a b",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("patch");
+  });
+
+  it("denies (mv a b ; cat > .meta-edit/state/x) — protected deny wins over mv warn", () => {
+    const r = evaluateBashCommand("mv a b ; cat > .meta-edit/state/x");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("meta-edit");
+  });
+
+  // --- Load-bearing invariant: hasSafetyFlag semantics unchanged -----
+
+  it("warns (not allows) on mv --no-clobber a b — no safety-flag carve-out for mv", () => {
+    const r = evaluateBashCommand("mv --no-clobber a b");
+    expect(r.decision).toBe("warn");
+  });
+
+  it("warns (not allows) on cp -n a b — no safety-flag carve-out for cp", () => {
+    const r = evaluateBashCommand("cp -n a b");
+    expect(r.decision).toBe("warn");
   });
 });
 
