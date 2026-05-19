@@ -301,6 +301,141 @@ main {
   color: var(--text-muted);
 }
 
+/* Lifecycle */
+.lifecycle {
+  list-style: none;
+  counter-reset: lc;
+  padding: 0;
+  margin: 8px 0 18px;
+  display: grid;
+  gap: 12px;
+}
+.lifecycle li {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 14px;
+  align-items: start;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  max-width: 760px;
+}
+.lifecycle .step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.lifecycle strong {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+.lifecycle p {
+  margin: 0;
+  color: var(--text);
+  max-width: none;
+}
+
+/* FAQ */
+.faq {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+}
+.faq dt {
+  font-weight: 600;
+  font-size: 1.02rem;
+  color: var(--text);
+  margin: 0;
+  position: relative;
+  padding-left: 22px;
+}
+.faq dt::before {
+  content: "Q";
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--accent);
+  font-weight: 700;
+}
+.faq dd {
+  margin: 4px 0 0 22px;
+  padding: 0;
+  color: var(--text-muted);
+  position: relative;
+  padding-left: 22px;
+}
+.faq dd::before {
+  content: "A";
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.faq dd a {
+  color: var(--link);
+}
+
+/* Limits */
+.limits {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+}
+.limits li {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  border-left: 3px solid #d0823e;
+}
+.limits strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.limits span {
+  color: var(--text-muted);
+}
+
+/* Quote attribution */
+.quote-attr {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Mobile tweaks */
+@media (max-width: 640px) {
+  .lifecycle li {
+    grid-template-columns: 32px 1fr;
+    gap: 10px;
+    padding: 12px;
+  }
+  .lifecycle .step-num {
+    width: 26px;
+    height: 26px;
+    font-size: 0.85rem;
+  }
+}
+
 .quote {
   margin: 18px 0 0;
   padding: 14px 18px;

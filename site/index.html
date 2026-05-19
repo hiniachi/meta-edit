@@ -3,20 +3,107 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>meta-edit — type the action, not the check</title>
+
+    <title>meta-edit — eighteen typed edit tools for AI coding agents (MCP)</title>
     <meta
       name="description"
-      content="meta-edit puts obligations on the tool surface, not in the prompt. An MCP server that splits one Edit into eighteen typed edits — and a general pattern for AI actions."
+      content="meta-edit is an MCP server that puts editing obligations on the tool surface — not in the prompt. One generic Edit is split into eighteen kind-specific edit tools, each carrying its testing obligations in its own description. A general pattern for AI actions."
     />
+    <meta
+      name="keywords"
+      content="meta-edit, MCP server, Model Context Protocol, Claude Code plugin, opencode plugin, AI coding agent, typed edits, tool surface, AI test discipline, SQLite testing, declarative edits, typed execution, AI agent obligations, edit_boundary_condition"
+    />
+    <meta name="author" content="hiniachi" />
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     <meta name="theme-color" content="#0d1117" />
+
+    <link rel="canonical" href="https://hiniachi.github.io/meta-edit/" />
+    <link rel="alternate" hreflang="en" href="https://hiniachi.github.io/meta-edit/" />
+    <link rel="alternate" hreflang="ja" href="https://hiniachi.github.io/meta-edit/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://hiniachi.github.io/meta-edit/" />
+    <link rel="alternate" hreflang="x-default" href="https://hiniachi.github.io/meta-edit/" />
+
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hiniachi.github.io/meta-edit/" />
     <meta property="og:title" content="meta-edit — type the action, not the check" />
     <meta
       property="og:description"
-      content="Put obligations on the tool, not in the prompt. A general pattern for AI actions."
+      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Eighteen typed edits for AI coding agents."
     />
-    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://hiniachi.github.io/meta-edit/og.svg" />
+    <meta property="og:image:type" content="image/svg+xml" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="meta-edit — type the action, not the check." />
+    <meta property="og:site_name" content="meta-edit" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="meta-edit — type the action, not the check" />
+    <meta
+      name="twitter:description"
+      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Eighteen typed edits for AI coding agents."
+    />
+    <meta name="twitter:image" content="https://hiniachi.github.io/meta-edit/og.svg" />
+    <meta name="twitter:image:alt" content="meta-edit — type the action, not the check." />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "SoftwareApplication",
+            "name": "meta-edit",
+            "alternateName": "@hiniachi/meta-edit",
+            "description": "An MCP server that replaces a coding agent's single Edit tool with eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit.",
+            "applicationCategory": "DeveloperApplication",
+            "applicationSubCategory": "AI coding agent plugin",
+            "operatingSystem": "Linux, macOS",
+            "softwareVersion": "0.3.1",
+            "url": "https://hiniachi.github.io/meta-edit/",
+            "sameAs": [
+              "https://github.com/hiniachi/meta-edit",
+              "https://www.npmjs.com/package/@hiniachi/meta-edit"
+            ],
+            "license": "https://opensource.org/licenses/MIT",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "author": { "@type": "Person", "name": "hiniachi" },
+            "image": "https://hiniachi.github.io/meta-edit/og.svg"
+          },
+          {
+            "@type": "WebSite",
+            "url": "https://hiniachi.github.io/meta-edit/",
+            "name": "meta-edit",
+            "inLanguage": ["en", "ja", "zh-CN"]
+          },
+          {
+            "@type": "TechArticle",
+            "headline": "Type the action, not the check.",
+            "url": "https://hiniachi.github.io/meta-edit/",
+            "image": "https://hiniachi.github.io/meta-edit/og.svg",
+            "author": { "@type": "Person", "name": "hiniachi" },
+            "publisher": {
+              "@type": "Organization",
+              "name": "meta-edit",
+              "logo": {
+                "@type": "ImageObject",
+                "url": "https://hiniachi.github.io/meta-edit/favicon.svg"
+              }
+            },
+            "about": "AI coding agents, MCP, typed edit tools, tool-surface obligations, declarative editing, typed execution"
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <header class="site-header">
@@ -43,7 +130,9 @@
       <nav class="nav">
         <a href="#idea" data-i18n="nav.idea">The idea</a>
         <a href="#proof" data-i18n="nav.proof">The proof</a>
+        <a href="#lifecycle" data-i18n="nav.lifecycle">Lifecycle</a>
         <a href="#beyond" data-i18n="nav.beyond">Beyond edits</a>
+        <a href="#faq" data-i18n="nav.faq">FAQ</a>
         <a
           href="https://github.com/hiniachi/meta-edit"
           rel="noopener"
@@ -169,11 +258,114 @@
         <p data-i18n="proof.evidence.body">
           When no kind cleanly fits a requested change, the agent
           <strong>stops and asks</strong>, instead of forcing the change
-          through the nearest tool. We have observed this happen at ~80%
-          context utilisation — exactly the regime where instructions in
+          through the nearest tool. We have observed this at ~80% context
+          utilisation — exactly the regime where instructions in
           <code>CLAUDE.md</code> normally lose their grip. Tool-shaped
           instructions, reloaded at every call, kept working when text-shaped
           instructions did not.
+        </p>
+        <blockquote class="quote" data-i18n="proof.evidence.quote">
+          <p>
+            "<code>OBSERVED-FAILURES.md</code> is a docs file and matches none
+            of the seventeen <code>edit_*</code> tools strictly (descriptions
+            assume 'production code' / 'test files' / 'policy/governance').
+            <code>CLAUDE.md</code> §9 says 'no edit_* tool fits, stop and ask.'
+            Two options: (a) stretch <code>edit_refactor_only</code> — its
+            MUST-NOT list trivially passes for prose, and the 'no observable
+            behavior change' intent is satisfied; (b)
+            <code>/plugin disable meta-edit</code> and use raw <code>Edit</code>.
+            Which do you prefer?"
+          </p>
+          <footer class="quote-attr" data-i18n="proof.evidence.quote.attr">
+            — agent transcript that led to the eighteenth tool,
+            <code>edit_docs_only</code>
+          </footer>
+        </blockquote>
+      </section>
+
+      <section id="lifecycle" class="section">
+        <h2 data-i18n="lifecycle.title">How a typed edit actually flows</h2>
+        <p class="section-lede" data-i18n="lifecycle.lede">
+          meta-edit isn't only descriptive. The agent's choice of tool is also
+          gated — the write itself is bound to that choice. Here is the
+          lifecycle of one edit.
+        </p>
+
+        <ol class="lifecycle">
+          <li>
+            <span class="step-num">1</span>
+            <div>
+              <strong data-i18n="lifecycle.s1.t">Pick a tool</strong>
+              <p data-i18n="lifecycle.s1.b">
+                The agent selects a kind, e.g.
+                <code>edit_boundary_condition</code>.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            <div>
+              <strong data-i18n="lifecycle.s2.t">Declare</strong>
+              <p data-i18n="lifecycle.s2.b">
+                It declares the change: <code>target_file</code>,
+                <code>rationale</code>, <code>test_files</code>, plus the
+                pre-edit SHA-256 of each file it intends to touch.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            <div>
+              <strong data-i18n="lifecycle.s3.t">Validate</strong>
+              <p data-i18n="lifecycle.s3.b">
+                meta-edit checks the declaration. Missing rationale, missing
+                test files (for non-refactor / non-test edits), or a target
+                inside a protected path → reject. The edit log records
+                <code>phase: "rejected"</code> with the reason.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">4</span>
+            <div>
+              <strong data-i18n="lifecycle.s4.t">Issue a token</strong>
+              <p data-i18n="lifecycle.s4.b">
+                On success, meta-edit returns a short-lived token bound to
+                the declared files, and writes <code>phase: "issued"</code>
+                to <code>.meta-edit/state/edits.jsonl</code>.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">5</span>
+            <div>
+              <strong data-i18n="lifecycle.s5.t">Write — under a hook</strong>
+              <p data-i18n="lifecycle.s5.b">
+                The agent then calls native <code>Edit</code> to write bytes.
+                A pre-write hook checks that a matching token exists, hasn't
+                expired, and that each file's hash still matches the binding.
+                If anything is off, the write is denied.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">6</span>
+            <div>
+              <strong data-i18n="lifecycle.s6.t">Consume + audit</strong>
+              <p data-i18n="lifecycle.s6.b">
+                A successful write appends <code>phase: "consumed"</code>. An
+                <code>issued</code> row without a <code>consumed</code> sibling
+                is evidence of an abandoned or expired declaration.
+              </p>
+            </div>
+          </li>
+        </ol>
+
+        <p class="note" data-i18n="lifecycle.note">
+          There is no diff classifier reading the patch contents. The mechanism
+          is choosing the tool and binding the write to that choice. Quality
+          lives in the descriptions and in the discipline of selection — not in
+          detection.
         </p>
       </section>
 
@@ -202,9 +394,7 @@
           </li>
         </ol>
 
-        <p data-i18n="beyond.p2">
-          A few sketches of where this leads:
-        </p>
+        <p data-i18n="beyond.p2">A few sketches of where this leads:</p>
 
         <dl class="sketch">
           <dt data-i18n="beyond.s1.t">Typed deploy</dt>
@@ -250,6 +440,109 @@
           or the payload. The only mechanism is the shape of the tool surface —
           and the obligation of the agent to choose a tool before acting.
         </p>
+      </section>
+
+      <section id="faq" class="section">
+        <h2 data-i18n="faq.title">FAQ</h2>
+        <dl class="faq">
+          <dt data-i18n="faq.q1">
+            Isn't this just a checker hiding behind a tool?
+          </dt>
+          <dd data-i18n="faq.a1">
+            No. Nothing reads the diff. The mechanism is the shape of the tool
+            surface and the obligation to pick a tool before writing. We rely
+            on the fact that tool descriptions are loaded at every call — not
+            on any post-hoc analysis.
+          </dd>
+
+          <dt data-i18n="faq.q2">Doesn't this slow editing down?</dt>
+          <dd data-i18n="faq.a2">
+            It adds one explicit step: classifying the change before writing.
+            That step was implicit in the agent's job anyway; meta-edit makes
+            it visible. The metric we care about is "edits that arrived with
+            appropriate tests", not "edits per minute".
+          </dd>
+
+          <dt data-i18n="faq.q3">What if the agent picks the wrong type?</dt>
+          <dd data-i18n="faq.a3">
+            It can. v1.0 deliberately does not detect mismatch. The MVP is
+            built to find out whether descriptions alone change behaviour. If
+            the answer turns out to be "not enough", v0.2 adds a lightweight
+            diff classifier as a backstop — see
+            <a
+              href="https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md"
+              target="_blank"
+              rel="noopener"
+              ><code>OBSERVED-FAILURES.md</code></a
+            >.
+          </dd>
+
+          <dt data-i18n="faq.q4">Why eighteen, not three or fifty?</dt>
+          <dd data-i18n="faq.a4">
+            Empirical. Each kind corresponds to a failure pattern with
+            distinct testing obligations (boundary, boolean, state-transition,
+            schema, migration, contract, …). Too few collapses different
+            obligations together and dilutes the descriptions; too many splits
+            genuine identicals into duplicate tools. New kinds get added when
+            an observed failure doesn't fit any existing one.
+          </dd>
+
+          <dt data-i18n="faq.q5">Does this replace code review?</dt>
+          <dd data-i18n="faq.a5">
+            No. It changes the <em>pre-edit</em> moment. Review still happens
+            after.
+          </dd>
+
+          <dt data-i18n="faq.q6">
+            Why not just write a better <code>CLAUDE.md</code>?
+          </dt>
+          <dd data-i18n="faq.a6">
+            We tried. The instructions decay during long sessions. The whole
+            project is the consequence of accepting that decay is structural —
+            not the model's fault.
+          </dd>
+        </dl>
+      </section>
+
+      <section id="limits" class="section">
+        <h2 data-i18n="limits.title">When this isn't the right tool</h2>
+        <p class="section-lede" data-i18n="limits.lede">
+          meta-edit is opinionated. The honest list of cases where it adds
+          friction without value:
+        </p>
+        <ul class="limits">
+          <li>
+            <strong data-i18n="limits.l1.t">You're writing by hand.</strong>
+            <span data-i18n="limits.l1.b">
+              Tool descriptions don't load in your head when you reach for
+              <code>Edit</code>. meta-edit is built for AI agents.
+            </span>
+          </li>
+          <li>
+            <strong data-i18n="limits.l2.t">It's throwaway prototype code.</strong>
+            <span data-i18n="limits.l2.b">
+              The eighteen descriptions insist on test obligations. For code
+              you're about to delete, that obligation is dead weight.
+            </span>
+          </li>
+          <li>
+            <strong data-i18n="limits.l3.t">You trust post-hoc review entirely.</strong>
+            <span data-i18n="limits.l3.b">
+              meta-edit acts <em>before</em> the write. If "review will catch
+              it" already works downstream, this layer is not strictly needed.
+            </span>
+          </li>
+          <li>
+            <strong data-i18n="limits.l4.t">
+              Your codebase has no notion of "kind of change".
+            </strong>
+            <span data-i18n="limits.l4.b">
+              The categories assume mainstream application development —
+              boundary checks, state transitions, schema changes. Highly
+              homogeneous domains may need a different split.
+            </span>
+          </li>
+        </ul>
       </section>
 
       <section id="try" class="section section-try">
@@ -303,7 +596,9 @@
         en: {
           "nav.idea": "The idea",
           "nav.proof": "The proof",
+          "nav.lifecycle": "Lifecycle",
           "nav.beyond": "Beyond edits",
+          "nav.faq": "FAQ",
           "hero.eyebrow": "A different place to put obligations",
           "hero.title": "Type the action,<br>not the check.",
           "hero.lede":
@@ -324,7 +619,32 @@
             "The current set of kinds. Each tool's description says when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user.",
           "proof.evidence.title": "What we've observed",
           "proof.evidence.body":
-            "When no kind cleanly fits a requested change, the agent <strong>stops and asks</strong>, instead of forcing the change through the nearest tool. We have observed this happen at ~80% context utilisation — exactly the regime where instructions in <code>CLAUDE.md</code> normally lose their grip. Tool-shaped instructions, reloaded at every call, kept working when text-shaped instructions did not.",
+            "When no kind cleanly fits a requested change, the agent <strong>stops and asks</strong>, instead of forcing the change through the nearest tool. We have observed this at ~80% context utilisation — exactly the regime where instructions in <code>CLAUDE.md</code> normally lose their grip. Tool-shaped instructions, reloaded at every call, kept working when text-shaped instructions did not.",
+          "proof.evidence.quote":
+            "<p>\"<code>OBSERVED-FAILURES.md</code> is a docs file and matches none of the seventeen <code>edit_*</code> tools strictly (descriptions assume 'production code' / 'test files' / 'policy/governance'). <code>CLAUDE.md</code> §9 says 'no edit_* tool fits, stop and ask.' Two options: (a) stretch <code>edit_refactor_only</code> — its MUST-NOT list trivially passes for prose, and the 'no observable behavior change' intent is satisfied; (b) <code>/plugin disable meta-edit</code> and use raw <code>Edit</code>. Which do you prefer?\"</p><footer class=\"quote-attr\">— agent transcript that led to the eighteenth tool, <code>edit_docs_only</code></footer>",
+          "lifecycle.title": "How a typed edit actually flows",
+          "lifecycle.lede":
+            "meta-edit isn't only descriptive. The agent's choice of tool is also gated — the write itself is bound to that choice. Here is the lifecycle of one edit.",
+          "lifecycle.s1.t": "Pick a tool",
+          "lifecycle.s1.b":
+            "The agent selects a kind, e.g. <code>edit_boundary_condition</code>.",
+          "lifecycle.s2.t": "Declare",
+          "lifecycle.s2.b":
+            "It declares the change: <code>target_file</code>, <code>rationale</code>, <code>test_files</code>, plus the pre-edit SHA-256 of each file it intends to touch.",
+          "lifecycle.s3.t": "Validate",
+          "lifecycle.s3.b":
+            "meta-edit checks the declaration. Missing rationale, missing test files (for non-refactor / non-test edits), or a target inside a protected path → reject. The edit log records <code>phase: \"rejected\"</code> with the reason.",
+          "lifecycle.s4.t": "Issue a token",
+          "lifecycle.s4.b":
+            "On success, meta-edit returns a short-lived token bound to the declared files, and writes <code>phase: \"issued\"</code> to <code>.meta-edit/state/edits.jsonl</code>.",
+          "lifecycle.s5.t": "Write — under a hook",
+          "lifecycle.s5.b":
+            "The agent then calls native <code>Edit</code> to write bytes. A pre-write hook checks that a matching token exists, hasn't expired, and that each file's hash still matches the binding. If anything is off, the write is denied.",
+          "lifecycle.s6.t": "Consume + audit",
+          "lifecycle.s6.b":
+            "A successful write appends <code>phase: \"consumed\"</code>. An <code>issued</code> row without a <code>consumed</code> sibling is evidence of an abandoned or expired declaration.",
+          "lifecycle.note":
+            "There is no diff classifier reading the patch contents. The mechanism is choosing the tool and binding the write to that choice. Quality lives in the descriptions and in the discipline of selection — not in detection.",
           "beyond.title": "From typed edits to typed execution",
           "beyond.p1":
             "File editing is only the first instance. The same shape applies to any high-stakes verb an AI agent can perform on a real system: deploy, delete, call, commit, grant. The recipe repeats:",
@@ -350,6 +670,42 @@
             "<code>commit_refactor</code>, <code>commit_breaking_change</code>, <code>commit_hotfix</code>, <code>revert</code>. The agent must classify its own change before it can land it; the description for <code>commit_breaking_change</code> requires a changelog entry and a migration note in the same call.",
           "beyond.p3":
             "None of this is detection. There is no classifier reading the diff or the payload. The only mechanism is the shape of the tool surface — and the obligation of the agent to choose a tool before acting.",
+          "faq.title": "FAQ",
+          "faq.q1": "Isn't this just a checker hiding behind a tool?",
+          "faq.a1":
+            "No. Nothing reads the diff. The mechanism is the shape of the tool surface and the obligation to pick a tool before writing. We rely on the fact that tool descriptions are loaded at every call — not on any post-hoc analysis.",
+          "faq.q2": "Doesn't this slow editing down?",
+          "faq.a2":
+            "It adds one explicit step: classifying the change before writing. That step was implicit in the agent's job anyway; meta-edit makes it visible. The metric we care about is \"edits that arrived with appropriate tests\", not \"edits per minute\".",
+          "faq.q3": "What if the agent picks the wrong type?",
+          "faq.a3":
+            "It can. v1.0 deliberately does not detect mismatch. The MVP is built to find out whether descriptions alone change behaviour. If the answer turns out to be \"not enough\", v0.2 adds a lightweight diff classifier as a backstop — see <a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>.",
+          "faq.q4": "Why eighteen, not three or fifty?",
+          "faq.a4":
+            "Empirical. Each kind corresponds to a failure pattern with distinct testing obligations (boundary, boolean, state-transition, schema, migration, contract, …). Too few collapses different obligations together and dilutes the descriptions; too many splits genuine identicals into duplicate tools. New kinds get added when an observed failure doesn't fit any existing one.",
+          "faq.q5": "Does this replace code review?",
+          "faq.a5":
+            "No. It changes the <em>pre-edit</em> moment. Review still happens after.",
+          "faq.q6":
+            "Why not just write a better <code>CLAUDE.md</code>?",
+          "faq.a6":
+            "We tried. The instructions decay during long sessions. The whole project is the consequence of accepting that decay is structural — not the model's fault.",
+          "limits.title": "When this isn't the right tool",
+          "limits.lede":
+            "meta-edit is opinionated. The honest list of cases where it adds friction without value:",
+          "limits.l1.t": "You're writing by hand.",
+          "limits.l1.b":
+            " Tool descriptions don't load in your head when you reach for <code>Edit</code>. meta-edit is built for AI agents.",
+          "limits.l2.t": "It's throwaway prototype code.",
+          "limits.l2.b":
+            " The eighteen descriptions insist on test obligations. For code you're about to delete, that obligation is dead weight.",
+          "limits.l3.t": "You trust post-hoc review entirely.",
+          "limits.l3.b":
+            " meta-edit acts <em>before</em> the write. If \"review will catch it\" already works downstream, this layer is not strictly needed.",
+          "limits.l4.t":
+            "Your codebase has no notion of \"kind of change\".",
+          "limits.l4.b":
+            " The categories assume mainstream application development — boundary checks, state transitions, schema changes. Highly homogeneous domains may need a different split.",
           "try.title": "Try it",
           "try.body":
             "Claude Code plugin marketplace path. npm and opencode paths are also available — see the <a href=\"https://github.com/hiniachi/meta-edit#install\" target=\"_blank\" rel=\"noopener\">README</a> for the full set, and <a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a> for the design in full.",
@@ -359,7 +715,9 @@
         ja: {
           "nav.idea": "発想",
           "nav.proof": "実証",
+          "nav.lifecycle": "ライフサイクル",
           "nav.beyond": "編集の先へ",
+          "nav.faq": "FAQ",
           "hero.eyebrow": "「義務」の置き場所を変える",
           "hero.title": "行動に型を。<br>後付けの検査ではなく。",
           "hero.lede":
@@ -381,6 +739,31 @@
           "proof.evidence.title": "観察されたこと",
           "proof.evidence.body":
             "依頼された変更にどの種類もきれいに当てはまらないとき、エージェントは近い型に無理やり押し込まずに<strong>立ち止まって尋ねる</strong>。これがコンテキスト使用率およそ80%――<code>CLAUDE.md</code>の指示が通常効かなくなる領域――でも起こることを確認している。毎回ロードされる「ツール型」の指示は、セッション開始時にしか読まれない「テキスト型」の指示が機能しなくなった後でも、機能し続けた。",
+          "proof.evidence.quote":
+            "<p>「<code>OBSERVED-FAILURES.md</code>はドキュメントファイルで、17種類の<code>edit_*</code>ツールのどれにも厳密には合致しない(説明文はどれも『プロダクションコード』『テストファイル』『ポリシー/ガバナンス』を前提としている)。<code>CLAUDE.md</code> §9は『適合する<code>edit_*</code>ツールが無いときは止めて尋ねる』と指示している。選択肢は二つ。(a) <code>edit_refactor_only</code>を流用する――そのMUST-NOTリストは散文には自明に当てはまらず、『観測可能な振る舞いを変えない』という意図は満たされる。(b) <code>/plugin disable meta-edit</code>してから素の<code>Edit</code>を使う。どちらにする?」</p><footer class=\"quote-attr\">――18番目のツール<code>edit_docs_only</code>の元になったエージェントの発話</footer>",
+          "lifecycle.title": "型付き編集が実際に流れる仕組み",
+          "lifecycle.lede":
+            "meta-editは記述だけにとどまらない。エージェントの「ツール選択」自体が仕組みで縛られ、書き込みはその選択に束縛される。1回の編集のライフサイクルを追う。",
+          "lifecycle.s1.t": "ツールを選ぶ",
+          "lifecycle.s1.b":
+            "エージェントが種類を選ぶ。例: <code>edit_boundary_condition</code>。",
+          "lifecycle.s2.t": "宣言する",
+          "lifecycle.s2.b":
+            "変更を宣言する。対象ファイル(<code>target_file</code>)、理由(<code>rationale</code>)、テストファイル(<code>test_files</code>)、それぞれの編集前 SHA-256。",
+          "lifecycle.s3.t": "検証する",
+          "lifecycle.s3.b":
+            "meta-editが宣言を検証する。理由が空、テストファイルが欠落(リファクタ/テスト変更以外)、対象が保護パス配下――いずれかなら却下。編集ログには<code>phase: \"rejected\"</code>として理由付きで記録される。",
+          "lifecycle.s4.t": "トークンを発行する",
+          "lifecycle.s4.b":
+            "通れば、宣言されたファイルに束縛された短命のトークンが返り、<code>phase: \"issued\"</code>が<code>.meta-edit/state/edits.jsonl</code>に書き込まれる。",
+          "lifecycle.s5.t": "書く――フック下で",
+          "lifecycle.s5.b":
+            "エージェントが標準の<code>Edit</code>を呼んでバイトを書く。書き込み直前のフックがトークンの有無・有効期限・各ファイルのハッシュと束縛の一致を確認する。どれかが合わなければ書き込みは拒否される。",
+          "lifecycle.s6.t": "消費 + 監査",
+          "lifecycle.s6.b":
+            "書き込み成功後、フックが<code>phase: \"consumed\"</code>を追記する。<code>issued</code>はあるが<code>consumed</code>がない記録は、宣言が放棄または期限切れになった証拠だ。",
+          "lifecycle.note":
+            "パッチ内容を読む分類器は存在しない。仕組みは「ツールを選ぶ」と「その選択に書き込みを束縛する」の2つだけ。品質は記述と選択の規律に宿る――検出器ではない。",
           "beyond.title": "型付き編集から、型付き実行へ",
           "beyond.p1":
             "ファイル編集は最初の事例にすぎない。同じ形は、AIエージェントが実システムに対して行う他のリスクある動詞にも当てはまる――デプロイする、削除する、呼び出す、コミットする、権限を付与する。手順はいつも同じだ。",
@@ -407,6 +790,42 @@
             "<code>commit_refactor</code>、<code>commit_breaking_change</code>、<code>commit_hotfix</code>、<code>revert</code>。エージェントは自分の変更を分類してからでないとマージできない。<code>commit_breaking_change</code>の説明は、同じ呼び出しの中でchangelog項目と移行ノートの記載を要求する。",
           "beyond.p3":
             "ここには検出器はひとつもない。diffやペイロードを読む分類器も存在しない。仕組みはツール表面の「形」だけ――そしてエージェントが行動前に必ずツールを選ばなければならない、という制約だ。",
+          "faq.title": "FAQ",
+          "faq.q1": "結局これは、ツールの裏に検出器を隠しただけでは?",
+          "faq.a1":
+            "違う。diffを読む検出器は存在しない。仕組みはツール表面の「形」と、書く前にツールを選ばなければならないという制約だけだ。頼っているのは「ツールの説明が呼び出しのたびに必ず読まれる」という性質であって、事後解析ではない。",
+          "faq.q2": "編集が遅くなるのでは?",
+          "faq.a2":
+            "「変更を分類する」というステップが1つ明示的に加わる。本来エージェントは黙ってそれをやっているべきだったので、meta-editはその分類を可視化しているにすぎない。見る指標は「適切なテストを伴った編集が来たか」であって「1分あたり何件編集したか」ではない。",
+          "faq.q3": "エージェントが間違った型を選んだら?",
+          "faq.a3":
+            "ありうる。v1.0は不一致を検出しない――意図的にそうしている。MVPは「説明文だけで挙動が変わるか」を観測するために存在している。「足りない」と判明したときの保険として、v0.2では軽量diff分類器の追加を予定している――<a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>参照。",
+          "faq.q4": "なぜちょうど18個? 3個でも50個でもなく。",
+          "faq.a4":
+            "経験則だ。各カテゴリは、異なるテスト義務を持つ失敗パターンに対応している(境界値、ブール条件、状態遷移、スキーマ、マイグレーション、契約、…)。少なすぎれば義務が混ざって記述が薄まり、多すぎれば同質のものが重複ツールに割れる。既存の型に当てはまらない失敗が観測されれば新しい型が追加される。",
+          "faq.q5": "コードレビューの代わりになる?",
+          "faq.a5":
+            "ならない。meta-editが変えるのは<em>編集前</em>の瞬間だけだ。レビューはそのあと残る。",
+          "faq.q6":
+            "もっとしっかり<code>CLAUDE.md</code>を書くだけではダメ?",
+          "faq.a6":
+            "試した。長いセッションでは指示は薄れる。このプロジェクトは「指示の薄れは構造的な現象でモデルのせいではない」という認識を出発点にしている。",
+          "limits.title": "meta-editが向かない場面",
+          "limits.lede":
+            "meta-editには立場がある。価値がなく摩擦だけ生む場面は次の通り。",
+          "limits.l1.t": "人間が手で書く編集。",
+          "limits.l1.b":
+            " <code>Edit</code>を叩いた瞬間に頭の中でツール説明がロードされるわけではない。これはAIエージェント向けの道具だ。",
+          "limits.l2.t": "テストを書かない使い捨てプロトタイプ。",
+          "limits.l2.b":
+            " 18個の説明はテスト義務を要求する。捨てる前提のコードにとって、その義務は重荷でしかない。",
+          "limits.l3.t": "事後レビューだけ信用している現場。",
+          "limits.l3.b":
+            " meta-editは書く<em>前</em>に介入する。「レビューで拾うから大丈夫」が成り立つなら、すでに下流でカバーされている。",
+          "limits.l4.t":
+            "「変更の種類」という概念が存在しないコードベース。",
+          "limits.l4.b":
+            " カテゴリは主流のアプリケーション開発――境界チェック、状態遷移、スキーマ変更――を前提に作られている。極端に均質な領域では別の分け方が要る。",
           "try.title": "試す",
           "try.body":
             "Claude Codeプラグインマーケットプレース経由のインストール例。npmやopencode経由もある――一通りは<a href=\"https://github.com/hiniachi/meta-edit/blob/main/README.ja.md\" target=\"_blank\" rel=\"noopener\">README</a>に、設計の全体像は<a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a>にある。",
@@ -416,7 +835,9 @@
         zh: {
           "nav.idea": "核心想法",
           "nav.proof": "实证",
+          "nav.lifecycle": "生命周期",
           "nav.beyond": "超越编辑",
+          "nav.faq": "FAQ",
           "hero.eyebrow": "把「义务」放在另一个地方",
           "hero.title": "给行为分型,<br>而不是事后检查。",
           "hero.lede":
@@ -438,6 +859,31 @@
           "proof.evidence.title": "我们观察到的现象",
           "proof.evidence.body":
             "当请求的改动没有类型能干净匹配时,代理不会硬塞进最近的工具,而是<strong>停下来询问</strong>。我们在上下文使用率约 80% 的会话里观察到了这一点——这正是 <code>CLAUDE.md</code> 中的指令通常已经失去约束力的区段。每次调用都会被重新加载的「工具型」指令,在「文本型」指令失效之后仍然继续起作用。",
+          "proof.evidence.quote":
+            "<p>「<code>OBSERVED-FAILURES.md</code> 是文档文件,与十七个 <code>edit_*</code> 工具中的任何一个都不能严格匹配(这些说明文都假定目标是『生产代码』/『测试文件』/『策略 / 治理』)。<code>CLAUDE.md</code> §9 写的是『找不到合适的 <code>edit_*</code> 工具时停下来询问』。两个选项:(a) 借用 <code>edit_refactor_only</code> —— 它的 MUST-NOT 列表对纯散文天然不触发,『不改变可观察行为』的意图在文档场景下也成立;(b) <code>/plugin disable meta-edit</code> 后用原生 <code>Edit</code>。你倾向哪个?」</p><footer class=\"quote-attr\">—— 催生第十八个工具 <code>edit_docs_only</code> 的那段代理对话</footer>",
+          "lifecycle.title": "一次类型化编辑实际上是怎么走完的",
+          "lifecycle.lede":
+            "meta-edit 不只是描述。代理的「选工具」这一步也被卡住——写入本身被绑定在那个选择上。下面是一次编辑的生命周期。",
+          "lifecycle.s1.t": "选一个工具",
+          "lifecycle.s1.b":
+            "代理选一个种类,例如 <code>edit_boundary_condition</code>。",
+          "lifecycle.s2.t": "声明",
+          "lifecycle.s2.b":
+            "声明这次改动:<code>target_file</code>、<code>rationale</code>、<code>test_files</code>,以及每个待修改文件改动前的 SHA-256。",
+          "lifecycle.s3.t": "校验",
+          "lifecycle.s3.b":
+            "meta-edit 检查声明。理由为空、缺失测试文件(非重构 / 非测试编辑)、目标位于保护路径——任一条都会被拒。编辑日志以 <code>phase: \"rejected\"</code> 记录原因。",
+          "lifecycle.s4.t": "发放令牌",
+          "lifecycle.s4.b":
+            "通过校验后,meta-edit 返回一个绑定在声明文件上的短命令牌,并把 <code>phase: \"issued\"</code> 写入 <code>.meta-edit/state/edits.jsonl</code>。",
+          "lifecycle.s5.t": "写入 —— 在 hook 之下",
+          "lifecycle.s5.b":
+            "代理调用内置 <code>Edit</code> 真正写字节。写入前的 hook 会检查:对应的令牌是否存在、是否过期、每个文件的哈希是否与绑定一致。任一不符,写入被拒。",
+          "lifecycle.s6.t": "消费 + 审计",
+          "lifecycle.s6.b":
+            "写入成功后,hook 追加 <code>phase: \"consumed\"</code>。只有 <code>issued</code> 而没有 <code>consumed</code> 的记录,意味着声明被放弃或令牌已过期。",
+          "lifecycle.note":
+            "没有读取补丁内容做分类的检测器。机制只有两件事:「选工具」与「把这次写入绑定到那个选择」。质量住在描述里、以及挑选的纪律里——而不在某个检测器里。",
           "beyond.title": "从类型化编辑,到类型化执行",
           "beyond.p1":
             "文件编辑只是第一个例子。同样的形态,适用于 AI 代理在真实系统上能做的任何高风险动作——部署、删除、调用、提交、授权。配方是一样的:",
@@ -464,6 +910,41 @@
             "<code>commit_refactor</code>、<code>commit_breaking_change</code>、<code>commit_hotfix</code>、<code>revert</code>。代理必须先给自己的改动分类,才能落地;<code>commit_breaking_change</code> 的描述会要求在同一次调用中给出 changelog 条目和迁移说明。",
           "beyond.p3":
             "这里没有任何检测器。没有去读 diff 或负载的分类器。机制只有一个:工具表面的形状——再加上一条约束:代理必须先选工具,才能行动。",
+          "faq.title": "FAQ",
+          "faq.q1": "这是不是把检测器藏在工具背后?",
+          "faq.a1":
+            "不是。没有读 diff 的检测器。机制只有工具表面的「形状」,以及代理在写入前必须先选工具这条约束。我们依赖的是「工具描述在每次调用时都会被加载」这件事,而不是事后分析。",
+          "faq.q2": "这样会拖慢编辑速度吗?",
+          "faq.a2":
+            "它显式地加了一步:写入前先把改动分类。本来代理就该做这一步,meta-edit 只是把它可视化。我们关注的指标是「有没有附带恰当的测试」,而不是「每分钟编辑多少次」。",
+          "faq.q3": "代理选错类型怎么办?",
+          "faq.a3":
+            "有可能。v1.0 不做不匹配检测——这是有意为之。MVP 是为了观察「光靠描述能不能改变行为」。如果答案是「不够」,v0.2 会引入轻量 diff 分类器作为兜底——见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>。",
+          "faq.q4": "为什么正好是十八个,不是三个或五十个?",
+          "faq.a4":
+            "经验得出。每个种类对应一类有独立测试义务的失败模式(边界值、布尔条件、状态迁移、schema、迁移、契约……)。太少则义务被混在一起,描述被稀释;太多则同质的东西被切到重复工具里。一旦观察到无法归入任何已有种类的失败,就会增加新种类。",
+          "faq.q5": "这能替代代码评审吗?",
+          "faq.a5":
+            "不能。meta-edit 改变的只是<em>写入之前</em>那一刻。评审仍然在写入之后。",
+          "faq.q6":
+            "多花点功夫写 <code>CLAUDE.md</code> 不就行了?",
+          "faq.a6":
+            "试过了。在长会话里指令会褪色。整个项目正是承认了「褪色是结构性的,不是模型的错」之后才动手做的。",
+          "limits.title": "不适用 meta-edit 的场景",
+          "limits.lede":
+            "meta-edit 是有立场的。下列场景下,它带来摩擦却没有价值:",
+          "limits.l1.t": "人手编辑。",
+          "limits.l1.b":
+            " 当人按下 <code>Edit</code> 时,工具描述并不会自动在脑子里加载。这件事是为 AI 代理设计的。",
+          "limits.l2.t": "不写测试的原型阶段。",
+          "limits.l2.b":
+            " 十八条描述会要求伴随测试。对一次性丢弃的代码,这个义务只是负担。",
+          "limits.l3.t": "只信任事后评审。",
+          "limits.l3.b":
+            " meta-edit 在写入<em>之前</em>介入。如果「评审会兜底」已经在下游成立,这一层就不是非要不可。",
+          "limits.l4.t": "没有「变更种类」概念的代码库。",
+          "limits.l4.b":
+            " 这些类别假定主流应用开发——边界检查、状态迁移、schema 变更。极度同质的领域可能需要另一套切法。",
           "try.title": "试一下",
           "try.body":
             "Claude Code 插件市场路径。npm 与 opencode 路径也可用 —— 完整说明见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/README.zh-CN.md\" target=\"_blank\" rel=\"noopener\">README</a>,完整设计见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/docs/SPEC.md\" target=\"_blank\" rel=\"noopener\">docs/SPEC.md</a>。",

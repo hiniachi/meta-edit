@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#1a1130"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- decorative grid of small squares to evoke the 18-tool grid -->
+  <g opacity="0.10" fill="#7c5cff">
+    <rect x="720" y="80"  width="80" height="46" rx="6"/>
+    <rect x="820" y="80"  width="80" height="46" rx="6"/>
+    <rect x="920" y="80"  width="80" height="46" rx="6"/>
+    <rect x="1020" y="80" width="80" height="46" rx="6"/>
+    <rect x="720" y="140" width="80" height="46" rx="6"/>
+    <rect x="820" y="140" width="80" height="46" rx="6"/>
+    <rect x="920" y="140" width="80" height="46" rx="6"/>
+    <rect x="1020" y="140" width="80" height="46" rx="6"/>
+    <rect x="720" y="200" width="80" height="46" rx="6"/>
+    <rect x="820" y="200" width="80" height="46" rx="6"/>
+    <rect x="920" y="200" width="80" height="46" rx="6"/>
+    <rect x="1020" y="200" width="80" height="46" rx="6"/>
+    <rect x="720" y="260" width="80" height="46" rx="6"/>
+    <rect x="820" y="260" width="80" height="46" rx="6"/>
+    <rect x="920" y="260" width="80" height="46" rx="6"/>
+    <rect x="1020" y="260" width="80" height="46" rx="6"/>
+    <rect x="820" y="320" width="80" height="46" rx="6"/>
+    <rect x="920" y="320" width="80" height="46" rx="6"/>
+  </g>
+  <!-- brand mark -->
+  <rect x="80" y="80" width="100" height="100" rx="22" fill="url(#accent)"/>
+  <path d="M115 153V103l14 22 14-22v50M158 103h8v50h-8z"
+        stroke="#fff" stroke-width="6" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="210" y="155"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="64" font-weight="700" fill="#e6edf3"
+        letter-spacing="-1">meta-edit</text>
+  <!-- main title -->
+  <text x="80" y="320"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="76" font-weight="700" fill="#ffffff"
+        letter-spacing="-2">Type the action,</text>
+  <text x="80" y="410"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="76" font-weight="700" fill="#a78bfa"
+        letter-spacing="-2">not the check.</text>
+  <!-- subtitle -->
+  <text x="80" y="495"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="28" font-weight="400" fill="#9aa6b2">
+    Eighteen typed edits for AI coding agents.
+  </text>
+  <text x="80" y="535"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="28" font-weight="400" fill="#9aa6b2">
+    Obligations on the tool, not in the prompt.
+  </text>
+  <!-- footer line -->
+  <line x1="80" y1="585" x2="1120" y2="585" stroke="#2a313c" stroke-width="2"/>
+  <text x="80" y="610"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="20" fill="#7c5cff">github.com/hiniachi/meta-edit</text>
+  <text x="1120" y="610" text-anchor="end"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="20" fill="#9aa6b2">MCP · Claude Code · opencode</text>
+</svg>
