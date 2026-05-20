@@ -1511,10 +1511,13 @@ Each declaration produces two records:
  "target_file":"src/foo.ts",
  "rationale":"...",
  "risk_level":"medium",
+ "target":"prod",
  "test_files":["tests/foo.test.ts"],
  "binding":[{"file":"src/foo.ts","before_sha256":"..."}],
  "token":"met_20260502_a3f9b2..."}
 ```
+
+The `target` field is `"prod"` or `"test"` on every impl tool (15 SQLite-derived + `edit_cosmetic`) and is omitted on `edit_docs_only` (documentation has its own surface; the prod/test split does not apply). Persisting it on the issued record is what lets audit analysis split a kind's edits into prod vs test rather than collapsing them into a single bucket. The paired `target: "test"` declaration appears as its own `issued` record with the same `kind` and a different `target_file`.
 
 2. **Consumed** — written when the deny-raw-edit hook authorizes a native write (PreToolUse, before the write executes). "Consumed" denotes hook authorization; write success is not part of the audit log (see §5).
 

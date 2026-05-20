@@ -5223,6 +5223,7 @@ var IssuedEntrySchema = exports_external.object({
   target_file: exports_external.string(),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
+  target: EditTargetSchema.optional(),
   test_files: exports_external.array(exports_external.string()),
   binding: exports_external.array(BindingEntrySchema).min(1),
   token: exports_external.string()
@@ -5239,6 +5240,7 @@ var RejectedEntrySchema = exports_external.object({
   phase: exports_external.literal("rejected"),
   kind: exports_external.string(),
   target_file: exports_external.string(),
+  target: EditTargetSchema.optional(),
   audit_error: exports_external.string().min(1)
 });
 var EditLogEntrySchema = exports_external.discriminatedUnion("phase", [
@@ -7723,4 +7725,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=A8D438F7CF59598464756E2164756E21
+//# debugId=1820BEF5F68DB4CD64756E2164756E21

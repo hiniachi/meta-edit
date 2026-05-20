@@ -17837,6 +17837,7 @@ var IssuedEntrySchema = exports_external.object({
   target_file: exports_external.string(),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
+  target: EditTargetSchema.optional(),
   test_files: exports_external.array(exports_external.string()),
   binding: exports_external.array(BindingEntrySchema).min(1),
   token: exports_external.string()
@@ -17853,6 +17854,7 @@ var RejectedEntrySchema = exports_external.object({
   phase: exports_external.literal("rejected"),
   kind: exports_external.string(),
   target_file: exports_external.string(),
+  target: EditTargetSchema.optional(),
   audit_error: exports_external.string().min(1)
 });
 var EditLogEntrySchema = exports_external.discriminatedUnion("phase", [
@@ -18141,6 +18143,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       phase: "rejected",
       kind: toolName,
       target_file: args.target_file,
+      ...args.target !== undefined ? { target: args.target } : {},
       audit_error: auditMessage
     };
     const auditError2 = appendRejectedSafely(log, rejected);
@@ -18174,6 +18177,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       phase: "rejected",
       kind: toolName,
       target_file: args.target_file,
+      ...args.target !== undefined ? { target: args.target } : {},
       audit_error: `grants.issue failed: ${reason}`
     };
     const auditError2 = appendRejectedSafely(log, rejected);
@@ -18193,6 +18197,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     target_file: args.target_file,
     rationale: args.rationale,
     risk_level: args.risk_level,
+    ...args.target !== undefined ? { target: args.target } : {},
     test_files: args.test_files,
     binding: bindings.map((b) => ({
       file: b.canonical,
@@ -19664,4 +19669,4 @@ export {
   main
 };
 
-//# debugId=4780849BA25F515C64756E2164756E21
+//# debugId=D27C2AD1AC47DD1864756E2164756E21

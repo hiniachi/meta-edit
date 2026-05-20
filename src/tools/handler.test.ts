@@ -118,6 +118,67 @@ describe("makeIssuingHandler — successful declaration", () => {
     }
   });
 
+  it("persists `target` on the issued log entry for impl tool calls (v0.5.0 audit contract)", async () => {
+    // v0.5.0 / Codex P2 #80: the whole point of the impl × target
+    // reshape is that prod/test intent is visible in the audit log
+    // per impl kind. validateRequest accepts `target` but the log
+    // round-trip would silently drop it without this assertion.
+    writeFile("src/foo.ts", "hello\n");
+    writeFile("tests/foo.test.ts", "describe('foo', ()=>{})\n");
+    const { handler, log } = makeHandler();
+
+    await handler("edit_boundary_condition", modifyRequest({ target: "prod" }));
+    await handler(
+      "edit_boundary_condition",
+      modifyRequest({
+        target: "test",
+        target_file: "tests/foo.test.ts",
+        test_files: [],
+      }),
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(2);
+    const issued = entries.filter((e) => e.phase === "issued");
+    expect(issued.length).toBe(2);
+    // Find by target_file so the assertion is independent of write order.
+    const prodEntry = issued.find(
+      (e) => e.phase === "issued" && e.target_file === "src/foo.ts",
+    );
+    const testEntry = issued.find(
+      (e) => e.phase === "issued" && e.target_file === "tests/foo.test.ts",
+    );
+    expect(prodEntry).toBeDefined();
+    expect(testEntry).toBeDefined();
+    if (prodEntry?.phase === "issued") {
+      expect(prodEntry.target).toBe("prod");
+      expect(prodEntry.kind).toBe("edit_boundary_condition");
+    }
+    if (testEntry?.phase === "issued") {
+      expect(testEntry.target).toBe("test");
+      expect(testEntry.kind).toBe("edit_boundary_condition");
+    }
+  });
+
+  it("omits `target` on the issued log entry for edit_docs_only (no prod/test split)", async () => {
+    writeFile("docs/a.md", "alpha\n");
+    const { handler, log } = makeHandler();
+    await handler("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "doc tweak",
+      risk_level: "low",
+      test_files: [],
+    } as EditToolRequest);
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    const entry = entries[0]!;
+    expect(entry.phase).toBe("issued");
+    if (entry.phase === "issued") {
+      expect(entry.target).toBeUndefined();
+      expect(entry.kind).toBe("edit_docs_only");
+    }
+  });
+
   it("writes binding[].before_sha256 reflecting the disk state at declaration time", async () => {
     writeFile("src/foo.ts", "INITIAL CONTENT\n");
     const { handler, grants } = makeHandler();

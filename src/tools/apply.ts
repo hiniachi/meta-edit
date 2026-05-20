@@ -78,6 +78,7 @@ async function issueOnce(
       phase: "rejected",
       kind: toolName,
       target_file: args.target_file,
+      ...(args.target !== undefined ? { target: args.target } : {}),
       audit_error: auditMessage,
     };
     const auditError = appendRejectedSafely(log, rejected);
@@ -118,6 +119,7 @@ async function issueOnce(
       phase: "rejected",
       kind: toolName,
       target_file: args.target_file,
+      ...(args.target !== undefined ? { target: args.target } : {}),
       audit_error: `grants.issue failed: ${reason}`,
     };
     const auditError = appendRejectedSafely(log, rejected);
@@ -140,6 +142,11 @@ async function issueOnce(
     target_file: args.target_file,
     rationale: args.rationale,
     risk_level: args.risk_level,
+    // v0.5.0: persist the prod/test target so audit analysis can split
+    // a kind's edits into prod vs test (the reshape's core motivation).
+    // edit_docs_only never sets target, so this stays absent for that
+    // tool; impl tools always have it post-validation.
+    ...(args.target !== undefined ? { target: args.target } : {}),
     test_files: args.test_files,
     binding: bindings.map((b) => ({
       file: b.canonical,

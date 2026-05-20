@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { RiskLevelSchema } from "../tools/common.js";
+import { EditTargetSchema, RiskLevelSchema } from "../tools/common.js";
 
 // Append-only JSON Lines log of every typed_edit declaration and its
 // downstream consumption. Per docs/SPEC.md §6 (Case C, v0.2):
@@ -49,6 +49,15 @@ export const IssuedEntrySchema = z.object({
   target_file: z.string(),
   rationale: z.string(),
   risk_level: RiskLevelSchema,
+  // v0.5.0: `target` is the prod/test surface flag declared by the agent
+  // on every impl tool (15 SQLite-derived + edit_cosmetic). Optional in
+  // the schema because edit_docs_only never carries it. Persisting it
+  // here is what makes audit analysis able to split a kind's edits into
+  // prod vs test rather than collapsing them into one bucket — the whole
+  // point of the v0.5.0 reshape (the previous edit_test_only_change
+  // surface absorbed ~33% of declarations into a generic test bucket
+  // with no kind-specific risk weight).
+  target: EditTargetSchema.optional(),
   test_files: z.array(z.string()),
   binding: z.array(BindingEntrySchema).min(1),
   token: z.string(),
@@ -69,6 +78,13 @@ export const RejectedEntrySchema = z.object({
   phase: z.literal("rejected"),
   kind: z.string(),
   target_file: z.string(),
+  // v0.5.0: optional for the same reason as IssuedEntry — when the
+  // agent declared a target (even one whose validation just failed for
+  // an unrelated reason), audit analysis benefits from seeing the
+  // intent. Omitted when the agent never supplied the field (the
+  // common cause of rejection-without-target is the new "target field
+  // is required" validation itself).
+  target: EditTargetSchema.optional(),
   // SPEC §6: rejected records carry a non-empty audit_error so audit
   // consumers always have an actionable reason. (Codex review: LOW,
   // in-scope under Article 3.)
