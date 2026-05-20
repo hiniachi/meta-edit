@@ -61,6 +61,37 @@ describe("formatSummary", () => {
     const text = formatSummary([], new Date("2026-04-30T00:00:00+09:00"));
     expect(text).toContain("since 2026-04-29T15:00:00.000Z");
   });
+
+  it("splits each impl tool's count by prod/test target (v0.5.0)", () => {
+    // The reshape's audit payoff: every impl kind shows its prod and
+    // test edits side-by-side so a 1:1 production:test ratio is visible
+    // in the summary without leaving the kind's row.
+    const entries: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0001", kind: "edit_boundary_condition", target: "prod", target_file: "src/a.ts" }),
+      issued({ edit_id: "edit_20260430_0002", kind: "edit_boundary_condition", target: "prod", target_file: "src/b.ts" }),
+      issued({ edit_id: "edit_20260430_0003", kind: "edit_boundary_condition", target: "test", target_file: "tests/a.test.ts" }),
+    ];
+    const text = formatSummary(entries, undefined);
+    expect(text).toContain("By tool (prod / test counts shown for impl tools)");
+    expect(text).toMatch(/edit_boundary_condition\s+3 \(prod 2 \/ test 1\)/);
+  });
+
+  it("omits prod/test split for edit_docs_only (no target field)", () => {
+    const entries: EditLogEntry[] = [
+      issued({
+        edit_id: "edit_20260430_0001",
+        kind: "edit_docs_only",
+        target: undefined,
+        target_file: "docs/a.md",
+        test_files: [],
+      }),
+    ];
+    const text = formatSummary(entries, undefined);
+    // edit_docs_only row should be present but WITHOUT a "(prod X / test Y)"
+    // segment — its row collapses to the legacy flat format.
+    expect(text).toMatch(/edit_docs_only\s+1 {2}\(100%\)/);
+    expect(text).not.toMatch(/edit_docs_only\s+\d+ \(prod/);
+  });
 });
 
 // Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter

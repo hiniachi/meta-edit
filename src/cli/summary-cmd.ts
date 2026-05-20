@@ -1,6 +1,6 @@
 import { EditLog, type EditLogEntry } from "../state/edit-log.js";
 import type { RiskLevel } from "../tools/common.js";
-import { TOOL_NAMES } from "../tools/descriptions.js";
+import { TOOL_NAMES, TOOLS_REQUIRING_TARGET } from "../tools/descriptions.js";
 import { parseStrictSince } from "./parse-since.js";
 
 /**
@@ -89,6 +89,18 @@ export function formatSummary(
     (e): e is Extract<EditLogEntry, { phase: "issued" }> => e.phase === "issued",
   );
   const byTool = countBy(issuedEntries, (e) => stripAnsi(e.kind));
+  // v0.5.0: split each kind's count by the persisted prod/test target so
+  // the audit reflects the per-kind risk surface the reshape introduced.
+  // edit_docs_only is the only tool without a target — its bucket stays
+  // flat.
+  const byToolTarget = new Map<string, { prod: number; test: number }>();
+  for (const e of issuedEntries) {
+    const k = stripAnsi(e.kind);
+    const slot = byToolTarget.get(k) ?? { prod: 0, test: 0 };
+    if (e.target === "test") slot.test++;
+    else if (e.target === "prod") slot.prod++;
+    byToolTarget.set(k, slot);
+  }
   const byRisk = countBy(issuedEntries, (e) => e.risk_level);
   const byFile = countBy(issuedEntries, (e) => stripAnsi(e.target_file));
 
@@ -101,7 +113,7 @@ export function formatSummary(
   lines.push(`  Rejected (validation failure): ${rejectedCount}`);
   lines.push("");
 
-  lines.push("By tool:");
+  lines.push("By tool (prod / test counts shown for impl tools):");
   const toolCounts = new Map<string, number>();
   for (const name of TOOL_NAMES) toolCounts.set(name, 0);
   for (const [name, count] of byTool.entries()) toolCounts.set(name, count);
@@ -110,8 +122,14 @@ export function formatSummary(
     if (count === 0 && name !== "edit_policy_change") {
       continue;
     }
+    const requiresTarget = (TOOLS_REQUIRING_TARGET as readonly string[]).includes(name);
+    const split = byToolTarget.get(name);
+    const targetSuffix =
+      requiresTarget && split !== undefined
+        ? ` (prod ${split.prod} / test ${split.test})`
+        : "";
     lines.push(
-      `  ${name.padEnd(28)}${String(count).padStart(4)}  (${pct(count, issuedEntries.length)})`,
+      `  ${name.padEnd(28)}${String(count).padStart(4)}${targetSuffix}  (${pct(count, issuedEntries.length)})`,
     );
   }
   lines.push("");

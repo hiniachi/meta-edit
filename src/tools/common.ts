@@ -215,7 +215,7 @@ export function validateRequest(
   // ---- 0. Repo-root sentinel (A1 / issue 1530) ------------------------
   // The MCP server intentionally boots even when the configured root
   // lacks a `.git` / `.jj` directory, so ListTools can inject the
-  // eighteen tool descriptions into the agent's context. The actual
+  // seventeen tool descriptions into the agent's context. The actual
   // typed_edit calls, however, must refuse to run against a non-repo
   // root — silently accepting them would write into an unrelated
   // directory under `process.cwd()`, defeating the protected-path /

@@ -18856,6 +18856,12 @@ function filterEntries(entries, filters) {
       if (e.risk_level !== filters.risk)
         return false;
     }
+    if (filters.target !== undefined) {
+      if (e.phase === "consumed")
+        return false;
+      if (e.target !== filters.target)
+        return false;
+    }
     if (filters.since !== undefined) {
       if (ts.getTime() < filters.since.getTime())
         return false;
@@ -18867,6 +18873,7 @@ function parseLogArgs(argv) {
   const filters = {};
   let toolSeen = false;
   let riskSeen = false;
+  let targetSeen = false;
   let sinceSeen = false;
   for (let i = 0;i < argv.length; i++) {
     const arg = argv[i];
@@ -18889,6 +18896,17 @@ function parseLogArgs(argv) {
         return { ok: false, error: `--risk must be one of low|medium|high|critical (got "${v}")` };
       }
       filters.risk = v;
+    } else if (arg === "--target") {
+      if (targetSeen)
+        return { ok: false, error: "--target may only appear once" };
+      targetSeen = true;
+      const v = argv[++i];
+      if (v === undefined)
+        return { ok: false, error: "--target requires a value" };
+      if (v !== "prod" && v !== "test") {
+        return { ok: false, error: `--target must be prod or test (got "${v}")` };
+      }
+      filters.target = v;
     } else if (arg === "--since") {
       if (sinceSeen)
         return { ok: false, error: "--since may only appear once" };
@@ -18958,6 +18976,16 @@ function formatSummary(entries, since) {
   const sinceLabel = since === undefined ? "all time" : `since ${formatIso(since)}`;
   const issuedEntries = entries.filter((e) => e.phase === "issued");
   const byTool = countBy(issuedEntries, (e) => stripAnsi(e.kind));
+  const byToolTarget = new Map;
+  for (const e of issuedEntries) {
+    const k = stripAnsi(e.kind);
+    const slot = byToolTarget.get(k) ?? { prod: 0, test: 0 };
+    if (e.target === "test")
+      slot.test++;
+    else if (e.target === "prod")
+      slot.prod++;
+    byToolTarget.set(k, slot);
+  }
   const byRisk = countBy(issuedEntries, (e) => e.risk_level);
   const byFile = countBy(issuedEntries, (e) => stripAnsi(e.target_file));
   const lines = [];
@@ -18968,7 +18996,7 @@ function formatSummary(entries, since) {
   lines.push(`  Abandoned (issued, never authorized): ${abandonedCount}`);
   lines.push(`  Rejected (validation failure): ${rejectedCount}`);
   lines.push("");
-  lines.push("By tool:");
+  lines.push("By tool (prod / test counts shown for impl tools):");
   const toolCounts = new Map;
   for (const name of TOOL_NAMES)
     toolCounts.set(name, 0);
@@ -18979,7 +19007,10 @@ function formatSummary(entries, since) {
     if (count === 0 && name !== "edit_policy_change") {
       continue;
     }
-    lines.push(`  ${name.padEnd(28)}${String(count).padStart(4)}  (${pct(count, issuedEntries.length)})`);
+    const requiresTarget = TOOLS_REQUIRING_TARGET.includes(name);
+    const split = byToolTarget.get(name);
+    const targetSuffix = requiresTarget && split !== undefined ? ` (prod ${split.prod} / test ${split.test})` : "";
+    lines.push(`  ${name.padEnd(28)}${String(count).padStart(4)}${targetSuffix}  (${pct(count, issuedEntries.length)})`);
   }
   lines.push("");
   lines.push("By risk_level:");
@@ -19452,7 +19483,7 @@ function parseOpencodeArgs(argv) {
 // src/docs-urls.ts
 var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 var SPEC_URL = `${BASE}/docs/SPEC.md`;
-var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-eighteen-tool-descriptions`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-seventeen-tool-descriptions`;
 var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/cli/help-cmd.ts
@@ -19533,7 +19564,7 @@ function renderToolHelp(name) {
 
 ${TOOL_DESCRIPTIONS[name]}
 
-See ${SPEC_TOOLS_URL} for all eighteen tool descriptions.
+See ${SPEC_TOOLS_URL} for all seventeen tool descriptions.
 `;
 }
 
@@ -19669,4 +19700,4 @@ export {
   main
 };
 
-//# debugId=D27C2AD1AC47DD1864756E2164756E21
+//# debugId=799B658C7A611B0264756E2164756E21
