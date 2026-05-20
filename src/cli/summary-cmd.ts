@@ -124,10 +124,26 @@ export function formatSummary(
     }
     const requiresTarget = (TOOLS_REQUIRING_TARGET as readonly string[]).includes(name);
     const split = byToolTarget.get(name);
-    const targetSuffix =
-      requiresTarget && split !== undefined
-        ? ` (prod ${split.prod} / test ${split.test})`
-        : "";
+    // v0.5.0 / Codex P2 #80b: pre-v0.5 audit logs have impl-tool
+    // issued records without `target`. Counting them in the prod/test
+    // split would misrepresent their nature (they were never declared
+    // with target tracking). Three cases:
+    //   - all entries have target: show "(prod P / test T)".
+    //   - mixed (some legacy, some v0.5+): show
+    //     "(prod P / test T / pre-v0.5 L)" so the legacy bucket is
+    //     explicit and the suffix's numbers add to `count`.
+    //   - all entries are legacy (prod + test == 0): omit the suffix
+    //     entirely so the row matches the pre-v0.5 flat-count format.
+    const prod = split?.prod ?? 0;
+    const test = split?.test ?? 0;
+    const legacy = count - prod - test;
+    let targetSuffix = "";
+    if (requiresTarget && (prod > 0 || test > 0)) {
+      targetSuffix =
+        legacy > 0
+          ? ` (prod ${prod} / test ${test} / pre-v0.5 ${legacy})`
+          : ` (prod ${prod} / test ${test})`;
+    }
     lines.push(
       `  ${name.padEnd(28)}${String(count).padStart(4)}${targetSuffix}  (${pct(count, issuedEntries.length)})`,
     );

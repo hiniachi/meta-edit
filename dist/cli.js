@@ -19009,7 +19009,13 @@ function formatSummary(entries, since) {
     }
     const requiresTarget = TOOLS_REQUIRING_TARGET.includes(name);
     const split = byToolTarget.get(name);
-    const targetSuffix = requiresTarget && split !== undefined ? ` (prod ${split.prod} / test ${split.test})` : "";
+    const prod = split?.prod ?? 0;
+    const test = split?.test ?? 0;
+    const legacy = count - prod - test;
+    let targetSuffix = "";
+    if (requiresTarget && (prod > 0 || test > 0)) {
+      targetSuffix = legacy > 0 ? ` (prod ${prod} / test ${test} / pre-v0.5 ${legacy})` : ` (prod ${prod} / test ${test})`;
+    }
     lines.push(`  ${name.padEnd(28)}${String(count).padStart(4)}${targetSuffix}  (${pct(count, issuedEntries.length)})`);
   }
   lines.push("");
@@ -19700,4 +19706,4 @@ export {
   main
 };
 
-//# debugId=799B658C7A611B0264756E2164756E21
+//# debugId=FCD08C838206FF2864756E2164756E21
