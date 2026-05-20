@@ -46,7 +46,16 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
+          # No `registry-url`. Setting it makes setup-node write an
+          # .npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # and export `NODE_AUTH_TOKEN=XXXXX-XXXXX-XXXXX-XXXXX` as a
+          # placeholder. npm then treats the placeholder as a valid
+          # bearer token, never falls through to OIDC token exchange,
+          # and the npm registry returns `404 Not Found` (its opaque
+          # response for "this token has no write access to this
+          # package"). Trusted Publisher OIDC reads the registry from
+          # the package.json scope and authenticates via OIDC token
+          # exchange directly — no .npmrc shim required.
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
