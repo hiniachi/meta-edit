@@ -1,5 +1,5 @@
 import { EditLog, type EditLogEntry } from "../state/edit-log.js";
-import type { RiskLevel } from "../tools/common.js";
+import type { EditTarget, RiskLevel } from "../tools/common.js";
 import { parseStrictSince } from "./parse-since.js";
 
 export type LogFilters = {
@@ -11,6 +11,12 @@ export type LogFilters = {
   tool?: string | undefined;
   /** Filter on risk_level. Only issued records carry it. */
   risk?: RiskLevel | undefined;
+  /**
+   * Filter on the v0.5.0 prod/test target. Only issued/rejected impl-tool
+   * records carry it; edit_docs_only entries have no target and are dropped
+   * when this filter is set. Consumed records carry no target either.
+   */
+  target?: EditTarget | undefined;
   /** Inclusive lower bound on the record `ts` field. */
   since?: Date | undefined;
 };
@@ -55,6 +61,14 @@ export function filterEntries(
       if (e.phase !== "issued") return false;
       if (e.risk_level !== filters.risk) return false;
     }
+    if (filters.target !== undefined) {
+      // target only on issued/rejected impl-tool records (15 SQLite +
+      // edit_cosmetic). consumed records carry no target; edit_docs_only
+      // records have target absent by design; both are filtered out when
+      // --target is in play.
+      if (e.phase === "consumed") return false;
+      if (e.target !== filters.target) return false;
+    }
     if (filters.since !== undefined) {
       if (ts.getTime() < filters.since.getTime()) return false;
     }
@@ -72,6 +86,7 @@ export function parseLogArgs(argv: string[]): {
   const filters: LogFilters = {};
   let toolSeen = false;
   let riskSeen = false;
+  let targetSeen = false;
   let sinceSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -90,6 +105,15 @@ export function parseLogArgs(argv: string[]): {
         return { ok: false, error: `--risk must be one of low|medium|high|critical (got "${v}")` };
       }
       filters.risk = v;
+    } else if (arg === "--target") {
+      if (targetSeen) return { ok: false, error: "--target may only appear once" };
+      targetSeen = true;
+      const v = argv[++i];
+      if (v === undefined) return { ok: false, error: "--target requires a value" };
+      if (v !== "prod" && v !== "test") {
+        return { ok: false, error: `--target must be prod or test (got "${v}")` };
+      }
+      filters.target = v;
     } else if (arg === "--since") {
       if (sinceSeen) return { ok: false, error: "--since may only appear once" };
       sinceSeen = true;

@@ -116,6 +116,27 @@ describe("filterEntries", () => {
     expect(r.length).toBe(1);
     expect(r[0]?.phase).toBe("issued");
   });
+
+  it("filters by --target prod | test (v0.5.0)", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0040", target: "prod" }),
+      issued({ edit_id: "edit_20260430_0041", target: "test", target_file: "tests/a.test.ts", test_files: [] }),
+      issued({
+        edit_id: "edit_20260430_0042",
+        kind: "edit_docs_only",
+        target: undefined,
+        target_file: "docs/a.md",
+        test_files: [],
+      }),
+    ];
+    const onlyProd = filterEntries(mixed, { target: "prod" });
+    expect(onlyProd.length).toBe(1);
+    expect(onlyProd[0]?.phase === "issued" && onlyProd[0]?.target).toBe("prod");
+    const onlyTest = filterEntries(mixed, { target: "test" });
+    expect(onlyTest.length).toBe(1);
+    expect(onlyTest[0]?.phase === "issued" && onlyTest[0]?.target).toBe("test");
+    // edit_docs_only has no target — it must be excluded from both.
+  });
 });
 
 describe("parseLogArgs", () => {
@@ -136,6 +157,25 @@ describe("parseLogArgs", () => {
 
   it("rejects an invalid risk level", () => {
     const r = parseLogArgs(["--risk", "extreme"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("parses --target prod and --target test", () => {
+    const a = parseLogArgs(["--target", "prod"]);
+    expect(a.ok).toBe(true);
+    if (a.ok) expect(a.filters.target).toBe("prod");
+    const b = parseLogArgs(["--target", "test"]);
+    expect(b.ok).toBe(true);
+    if (b.ok) expect(b.filters.target).toBe("test");
+  });
+
+  it("rejects an invalid --target value", () => {
+    const r = parseLogArgs(["--target", "both"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects duplicate --target flags", () => {
+    const r = parseLogArgs(["--target", "prod", "--target", "test"]);
     expect(r.ok).toBe(false);
   });
 

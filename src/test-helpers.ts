@@ -64,6 +64,11 @@ export function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
     target_file: "src/foo.ts",
     rationale: "test",
     risk_level: "medium",
+    // v0.5.0: impl-tool fixtures default to target: "prod" so existing
+    // tests exercise the realistic shape (validateRequest requires
+    // `target` on every impl tool). edit_docs_only fixtures must
+    // override with `target: undefined` since docs has no target field.
+    target: "prod",
     test_files: ["tests/foo.test.ts"],
     binding: [{ file: "src/foo.ts", before_sha256: HEX64_A }],
     token: "met_20260430_0123456789",

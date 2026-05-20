@@ -61,6 +61,77 @@ describe("formatSummary", () => {
     const text = formatSummary([], new Date("2026-04-30T00:00:00+09:00"));
     expect(text).toContain("since 2026-04-29T15:00:00.000Z");
   });
+
+  it("splits each impl tool's count by prod/test target (v0.5.0)", () => {
+    // The reshape's audit payoff: every impl kind shows its prod and
+    // test edits side-by-side so a 1:1 production:test ratio is visible
+    // in the summary without leaving the kind's row.
+    const entries: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0001", kind: "edit_boundary_condition", target: "prod", target_file: "src/a.ts" }),
+      issued({ edit_id: "edit_20260430_0002", kind: "edit_boundary_condition", target: "prod", target_file: "src/b.ts" }),
+      issued({ edit_id: "edit_20260430_0003", kind: "edit_boundary_condition", target: "test", target_file: "tests/a.test.ts" }),
+    ];
+    const text = formatSummary(entries, undefined);
+    expect(text).toContain("By tool (prod / test counts shown for impl tools)");
+    expect(text).toMatch(/edit_boundary_condition\s+3 \(prod 2 \/ test 1\)/);
+  });
+
+  it("omits prod/test split for edit_docs_only (no target field)", () => {
+    const entries: EditLogEntry[] = [
+      issued({
+        edit_id: "edit_20260430_0001",
+        kind: "edit_docs_only",
+        target: undefined,
+        target_file: "docs/a.md",
+        test_files: [],
+      }),
+    ];
+    const text = formatSummary(entries, undefined);
+    // edit_docs_only row should be present but WITHOUT a "(prod X / test Y)"
+    // segment — its row collapses to the legacy flat format.
+    expect(text).toMatch(/edit_docs_only\s+1 {2}\(100%\)/);
+    expect(text).not.toMatch(/edit_docs_only\s+\d+ \(prod/);
+  });
+
+  it("omits prod/test split for all-legacy impl-tool entries (pre-v0.5 audit logs)", () => {
+    // Codex P2 #80b: pre-v0.5 audit entries on impl tools have no
+    // `target` field. The summary must not print "(prod 0 / test 0)"
+    // for them — that would mislead audit analysis into thinking
+    // target tracking was active.
+    const entries: EditLogEntry[] = [
+      issued({
+        edit_id: "edit_20260430_0001",
+        kind: "edit_boundary_condition",
+        target: undefined,
+        target_file: "src/a.ts",
+      }),
+      issued({
+        edit_id: "edit_20260430_0002",
+        kind: "edit_boundary_condition",
+        target: undefined,
+        target_file: "src/b.ts",
+      }),
+    ];
+    const text = formatSummary(entries, undefined);
+    expect(text).toMatch(/edit_boundary_condition\s+2 {2}\(100%\)/);
+    expect(text).not.toMatch(/edit_boundary_condition\s+\d+ \(prod/);
+  });
+
+  it("renders a pre-v0.5 bucket when impl-tool entries mix legacy and v0.5+", () => {
+    // Codex P2 #80b: during the v0.4→v0.5 upgrade an impl-tool kind
+    // can have both legacy (target absent) and v0.5+ (target present)
+    // entries. The suffix must surface the legacy count explicitly so
+    // prod + test + pre-v0.5 == total.
+    const entries: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260430_0001", kind: "edit_boundary_condition", target: "prod", target_file: "src/a.ts" }),
+      issued({ edit_id: "edit_20260430_0002", kind: "edit_boundary_condition", target: "test", target_file: "tests/a.test.ts" }),
+      issued({ edit_id: "edit_20260430_0003", kind: "edit_boundary_condition", target: undefined, target_file: "src/legacy.ts" }),
+    ];
+    const text = formatSummary(entries, undefined);
+    expect(text).toMatch(
+      /edit_boundary_condition\s+3 \(prod 1 \/ test 1 \/ pre-v0\.5 1\)/,
+    );
+  });
 });
 
 // Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter

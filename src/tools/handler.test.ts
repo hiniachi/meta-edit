@@ -62,6 +62,7 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     target_file: "src/foo.ts",
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
+    target: "prod",
     test_files: ["tests/foo.test.ts"],
     ...overrides,
   };
@@ -114,6 +115,67 @@ describe("makeIssuingHandler — successful declaration", () => {
       expect(entry.token).toBe(result.token);
       expect(entry.binding[0]?.file).toBe("src/foo.ts");
       expect(entry.binding[0]?.before_sha256).toBe(sha256Hex("hello\n"));
+    }
+  });
+
+  it("persists `target` on the issued log entry for impl tool calls (v0.5.0 audit contract)", async () => {
+    // v0.5.0 / Codex P2 #80: the whole point of the impl × target
+    // reshape is that prod/test intent is visible in the audit log
+    // per impl kind. validateRequest accepts `target` but the log
+    // round-trip would silently drop it without this assertion.
+    writeFile("src/foo.ts", "hello\n");
+    writeFile("tests/foo.test.ts", "describe('foo', ()=>{})\n");
+    const { handler, log } = makeHandler();
+
+    await handler("edit_boundary_condition", modifyRequest({ target: "prod" }));
+    await handler(
+      "edit_boundary_condition",
+      modifyRequest({
+        target: "test",
+        target_file: "tests/foo.test.ts",
+        test_files: [],
+      }),
+    );
+
+    const entries = log.readAll();
+    expect(entries.length).toBe(2);
+    const issued = entries.filter((e) => e.phase === "issued");
+    expect(issued.length).toBe(2);
+    // Find by target_file so the assertion is independent of write order.
+    const prodEntry = issued.find(
+      (e) => e.phase === "issued" && e.target_file === "src/foo.ts",
+    );
+    const testEntry = issued.find(
+      (e) => e.phase === "issued" && e.target_file === "tests/foo.test.ts",
+    );
+    expect(prodEntry).toBeDefined();
+    expect(testEntry).toBeDefined();
+    if (prodEntry?.phase === "issued") {
+      expect(prodEntry.target).toBe("prod");
+      expect(prodEntry.kind).toBe("edit_boundary_condition");
+    }
+    if (testEntry?.phase === "issued") {
+      expect(testEntry.target).toBe("test");
+      expect(testEntry.kind).toBe("edit_boundary_condition");
+    }
+  });
+
+  it("omits `target` on the issued log entry for edit_docs_only (no prod/test split)", async () => {
+    writeFile("docs/a.md", "alpha\n");
+    const { handler, log } = makeHandler();
+    await handler("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "doc tweak",
+      risk_level: "low",
+      test_files: [],
+    } as EditToolRequest);
+    const entries = log.readAll();
+    expect(entries.length).toBe(1);
+    const entry = entries[0]!;
+    expect(entry.phase).toBe("issued");
+    if (entry.phase === "issued") {
+      expect(entry.target).toBeUndefined();
+      expect(entry.kind).toBe("edit_docs_only");
     }
   });
 
@@ -185,11 +247,15 @@ describe("makeIssuingHandler — validation rejection", () => {
     );
   });
 
-  it("rejects non-empty test_files for edit_test_only_change", async () => {
-    writeFile("src/foo.ts", "hello\n");
+  it("rejects non-empty test_files for impl tool with target=test", async () => {
+    writeFile("tests/foo.test.ts", "x\n");
     await expectRejection(
-      "edit_test_only_change",
-      modifyRequest({ test_files: ["tests/foo.test.ts"] }),
+      "edit_boundary_condition",
+      modifyRequest({
+        target_file: "tests/foo.test.ts",
+        target: "test",
+        test_files: ["tests/foo.test.ts"],
+      }),
       (w) => w.some((s) => s.includes("test_files")),
     );
   });
@@ -264,7 +330,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
         risk_level: "low",
         test_files: [],
         additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
-      },
+      } as EditToolRequest,
     );
     expect(result.warnings).toEqual([]);
     expect(result.token.length).toBeGreaterThan(0);
@@ -292,7 +358,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
       risk_level: "low",
       test_files: [],
       additional_files: additional,
-    });
+    } as EditToolRequest);
     // v0.4.2: non-existent additional_files entries are valid forward
     // declarations; each binds sha256("") just like target_file.
     expect(result.warnings).toEqual([]);

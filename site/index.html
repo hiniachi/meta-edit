@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>meta-edit — eighteen typed edit tools for AI coding agents (MCP)</title>
+    <title>meta-edit — seventeen typed edit tools for AI coding agents (MCP)</title>
     <meta
       name="description"
-      content="meta-edit is an MCP server that puts editing obligations on the tool surface — not in the prompt. One generic Edit is split into eighteen kind-specific edit tools, each carrying its testing obligations in its own description. A general pattern for AI actions."
+      content="meta-edit is an MCP server that puts editing obligations on the tool surface — not in the prompt. One generic Edit is split into seventeen kind-specific edit tools, each carrying its testing obligations in its own description. A general pattern for AI actions."
     />
     <meta
       name="keywords"
@@ -31,7 +31,7 @@
     <meta property="og:title" content="meta-edit — type the action, not the check" />
     <meta
       property="og:description"
-      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Eighteen typed edits for AI coding agents."
+      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Seventeen typed edits for AI coding agents."
     />
     <meta property="og:image" content="https://hiniachi.github.io/meta-edit/og.svg" />
     <meta property="og:image:type" content="image/svg+xml" />
@@ -47,7 +47,7 @@
     <meta name="twitter:title" content="meta-edit — type the action, not the check" />
     <meta
       name="twitter:description"
-      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Eighteen typed edits for AI coding agents."
+      content="An MCP server that puts editing obligations on the tool surface — not in the prompt. Seventeen typed edits for AI coding agents."
     />
     <meta name="twitter:image" content="https://hiniachi.github.io/meta-edit/og.svg" />
     <meta name="twitter:image:alt" content="meta-edit — type the action, not the check." />
@@ -60,11 +60,11 @@
             "@type": "SoftwareApplication",
             "name": "meta-edit",
             "alternateName": "@hiniachi/meta-edit",
-            "description": "An MCP server that replaces a coding agent's single Edit tool with eighteen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit.",
+            "description": "An MCP server that replaces a coding agent's single Edit tool with seventeen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. Impl tools carry a required prod/test target flag.",
             "applicationCategory": "DeveloperApplication",
             "applicationSubCategory": "AI coding agent plugin",
             "operatingSystem": "Linux, macOS",
-            "softwareVersion": "0.3.1",
+            "softwareVersion": "0.5.0",
             "url": "https://hiniachi.github.io/meta-edit/",
             "sameAs": [
               "https://github.com/hiniachi/meta-edit",
@@ -167,7 +167,7 @@
           typo fix or billing engine, the path is the same. <strong
             >meta-edit</strong
           >
-          replaces that one tool with <strong>eighteen typed edits</strong>,
+          replaces that one tool with <strong>seventeen typed edits</strong>,
           each carrying its own obligations inside its description. The
           obligation now lives in the tool surface itself, where the model
           cannot miss it.
@@ -217,7 +217,7 @@
         </p>
 
         <p data-i18n="idea.p4">
-          So we split. <code>Edit</code> becomes eighteen edits, one per kind
+          So we split. <code>Edit</code> becomes seventeen edits, one per kind
           of change. Each carries its own obligations in its own description.
           And critically, <strong>the agent must pick a kind before it can
           edit</strong>. Picking the kind <em>is</em> the reasoning step.
@@ -225,15 +225,16 @@
       </section>
 
       <section id="proof" class="section">
-        <h2 data-i18n="proof.title">The eighteen typed edits</h2>
+        <h2 data-i18n="proof.title">The seventeen typed edits</h2>
         <p class="section-lede" data-i18n="proof.lede">
           The current set of kinds. Each tool's description says when to use
           it, when not to use it, which tests must accompany the edit, and when
-          to stop and ask the user.
+          to stop and ask the user. The 16 impl tools (everything except
+          <code>edit_docs_only</code>) carry a required
+          <code>target: "prod" | "test"</code> flag.
         </p>
         <ul class="tool-grid" aria-label="Tools">
-          <li><span class="tool-name">edit_refactor_only</span></li>
-          <li><span class="tool-name">edit_test_only_change</span></li>
+          <li><span class="tool-name">edit_cosmetic</span></li>
           <li><span class="tool-name">edit_boundary_condition</span></li>
           <li><span class="tool-name">edit_boolean_condition</span></li>
           <li><span class="tool-name">edit_state_transition</span></li>
@@ -477,7 +478,7 @@
             >.
           </dd>
 
-          <dt data-i18n="faq.q4">Why eighteen, not three or fifty?</dt>
+          <dt data-i18n="faq.q4">Why seventeen, not three or fifty?</dt>
           <dd data-i18n="faq.a4">
             Empirical. Each kind corresponds to a failure pattern with
             distinct testing obligations (boundary, boolean, state-transition,
@@ -521,7 +522,7 @@
           <li>
             <strong data-i18n="limits.l2.t">It's throwaway prototype code.</strong>
             <span data-i18n="limits.l2.b">
-              The eighteen descriptions insist on test obligations. For code
+              The seventeen descriptions insist on test obligations. For code
               you're about to delete, that obligation is dead weight.
             </span>
           </li>
@@ -602,7 +603,7 @@
           "hero.eyebrow": "A different place to put obligations",
           "hero.title": "Type the action,<br>not the check.",
           "hero.lede":
-            "AI coding agents have one editing primitive: <code>Edit</code>. A single tool means there is nothing to think about before writing — typo fix or billing engine, the path is the same. <strong>meta-edit</strong> replaces that one tool with <strong>eighteen typed edits</strong>, each carrying its own obligations inside its description. The obligation now lives in the tool surface itself, where the model cannot miss it.",
+            "AI coding agents have one editing primitive: <code>Edit</code>. A single tool means there is nothing to think about before writing — typo fix or billing engine, the path is the same. <strong>meta-edit</strong> replaces that one tool with <strong>seventeen typed edits</strong>, each carrying its own obligations inside its description. The obligation now lives in the tool surface itself, where the model cannot miss it.",
           "hero.cta.github": "View on GitHub",
           "hero.cta.beyond": "Why this generalizes",
           "idea.title": "The thing that doesn't decay",
@@ -613,8 +614,8 @@
           "idea.p3":
             "<strong>The thesis:</strong> if obligations are placed there — in the tool surface, not in surrounding text — they will hold. To test that, we need a tool surface rich enough for the obligation to <em>fit</em> it. A single generic <code>Edit</code> tool is not rich enough; there is no place to put the obligation \"write a boundary test when you change <code>&lt;</code> to <code>&lt;=</code>\" that doesn't apply falsely to a typo fix.",
           "idea.p4":
-            "So we split. <code>Edit</code> becomes eighteen edits, one per kind of change. Each carries its own obligations in its own description. And critically, <strong>the agent must pick a kind before it can edit</strong>. Picking the kind <em>is</em> the reasoning step.",
-          "proof.title": "The eighteen typed edits",
+            "So we split. <code>Edit</code> becomes seventeen edits, one per kind of change. Each carries its own obligations in its own description. And critically, <strong>the agent must pick a kind before it can edit</strong>. Picking the kind <em>is</em> the reasoning step.",
+          "proof.title": "The seventeen typed edits",
           "proof.lede":
             "The current set of kinds. Each tool's description says when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user.",
           "proof.evidence.title": "What we've observed",
@@ -680,7 +681,7 @@
           "faq.q3": "What if the agent picks the wrong type?",
           "faq.a3":
             "It can. v1.0 deliberately does not detect mismatch. The MVP is built to find out whether descriptions alone change behaviour. If the answer turns out to be \"not enough\", v0.2 adds a lightweight diff classifier as a backstop — see <a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>.",
-          "faq.q4": "Why eighteen, not three or fifty?",
+          "faq.q4": "Why seventeen, not three or fifty?",
           "faq.a4":
             "Empirical. Each kind corresponds to a failure pattern with distinct testing obligations (boundary, boolean, state-transition, schema, migration, contract, …). Too few collapses different obligations together and dilutes the descriptions; too many splits genuine identicals into duplicate tools. New kinds get added when an observed failure doesn't fit any existing one.",
           "faq.q5": "Does this replace code review?",
@@ -698,7 +699,7 @@
             " Tool descriptions don't load in your head when you reach for <code>Edit</code>. meta-edit is built for AI agents.",
           "limits.l2.t": "It's throwaway prototype code.",
           "limits.l2.b":
-            " The eighteen descriptions insist on test obligations. For code you're about to delete, that obligation is dead weight.",
+            " The seventeen descriptions insist on test obligations. For code you're about to delete, that obligation is dead weight.",
           "limits.l3.t": "You trust post-hoc review entirely.",
           "limits.l3.b":
             " meta-edit acts <em>before</em> the write. If \"review will catch it\" already works downstream, this layer is not strictly needed.",
@@ -721,7 +722,7 @@
           "hero.eyebrow": "「義務」の置き場所を変える",
           "hero.title": "行動に型を。<br>後付けの検査ではなく。",
           "hero.lede":
-            "AIコーディングエージェントは、編集のプリミティブを1つしか持たない――<code>Edit</code>だ。タイポ修正でも課金処理の書き換えでも、辿る道は同じ。書く前に「何を考えるべきか」がツール側から与えられない。<strong>meta-edit</strong>はこの1つを、種類ごとに分かれた<strong>18個の型付き編集</strong>に置き換える。各ツールの説明文には、その種類の編集に伴うべき義務が書かれている。義務はもう周辺テキストではなく、ツール表面そのものに乗っている。",
+            "AIコーディングエージェントは、編集のプリミティブを1つしか持たない――<code>Edit</code>だ。タイポ修正でも課金処理の書き換えでも、辿る道は同じ。書く前に「何を考えるべきか」がツール側から与えられない。<strong>meta-edit</strong>はこの1つを、種類ごとに分かれた<strong>17個の型付き編集</strong>に置き換える。各ツールの説明文には、その種類の編集に伴うべき義務が書かれている。義務はもう周辺テキストではなく、ツール表面そのものに乗っている。",
           "hero.cta.github": "GitHubで見る",
           "hero.cta.beyond": "なぜ一般化できるのか",
           "idea.title": "唯一、薄れないもの",
@@ -732,8 +733,8 @@
           "idea.p3":
             "<strong>主張はこうだ。</strong>義務をそこに――周辺テキストではなく、ツール表面に――置けば、義務は持続する。それを試すには、義務が<em>収まる</em>だけの解像度を持ったツール表面が必要だ。汎用の<code>Edit</code>ひとつでは粗すぎる。「<code>&lt;</code>を<code>&lt;=</code>に変えるときは境界テストを書く」という義務を書き込む場所が、タイポ修正にまで誤って適用されない形で確保できない。",
           "idea.p4":
-            "だから分ける。<code>Edit</code>は18個の編集に分解される。変更の「種類」ごとに1つずつ、それぞれの説明にそれぞれの義務が乗る。そして決定的なのは、<strong>エージェントは種類を選ばなければ編集できない</strong>という点だ。種類を選ぶこと自体が、思考のステップになる。",
-          "proof.title": "18個の型付き編集",
+            "だから分ける。<code>Edit</code>は17個の編集に分解される。変更の「種類」ごとに1つずつ、それぞれの説明にそれぞれの義務が乗る。そして決定的なのは、<strong>エージェントは種類を選ばなければ編集できない</strong>という点だ。種類を選ぶこと自体が、思考のステップになる。",
+          "proof.title": "17個の型付き編集",
           "proof.lede":
             "現時点の種類一覧。各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、どんなときに立ち止まってユーザーに尋ねるかが書かれている。",
           "proof.evidence.title": "観察されたこと",
@@ -800,7 +801,7 @@
           "faq.q3": "エージェントが間違った型を選んだら?",
           "faq.a3":
             "ありうる。v1.0は不一致を検出しない――意図的にそうしている。MVPは「説明文だけで挙動が変わるか」を観測するために存在している。「足りない」と判明したときの保険として、v0.2では軽量diff分類器の追加を予定している――<a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>参照。",
-          "faq.q4": "なぜちょうど18個? 3個でも50個でもなく。",
+          "faq.q4": "なぜちょうど17個? 3個でも50個でもなく。",
           "faq.a4":
             "経験則だ。各カテゴリは、異なるテスト義務を持つ失敗パターンに対応している(境界値、ブール条件、状態遷移、スキーマ、マイグレーション、契約、…)。少なすぎれば義務が混ざって記述が薄まり、多すぎれば同質のものが重複ツールに割れる。既存の型に当てはまらない失敗が観測されれば新しい型が追加される。",
           "faq.q5": "コードレビューの代わりになる?",
@@ -818,7 +819,7 @@
             " <code>Edit</code>を叩いた瞬間に頭の中でツール説明がロードされるわけではない。これはAIエージェント向けの道具だ。",
           "limits.l2.t": "テストを書かない使い捨てプロトタイプ。",
           "limits.l2.b":
-            " 18個の説明はテスト義務を要求する。捨てる前提のコードにとって、その義務は重荷でしかない。",
+            " 17個の説明はテスト義務を要求する。捨てる前提のコードにとって、その義務は重荷でしかない。",
           "limits.l3.t": "事後レビューだけ信用している現場。",
           "limits.l3.b":
             " meta-editは書く<em>前</em>に介入する。「レビューで拾うから大丈夫」が成り立つなら、すでに下流でカバーされている。",
@@ -841,7 +842,7 @@
           "hero.eyebrow": "把「义务」放在另一个地方",
           "hero.title": "给行为分型,<br>而不是事后检查。",
           "hero.lede":
-            "AI 编码代理只有一个编辑原语 ——<code>Edit</code>。无论是改一个错字,还是动计费引擎,通往动作的路径都一样。代理在落键之前,工具一侧没有任何「该想什么」的提示。<strong>meta-edit</strong> 把这一个工具,替换为按种类划分的<strong>十八个类型化编辑</strong>。每个工具的描述里,都写明了该类编辑所附带的义务。义务不再寄身于周边文本,而是直接长在工具表面本身。",
+            "AI 编码代理只有一个编辑原语 ——<code>Edit</code>。无论是改一个错字,还是动计费引擎,通往动作的路径都一样。代理在落键之前,工具一侧没有任何「该想什么」的提示。<strong>meta-edit</strong> 把这一个工具,替换为按种类划分的<strong>十七个类型化编辑</strong>。每个工具的描述里,都写明了该类编辑所附带的义务。义务不再寄身于周边文本,而是直接长在工具表面本身。",
           "hero.cta.github": "在 GitHub 查看",
           "hero.cta.beyond": "为什么可以推广",
           "idea.title": "唯一不会褪色的地方",
@@ -852,8 +853,8 @@
           "idea.p3":
             "<strong>主张是:</strong>把义务放在那里——放在工具表面,而不是周围的文本——义务就能站得住。要验证这件事,工具表面必须有足够的分辨率,让义务能<em>嵌进去</em>。一个通用的 <code>Edit</code> 太粗了:你没办法在它里面写「把 <code>&lt;</code> 改成 <code>&lt;=</code> 时要补一个边界测试」这样的义务,而又不至于错误地连改错字也一并适用。",
           "idea.p4":
-            "所以拆。<code>Edit</code> 拆成十八个编辑,每种变更对应一个,各自的义务写进各自的描述。关键的一步是:<strong>代理必须先选一个类型,才能编辑</strong>。选类型这件事本身,就是思考的那一步。",
-          "proof.title": "十八个类型化编辑",
+            "所以拆。<code>Edit</code> 拆成十七个编辑,每种变更对应一个,各自的义务写进各自的描述。关键的一步是:<strong>代理必须先选一个类型,才能编辑</strong>。选类型这件事本身,就是思考的那一步。",
+          "proof.title": "十七个类型化编辑",
           "proof.lede":
             "当前的种类清单。每个工具的描述都写明:何时使用、何时不该使用、必须附带哪些测试、何时停下来询问用户。",
           "proof.evidence.title": "我们观察到的现象",
@@ -920,7 +921,7 @@
           "faq.q3": "代理选错类型怎么办?",
           "faq.a3":
             "有可能。v1.0 不做不匹配检测——这是有意为之。MVP 是为了观察「光靠描述能不能改变行为」。如果答案是「不够」,v0.2 会引入轻量 diff 分类器作为兜底——见 <a href=\"https://github.com/hiniachi/meta-edit/blob/main/OBSERVED-FAILURES.md\" target=\"_blank\" rel=\"noopener\"><code>OBSERVED-FAILURES.md</code></a>。",
-          "faq.q4": "为什么正好是十八个,不是三个或五十个?",
+          "faq.q4": "为什么正好是十七个,不是三个或五十个?",
           "faq.a4":
             "经验得出。每个种类对应一类有独立测试义务的失败模式(边界值、布尔条件、状态迁移、schema、迁移、契约……)。太少则义务被混在一起,描述被稀释;太多则同质的东西被切到重复工具里。一旦观察到无法归入任何已有种类的失败,就会增加新种类。",
           "faq.q5": "这能替代代码评审吗?",
@@ -938,7 +939,7 @@
             " 当人按下 <code>Edit</code> 时,工具描述并不会自动在脑子里加载。这件事是为 AI 代理设计的。",
           "limits.l2.t": "不写测试的原型阶段。",
           "limits.l2.b":
-            " 十八条描述会要求伴随测试。对一次性丢弃的代码,这个义务只是负担。",
+            " 十七条描述会要求伴随测试。对一次性丢弃的代码,这个义务只是负担。",
           "limits.l3.t": "只信任事后评审。",
           "limits.l3.b":
             " meta-edit 在写入<em>之前</em>介入。如果「评审会兜底」已经在下游成立,这一层就不是非要不可。",

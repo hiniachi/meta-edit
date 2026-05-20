@@ -6,7 +6,7 @@ scope is narrow on purpose ([`docs/SPEC.md`](./docs/SPEC.md) §3 and
 
 ## What's in scope
 
-- Bug fixes for any of the eighteen `edit_*` tools, the two safety
+- Bug fixes for any of the seventeen `edit_*` tools, the two safety
   hooks, the edit log, or the CLI subcommands.
 - Tightening of validation rules in `src/tools/common.ts` for
   documented bypass classes (see [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md)).
@@ -52,7 +52,7 @@ Node 20 with Bun's `bun:test` shim.
 ## Editing through `meta-edit`'s own tools
 
 Once you have meta-edit running locally as an MCP server, use the
-eighteen `edit_*` tools to make changes (per CLAUDE.md §6). The
+seventeen `edit_*` tools to make changes (per CLAUDE.md §6). The
 descriptions are the product — read them at every call. If a
 description tells you to "stop and ask", actually stop and ask.
 

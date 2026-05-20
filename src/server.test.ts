@@ -26,7 +26,7 @@ function mkBareDir(): string {
 // 1530 — createServer must NOT eager-throw on a non-repo directory.
 //
 // The eager throw used to kill the MCP server before transport handshake.
-// Claude Code marked the server as failed for the session and the eighteen
+// Claude Code marked the server as failed for the session and the seventeen
 // tool descriptions never reached the running agent's context. The fix
 // (Bundle A) moves the check into validateRequest at per-tool-call time;
 // createServer only emits an advisory stderr line.

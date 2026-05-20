@@ -327,7 +327,7 @@ function buildOnboardingMessage() {
     "meta-edit MCP server is registered for this project. New session detected.",
     "",
     "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
-    "Skill tool to load the eighteen-tool catalog and selection heuristic.",
+    "Skill tool to load the seventeen-tool catalog and selection heuristic.",
     "Empty file creation is free (no MCP declaration); content fills go through",
     "the appropriate edit_<TYPE> tool against the now-empty file. Use ToolSearch",
     "with `select:mcp__plugin_meta-edit_meta-edit__edit_<name>` to load any",
@@ -361,4 +361,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=B2145BC8B2EDEB9364756E2164756E21
+//# debugId=FA658343E97B382564756E2164756E21

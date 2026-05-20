@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import {
+  TOOLS_REQUIRING_TARGET,
   TOOLS_REQUIRING_TEST_FILES,
   type ToolName,
 } from "./descriptions.js";
@@ -33,6 +34,9 @@ import { repoIsValid } from "./repo-validity.js";
 
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
+
+export const EditTargetSchema = z.enum(["prod", "test"]);
+export type EditTarget = z.infer<typeof EditTargetSchema>;
 
 const AdditionalFileSchema = z
   .object({
@@ -100,6 +104,11 @@ export const EditToolRequestSchema = z
     target_file: z.string().min(1),
     rationale: z.string(),
     risk_level: RiskLevelSchema,
+    // `target` is required on the 16 impl tools (15 SQLite-derived +
+    // edit_cosmetic) and absent on edit_docs_only. The schema accepts it
+    // as optional; validateRequest enforces presence-on-impl and
+    // absence-on-docs per TOOLS_REQUIRING_TARGET (see descriptions.ts).
+    target: EditTargetSchema.optional(),
     test_files: z.preprocess(
       coerceJsonStringToArray("test_files"),
       z.array(z.string()),
@@ -206,7 +215,7 @@ export function validateRequest(
   // ---- 0. Repo-root sentinel (A1 / issue 1530) ------------------------
   // The MCP server intentionally boots even when the configured root
   // lacks a `.git` / `.jj` directory, so ListTools can inject the
-  // eighteen tool descriptions into the agent's context. The actual
+  // seventeen tool descriptions into the agent's context. The actual
   // typed_edit calls, however, must refuse to run against a non-repo
   // root — silently accepting them would write into an unrelated
   // directory under `process.cwd()`, defeating the protected-path /
@@ -221,14 +230,43 @@ export function validateRequest(
     warnings.push("rationale must be non-empty");
   }
 
-  // ---- 2. test_files cardinality (per §4 obligations) ------------------
-  if (toolName === "edit_test_only_change") {
-    if (request.test_files.length > 0) {
-      warnings.push("test_files must be empty for edit_test_only_change");
+  // ---- 2a. target field presence (impl tools require it; docs forbids it) -
+  const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
+  if (toolRequiresTarget) {
+    if (request.target === undefined) {
+      warnings.push(
+        `target must be declared as "prod" or "test" for ${toolName}`,
+      );
     }
-  } else if (TOOLS_REQUIRING_TEST_FILES.includes(toolName)) {
+  } else {
+    if (request.target !== undefined) {
+      warnings.push(
+        `${toolName} does not accept a target field (prod/test split does ` +
+          `not apply to this tool)`,
+      );
+    }
+  }
+
+  // ---- 2b. test_files cardinality (per §4 obligations + target rules) -----
+  // The pair-by-tool model (v0.5.0): when target === "test", the
+  // target_file IS the test file, so test_files must be empty. When
+  // target === "prod", impl tools (excluding edit_cosmetic) must
+  // forward-declare the test files the paired target: test call(s)
+  // will modify.
+  if (request.target === "test") {
+    if (request.test_files.length > 0) {
+      warnings.push(
+        `test_files must be empty when target is "test" (target_file IS the test file)`,
+      );
+    }
+  } else if (
+    request.target === "prod" &&
+    TOOLS_REQUIRING_TEST_FILES.includes(toolName)
+  ) {
     if (request.test_files.length === 0) {
-      warnings.push(`test_files must be non-empty for ${toolName}`);
+      warnings.push(
+        `test_files must be non-empty for ${toolName} with target "prod"`,
+      );
     }
   }
 

@@ -1168,3 +1168,67 @@ mis-marshals non-empty string arrays.
 - Spec deviations: none (descriptions.ts untouched — verbatim §4 rule
   preserved; batch-capability text added only to SKILL.md and the
   server next_action, not to any §4 tool description).
+
+
+## Phase 0.5.0: Tag surface reshape — impl × target flag
+
+- Completed: 2026-05-20
+- What works:
+  - Removed `edit_test_only_change` from `TOOL_NAMES`. Test edits now
+    flow through the kind-specific impl tool with `target: "test"`,
+    paired with the original `target: "prod"` declaration. The 33%
+    information-less mass of `edit_test_only_change` is redistributed
+    across the 15 SQLite-derived impl tools so risk weight, audit and
+    rationale follow the implementation domain rather than collapsing
+    into a generic test bucket.
+  - Renamed `edit_refactor_only` → `edit_cosmetic` with a much narrower
+    description: whitespace / comments / formatter output ONLY. Renames,
+    function extracts, dead-code removal, guard-clause rewrites etc.
+    are explicitly outside scope and route to stop-and-ask rather than
+    a generic refactor catch-all. The fallback obligation paragraph
+    was kept (and updated) so slip-throughs still post back to the user.
+  - Added required `target: "prod" | "test"` field to every impl tool
+    (15 SQLite-derived + `edit_cosmetic`). `edit_docs_only` is exempt
+    (documentation has its own surface and the prod/test split does
+    not apply). Schema enforcement: presence required on impl tools,
+    forbidden on `edit_docs_only`; `test_files` cardinality flips on
+    target (non-empty on `target: "prod"` for impl tools that impose
+    test obligations, empty on `target: "test"` since `target_file`
+    IS the test file in that case).
+  - **No file-path detection.** The server does NOT pattern-match
+    `target_file` against test-directory conventions to verify the
+    declared target — consistent with v0.4.x's honor-system stance on
+    every other declared field. Article 7 still holds.
+  - Surface count: 17 (15 SQLite + edit_cosmetic + edit_docs_only),
+    down from 18 in v0.4.x.
+- Known issues:
+  - Migration is immediate (no warn-then-deny period). edit_*-aware
+    callers will see schema rejections on the next session: missing
+    `target`, `edit_test_only_change` unknown, `edit_refactor_only`
+    unknown. self-application is the dominant user, so the breaking
+    change cost is acceptable.
+  - Historical references to `edit_refactor_only` /
+    `edit_test_only_change` remain in dated `issues/`,
+    `docs/plan/`, and one transcript quote on the site page — those
+    are historical artifacts and were not retroactively rewritten.
+- Tests added:
+  - `common.test.ts`: new cases for `target=prod` missing test_files,
+    `target=test` non-empty test_files, missing `target` on impl,
+    forbidden `target` on `edit_docs_only`, and `edit_cosmetic` with
+    `target=prod` empty test_files.
+  - `registry.test.ts`: tool count assertion 18 → 17, new
+    "does NOT register edit_refactor_only or edit_test_only_change"
+    check, exempt set narrowed to `edit_cosmetic` + `edit_docs_only`.
+  - `descriptions.test.ts`: exempt set updated to the same pair.
+  - `handler.test.ts`: `modifyRequest` default now carries
+    `target: "prod"`; the old `edit_test_only_change` rejection test
+    became a `target: "test"` + non-empty `test_files` rejection
+    against an impl tool.
+  - `help-cmd.test.ts`, `opencode/plugin.test.ts`: updated ToolSearch
+    sample to reference `edit_cosmetic`.
+  - Full suite: 791 tests pass, `tsc --noEmit` clean.
+- Spec deviations: none (descriptions.ts and SPEC §4 updated in the
+  same change, per CLAUDE.md §4). SPEC §3, §4, §6, §10 all reflect
+  the new surface; CLAUDE.md, three READMEs, the SKILL onboarding,
+  the site landing page, and `plugin.json` (version 0.4.3 → 0.5.0)
+  all reference seventeen consistently.

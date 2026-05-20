@@ -393,7 +393,7 @@ function evaluateSegment(rawSegment, opts = {}) {
   if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
     firstWarn = {
       decision: "warn",
-      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_state_transition / edit_refactor_only / edit_docs_only " + "for new content; for new files, native Write with content " + '= "" is hook-authorized first, then declare the typed ' + "edit_* for the content); this redirect is permitted but is " + "recorded as a bypass-risk and may be tightened to deny in a " + "future version."
+      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_state_transition / edit_cosmetic / edit_docs_only " + "for new content; for new files, native Write with content " + '= "" is hook-authorized first, then declare the typed ' + "edit_* for the content); this redirect is permitted but is " + "recorded as a bypass-risk and may be tightened to deny in a " + "future version."
     };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
@@ -847,7 +847,7 @@ function denyReason(pattern) {
   return `command matches deny pattern "${pattern}".`;
 }
 function warnVerbReason(verb) {
-  return `command verb "${verb}" can write into the repository (rename/move, ` + `copy, or sync). For in-repo content changes prefer an edit_* tool ` + `(e.g. edit_refactor_only / edit_state_transition / edit_docs_only ` + `for content; for new files, native Write with content = "" is ` + `hook-authorized first, then declare the typed edit_* for the ` + `content). This ${verb} is permitted — legitimate non-edit uses ` + `(rename/move, copy templates/fixtures, backup, deploy/sync) ` + `dominate — but is recorded as a bypass-risk and may be tightened ` + `back to deny in a future version. Writes to .meta-edit/state/** ` + `and .meta-edit/tmp/** remain hard-denied regardless of verb. See ` + `OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
+  return `command verb "${verb}" can write into the repository (rename/move, ` + `copy, or sync). For in-repo content changes prefer an edit_* tool ` + `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only ` + `for content; for new files, native Write with content = "" is ` + `hook-authorized first, then declare the typed edit_* for the ` + `content). This ${verb} is permitted — legitimate non-edit uses ` + `(rename/move, copy templates/fixtures, backup, deploy/sync) ` + `dominate — but is recorded as a bypass-risk and may be tightened ` + `back to deny in a future version. Writes to .meta-edit/state/** ` + `and .meta-edit/tmp/** remain hard-denied regardless of verb. See ` + `OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
 }
 var FIND_VERBS = new Set([
   "find",
@@ -1291,7 +1291,7 @@ function matchesReadOnlyVerbCpBypass(rawSegment) {
     if (isInRepoWriteTarget(target)) {
       return {
         decision: "deny",
-        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (edit_refactor_only, ` + `edit_docs_only, or whichever type fits the change) instead of ` + `redirecting a read-only verb's stdout to a repository path. For ` + `new files, native Write with content = "" is hook-authorized; ` + `then declare a typed_edit for the content. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
+        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (edit_cosmetic, ` + `edit_docs_only, or whichever type fits the change) instead of ` + `redirecting a read-only verb's stdout to a repository path. For ` + `new files, native Write with content = "" is hook-authorized; ` + `then declare a typed_edit for the content. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
       };
     }
   }
@@ -1763,4 +1763,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=0CF7EFFC9FC415D664756E2164756E21
+//# debugId=DD165EC5A8E9B4D764756E2164756E21

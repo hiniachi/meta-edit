@@ -16,7 +16,7 @@
 //     "plugin": ["@hiniachi/meta-edit/opencode"]
 //   }
 //
-// The MCP block brings the eighteen typed_edit tool descriptions into
+// The MCP block brings the seventeen typed_edit tool descriptions into
 // the agent's context (same stdio MCP server the Claude Code path
 // uses). The plugin array entry loads `dist/opencode/plugin.js` (via
 // the `./opencode` subpath export added in OC-5) into opencode's
