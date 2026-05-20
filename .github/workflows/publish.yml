@@ -1,0 +1,77 @@
+name: Publish to npm
+
+# Publishes @hiniachi/meta-edit to the npm registry when a GitHub Release
+# is published. Authentication uses npm Trusted Publisher (OIDC) — no
+# NPM_TOKEN secret is required as long as this repo/workflow is registered
+# as a trusted publisher for the package on npmjs.com. Provenance is
+# attached so consumers can verify the build originated from this workflow.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Run npm publish with --dry-run (no upload)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.13"
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      # Release tag (e.g. "v0.4.3") must match package.json.version. The
+      # CI workflow already enforces package.json/plugin.json sync, so
+      # checking against package.json is sufficient.
+      - name: Verify release tag matches package.json version
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(jq -r .version package.json)
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::release tag ($tag) != package.json version ($pkg)" >&2
+            echo "Bump package.json + .claude-plugin/plugin.json before creating the release." >&2
+            exit 1
+          fi
+          echo "version OK: $pkg"
+
+      - name: Publish to npm (dry-run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+        run: npm publish --access public --provenance --dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run)
+        run: npm publish --access public --provenance
