@@ -462,7 +462,7 @@ describe("loadDefaultSkillContent", () => {
     const content = loadDefaultSkillContent();
     expect(content.startsWith("---")).toBe(false);
     expect(content.startsWith("name: ")).toBe(false);
-    expect(content).toContain("edit_refactor_only");
+    expect(content).toContain("edit_cosmetic");
     expect(content).toContain("Selection heuristic");
   });
 });
@@ -486,7 +486,7 @@ describe("summarizeReasonForOpencode", () => {
   it("strips backticks (opencode TUI renders inline-code spans badly)", () => {
     const r =
       "use ToolSearch (e.g. query `mcp meta-edit edit` " +
-      "or `select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only`).";
+      "or `select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic`).";
     const out = summarizeReasonForOpencode(r);
     expect(out).not.toContain("`");
     expect(out).toContain("mcp meta-edit edit");

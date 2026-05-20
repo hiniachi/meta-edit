@@ -91,7 +91,7 @@ ${catalog}
 If the typed_edit tool SCHEMAS are not loaded in your AI agent's tool
 list (the harness deferred them, or the MCP server connected late),
 the harness-native recovery is to call ToolSearch — e.g. query
-\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`
+\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`
 — so the schemas land in the agent's callable surface.
 
 Running \`meta-edit help <tool_name>\` from a Bash tool emits the

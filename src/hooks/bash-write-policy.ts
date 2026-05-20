@@ -488,7 +488,7 @@ function evaluateSegment(
         "command redirects (`>` / `>>` / `>|`) to a path outside the " +
         "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " +
         "/sys/). For in-repo writes prefer an edit_* tool (e.g. " +
-        "edit_state_transition / edit_refactor_only / edit_docs_only " +
+        "edit_state_transition / edit_cosmetic / edit_docs_only " +
         "for new content; for new files, native Write with content " +
         "= \"\" is hook-authorized first, then declare the typed " +
         "edit_* for the content); this redirect is permitted but is " +
@@ -1202,7 +1202,7 @@ function warnVerbReason(verb: string): string {
   return (
     `command verb "${verb}" can write into the repository (rename/move, ` +
     `copy, or sync). For in-repo content changes prefer an edit_* tool ` +
-    `(e.g. edit_refactor_only / edit_state_transition / edit_docs_only ` +
+    `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only ` +
     `for content; for new files, native Write with content = "" is ` +
     `hook-authorized first, then declare the typed edit_* for the ` +
     `content). This ${verb} is permitted — legitimate non-edit uses ` +
@@ -1992,7 +1992,7 @@ function matchesReadOnlyVerbCpBypass(rawSegment: string): HookDecision | null {
         decision: "deny",
         reason:
           `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` +
-          `into a repo file. Use a typed edit_* tool (edit_refactor_only, ` +
+          `into a repo file. Use a typed edit_* tool (edit_cosmetic, ` +
           `edit_docs_only, or whichever type fits the change) instead of ` +
           `redirecting a read-only verb's stdout to a repository path. For ` +
           `new files, native Write with content = "" is hook-authorized; ` +

@@ -54,11 +54,11 @@ describe("renderHelp — general (no tool argument)", () => {
 
 describe("renderHelp — per-tool full description", () => {
   it("returns the verbatim description for a known tool", () => {
-    const result = renderHelp("edit_refactor_only");
+    const result = renderHelp("edit_cosmetic");
     if (!result.ok) throw new Error("expected ok=true");
     // The full description must appear verbatim — the whole point of A5
     // is restoring this prose into the agent's context.
-    expect(result.output).toContain(TOOL_DESCRIPTIONS["edit_refactor_only"]);
+    expect(result.output).toContain(TOOL_DESCRIPTIONS["edit_cosmetic"]);
   });
 
   it("includes the tool name in a banner above the description", () => {

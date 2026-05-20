@@ -16537,8 +16537,7 @@ class StdioServerTransport {
 
 // src/tools/descriptions.ts
 var TOOL_NAMES = [
-  "edit_refactor_only",
-  "edit_test_only_change",
+  "edit_cosmetic",
   "edit_boundary_condition",
   "edit_boolean_condition",
   "edit_state_transition",
@@ -16556,81 +16555,69 @@ var TOOL_NAMES = [
   "edit_policy_change",
   "edit_docs_only"
 ];
-var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_refactor_only" && name !== "edit_test_only_change" && name !== "edit_docs_only");
+var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_cosmetic" && name !== "edit_docs_only");
+var TOOLS_REQUIRING_TARGET = TOOL_NAMES.filter((name) => name !== "edit_docs_only");
 var TOOL_DESCRIPTIONS = {
-  edit_refactor_only: `Refactor production code without changing observable behavior.
+  edit_cosmetic: `Surface-level edit with no semantic effect: whitespace, comments, or
+formatter output only.
 
-Use this tool when:
-- Renaming variables, functions, or types
-- Extracting helpers without changing call sites' observable behavior
-- Reorganizing file or module structure
-- Reformatting beyond what the formatter does
-- Simplifying expressions while preserving evaluation results
+Use this tool when, and ONLY when, the patch is one of the following:
+- Whitespace adjustment (indentation, blank lines, trailing whitespace,
+  line breaks)
+- Comment edits (typo fix, rewording, adding clarifying comments,
+  removing stale comments)
+- Output of a configured formatter run (gofmt, prettier, black, rustfmt,
+  etc.) — the bytes produced by running the project's formatter, with
+  no manual edits layered on top
 
-Required tests: NONE (existing tests must continue to pass).
-test_files may be empty.
+This tool MUST NOT be used for:
+- Variable, function, type, parameter, or file renames — there is no
+  generic "rename" tool by design. If the rename crosses an exported
+  boundary, use edit_api_contract. If the rename is internal only, stop
+  and ask the user (the typed surface does not yet have a tool for that
+  shape; observe how often this comes up before adding one)
+- Function or module extraction, inlining, or restructuring — stop and
+  ask
+- Dead code removal — stop and ask, then use the impl tool matching the
+  code's original kind (the removal may have observable consequences
+  that the original kind's tests already cover)
+- Reordering of declarations whose order carries meaning (CSS
+  specificity, dependency injection priority, init order, decorator
+  stack order)
+- Import / export / visibility modifier changes — these are
+  edit_api_contract (if exported) or stop-and-ask
+- Any change that touches comparison, boolean, guard, return shape,
+  error handling, serialization, permission, cache, concurrency,
+  retry/timeout, side effects, or persistence — use the kind-specific
+  impl tool
 
-This tool MUST NOT be used when the patch contains any of the following.
-If your patch contains any of these, choose a more specific edit_* tool:
+Required tests: NONE. Existing tests must continue to pass. test_files
+may be empty.
 
-- Comparison operator changes (<, <=, >, >=, ==, !=)
-- Boolean operator changes (&&, ||, !)
-- Guard clauses or early returns being added or removed
-- Return value structure changes (new fields, removed fields, reordered tuple)
-- Throw / catch / error type changes
-- Database read or write operations changes
-- Event / job / webhook / email / billing call additions or removals
-- Serializer, parser, or schema changes
-- Permission / role / owner / tenant / feature flag reference changes
-- Timeout / retry / backoff changes
-- Cache key / TTL / invalidation changes
-- Concurrency primitives (lock, transaction, mutex) changes
+Target (required):
+Declare \`target: "prod"\` for cosmetic edits to production files, or
+\`target: "test"\` for cosmetic edits to test files. Cosmetic changes
+do not require behavioral tests in either case; \`test_files\` may be
+empty.
 
-If you are unsure whether your change qualifies as refactor-only, choose a
-more specific tool. False precision is safer than false generality. Misusing
-this tool is the largest source of regression bugs in AI-generated code.
+Rationale for the narrow scope:
+edit_cosmetic intentionally has a narrow vocabulary — whitespace,
+comments, formatter output — to avoid being a hiding place for behavior
+changes rationalized as "just a refactor". If your change does not fit
+this narrow definition, the typed surface does not have a tool for what
+you want. Stop and ask the user. That friction is the design: the absence
+of a generic refactor tool forces the question "what kind of change is
+this, really?"
 
 Fallback obligation:
-If, after applying this tool, you discover that your patch did
-contain any of the change kinds listed above (comparison change,
-boolean change, guard clause, error-handling change, etc.), you
-owe the user a follow-up explanation in your next message: name
-what slipped in, and say why the typed surface didn't catch it
-before you applied. This is a personal debt that posts to the
-user, not a detection bypass — acknowledging the slip is what
+If, after applying this tool, you discover that your patch did anything
+beyond whitespace / comment / formatter output (a rename slipped in, a
+guard clause moved, an import was reorganized in a way that affects
+linting or shadowing), you owe the user a follow-up explanation in your
+next message: name what slipped in, and say why the narrow definition
+did not catch it before you applied. This is a personal debt that posts
+to the user, not a detection bypass — acknowledging the slip is what
 keeps the typed surface honest.
-
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_test_only_change: `Add or modify test code only. No production code changes are allowed.
-
-Use this tool when:
-- Adding new test cases for existing behavior
-- Strengthening assertions in existing tests
-- Refactoring test fixtures or helpers
-- Removing flaky or duplicated tests
-- Filling content into a freshly-created (currently empty) test file:
-  empty files are created freely without an MCP declaration (see SPEC §5);
-  the content fill goes through this tool
-
-Required: patch must only modify a single file — the \`target_file\` you
-declare as a test file. test_files must be empty. The server does not
-pattern-match the target path against any naming convention; choosing
-this tool is itself your declaration that the change is test-only. The
-obligation is tool selection, not server-side classification.
-
-Recommended assertion practice:
-- Each test must contain at least one explicit assert / expect
-- Snapshot-only tests are discouraged unless you have a documented reason
-  for snapshot semantics
-- Tests that only check "no exception was thrown" should also check the
-  actual return value or side effect
-
-This tool is the standard way to fulfill testing obligations created by
-other edit_* tools. After making a non-trivial change with another edit_*
-tool, your next action is typically one or more edit_test_only_change calls
-covering the obligations stated in the prior tool's description.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16663,6 +16650,15 @@ the edit.
 test_files must list at least one file where these three cases will be
 added. Existing test files are acceptable.
 
+Target (required):
+Declare \`target: "prod"\` when editing the production boundary itself,
+or \`target: "test"\` when editing the boundary tests (the file pointed
+at by your earlier target: prod declaration's \`test_files\`). One
+declaration covers one target — pair a target: prod call with a
+target: test call to land both within the same commit. When target is
+"test", \`target_file\` IS the test file and \`test_files\` must be
+empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16693,8 +16689,19 @@ This is a lightweight version of MC/DC (Modified Condition / Decision
 Coverage). Full MC/DC is not required, but the spirit of "each condition
 independently affects outcome" is.
 
-If the boolean change is purely a refactor (e.g., De Morgan's law applied
-without changing truth values), use edit_refactor_only instead.
+If the boolean change is purely a transformation that preserves truth
+values (e.g., De Morgan's law applied), it still goes through this tool —
+the rewritten bytes affect future readers and modifiers, so the kind-
+specific risk surface still applies. edit_cosmetic is reserved for
+whitespace / comments / formatter output only and does NOT cover boolean
+restructuring.
+
+Target (required):
+Declare \`target: "prod"\` when editing the conditional logic in
+production code, or \`target: "test"\` when editing the boolean tests
+that exercise it. Pair the two declarations in the same commit. When
+target is "test", \`target_file\` IS the test file and \`test_files\`
+must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16723,6 +16730,12 @@ tests are as important as the allowed-transition tests.
 If your change adds new states, you must also test transitions from
 existing states into the new states, and from the new states to existing
 states (where allowed).
+
+Target (required):
+Declare \`target: "prod"\` when editing the state machine in production
+code, or \`target: "test"\` when editing its transition tests. Pair the
+two declarations in the same commit. When target is "test",
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16755,6 +16768,13 @@ answer is "no rollback, here's why."
 If your change modifies existing data (UPDATE statements, data backfills),
 you MUST also use edit_data_migration alongside this tool.
 
+Target (required):
+Declare \`target: "prod"\` when editing the migration / DDL itself, or
+\`target: "test"\` when editing the migration tests (apply / data /
+rollback / constraint tests). Pair the two declarations in the same
+commit. When target is "test", \`target_file\` IS the test file and
+\`test_files\` must be empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16783,6 +16803,13 @@ the single most important one — write it first.
 
 For long-running migrations, also consider testing chunked execution and
 verifying that an interrupted-then-resumed migration completes correctly.
+
+Target (required):
+Declare \`target: "prod"\` when editing the migration / backfill script
+itself, or \`target: "test"\` when editing the migration tests
+(idempotency, partial failure, fixture transformation, edge cases). Pair
+the two declarations in the same commit. When target is "test",
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16815,6 +16842,14 @@ If the change is a breaking change, the rationale field must say so
 explicitly, e.g., "Breaking change: removing the deprecated \`legacyId\`
 field. Migration plan: ..."
 
+Target (required):
+Declare \`target: "prod"\` when editing the API surface in production
+code (handlers, schemas, OpenAPI / GraphQL / gRPC definitions), or
+\`target: "test"\` when editing the contract tests (backward
+compatibility, missing/extra field, status code). Pair the two
+declarations in the same commit. When target is "test", \`target_file\`
+IS the test file and \`test_files\` must be empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16841,6 +16876,13 @@ cannot be read by anything. The "read old format" test is the safety net.
 
 If the format change is intentionally non-backward-compatible, the
 rationale must say so and describe the migration path for existing data.
+
+Target (required):
+Declare \`target: "prod"\` when editing the serializer / parser / codec
+itself, or \`target: "test"\` when editing its round-trip / old-format /
+invalid-input tests. Pair the two declarations in the same commit. When
+target is "test", \`target_file\` IS the test file and \`test_files\`
+must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16871,6 +16913,13 @@ verifies the error is observable.
 Swallowing exceptions is forbidden unless the rationale explicitly states
 why and what the recovery path is.
 
+Target (required):
+Declare \`target: "prod"\` when editing error-handling code in
+production, or \`target: "test"\` when editing the tests that exercise
+failure paths and observable-error contracts. Pair the two declarations
+in the same commit. When target is "test", \`target_file\` IS the test
+file and \`test_files\` must be empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16897,6 +16946,13 @@ The duplicate-side-effect test is the one that catches the worst bugs.
 If your code retries an HTTP POST that creates a record, verify that two
 records are not created when the first attempt times out but actually
 succeeded server-side.
+
+Target (required):
+Declare \`target: "prod"\` when editing the retry / timeout / backoff
+logic in production code, or \`target: "test"\` when editing its
+exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
+two declarations in the same commit. When target is "test",
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16927,6 +16983,13 @@ many times under stress and treat any failure as a bug.
 If you cannot reproduce the race or contention this change addresses,
 the change is speculative. Prefer to demonstrate the bug with a failing
 test before applying the fix.
+
+Target (required):
+Declare \`target: "prod"\` when editing the concurrency primitives in
+production code, or \`target: "test"\` when editing the concurrency
+tests. Pair the two declarations in the same commit. When target is
+"test", \`target_file\` IS the test file and \`test_files\` must be
+empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16959,6 +17022,13 @@ For test environments, side effects MUST be mocked or routed to a test
 sink. Verify that the test does not actually charge a card or send a
 real email. If your test makes a real external call, your test is wrong.
 
+Target (required):
+Declare \`target: "prod"\` when editing the side-effect-producing code
+in production, or \`target: "test"\` when editing its tests (fires-on-
+success, no-fire-on-failure, idempotency, correct recipient). Pair the
+two declarations in the same commit. When target is "test",
+\`target_file\` IS the test file and \`test_files\` must be empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16982,6 +17052,14 @@ Required tests (you MUST cover):
 Cache bugs typically manifest as "wrong data shown to user" or "stale
 data persisted to a downstream system". Both are silent until reported
 by users, which is too late. Test invalidation explicitly.
+
+Target (required):
+Declare \`target: "prod"\` when editing cache key / TTL / invalidation
+code in production, or \`target: "test"\` when editing its tests
+(stale-data prevention, invalidation triggers, TTL boundary, key
+collision). Pair the two declarations in the same commit. When target
+is "test", \`target_file\` IS the test file and \`test_files\` must be
+empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17019,6 +17097,13 @@ Stop and ask for the matrix to be confirmed before proceeding.
 The negative side-effect test (test 3) is the one that catches the worst
 bugs. A permission check that returns false but still writes to the
 database is a permission bypass. Test it.
+
+Target (required):
+Declare \`target: "prod"\` when editing permission / authz code in
+production, or \`target: "test"\` when editing the allow / deny matrix
+tests and negative-side-effect tests. Pair the two declarations in the
+same commit. When target is "test", \`target_file\` IS the test file
+and \`test_files\` must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17067,6 +17152,13 @@ terms: which package, what version delta, runtime vs dev, expected
 impact on the build or development loop. Surprise dependency
 updates are how contributors lose a day to a broken local
 environment; the user has standing to intercept before it lands.
+
+Target (required):
+Declare \`target: "prod"\` when editing the manifest / config in
+production, or \`target: "test"\` when editing tests that exercise the
+new configuration (reproducibility, default value, new-config behavior).
+Pair the two declarations in the same commit. When target is "test",
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17117,6 +17209,14 @@ of the safer path. Loosening restrictions, modifying hook
 behavior, and editing tool descriptions all carry implications
 the user has the standing to weigh; do not assume.
 
+Target (required):
+Declare \`target: "prod"\` when editing the policy / configuration /
+description files themselves, or \`target: "test"\` when editing tests
+that exercise the new policy (validity, readability of existing log
+entries, clean-checkout applicability). Pair the two declarations in
+the same commit. When target is "test", \`target_file\` IS the test
+file and \`test_files\` must be empty.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17136,6 +17236,10 @@ Use this tool when:
 
 Required tests: NONE. test_files may be empty.
 
+This tool does NOT carry a \`target\` field: documentation has its own
+surface and the prod/test split does not apply. The prod/test target
+flag is required only on the 16 impl tools.
+
 Recommended verifications (not enforced):
 - Internal links resolve
 - Code blocks (if any) are syntactically valid in their stated language
@@ -17144,7 +17248,9 @@ Recommended verifications (not enforced):
 
 This tool MUST NOT be used when:
 - The patch modifies any executable production code
-- The patch modifies test code (use edit_test_only_change)
+- The patch modifies test code (use the appropriate impl tool with
+  \`target: "test"\`, choosing the kind that matches the production
+  code the test exercises)
 - The patch modifies build, CI, or meta-edit configuration
   (use edit_dependency_config or edit_policy_change)
 - The "documentation" change actually changes API contracts
@@ -17160,8 +17266,8 @@ This tool MUST NOT be used when:
   that does not compile or run as written; broken examples mislead
   readers more than no example
 - The patch updates a Markdown test fixture loaded by tests at runtime
-  (use edit_test_only_change since the fixture's content is part of
-  the test contract)
+  (use the appropriate impl tool with \`target: "test"\` since the
+  fixture's content is part of the test contract)
 - The patch batches unrelated documentation changes across multiple
   files in one declaration; each independent doc surface gets its own
   edit_docs_only call so the rationale and audit trail stay tied to
@@ -17402,6 +17508,7 @@ function repoIsValid(dir) {
 
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
+var EditTargetSchema = exports_external.enum(["prod", "test"]);
 var AdditionalFileSchema = exports_external.object({
   file: exports_external.string().min(1)
 }).strict();
@@ -17430,6 +17537,7 @@ var EditToolRequestSchema = exports_external.object({
   target_file: exports_external.string().min(1),
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
+  target: EditTargetSchema.optional(),
   test_files: exports_external.preprocess(coerceJsonStringToArray("test_files"), exports_external.array(exports_external.string())),
   additional_files: exports_external.preprocess(coerceJsonStringToArray("additional_files"), exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES)).optional()
 }).strict();
@@ -17446,13 +17554,23 @@ function validateRequest(toolName, request, ctx) {
   if (request.rationale.trim().length === 0) {
     warnings.push("rationale must be non-empty");
   }
-  if (toolName === "edit_test_only_change") {
-    if (request.test_files.length > 0) {
-      warnings.push("test_files must be empty for edit_test_only_change");
+  const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
+  if (toolRequiresTarget) {
+    if (request.target === undefined) {
+      warnings.push(`target must be declared as "prod" or "test" for ${toolName}`);
     }
-  } else if (TOOLS_REQUIRING_TEST_FILES.includes(toolName)) {
+  } else {
+    if (request.target !== undefined) {
+      warnings.push(`${toolName} does not accept a target field (prod/test split does ` + `not apply to this tool)`);
+    }
+  }
+  if (request.target === "test") {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty when target is "test" (target_file IS the test file)`);
+    }
+  } else if (request.target === "prod" && TOOLS_REQUIRING_TEST_FILES.includes(toolName)) {
     if (request.test_files.length === 0) {
-      warnings.push(`test_files must be non-empty for ${toolName}`);
+      warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
   }
   if (request.additional_files !== undefined && !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
@@ -17596,12 +17714,13 @@ function makeStubHandler(ctx) {
 }
 
 // src/tools/registry.ts
-var sqliteToolInputSchema = {
+var implToolInputSchema = {
   type: "object",
   required: [
     "target_file",
     "rationale",
     "risk_level",
+    "target",
     "test_files"
   ],
   properties: {
@@ -17618,14 +17737,20 @@ var sqliteToolInputSchema = {
       enum: ["low", "medium", "high", "critical"],
       description: "Self-declared risk level. Recorded for audit only."
     },
+    target: {
+      type: "string",
+      enum: ["prod", "test"],
+      description: 'Required. Declare whether this edit lands in production code ("prod") or test code ("test"). One declaration covers exactly one target. To pair an implementation change with its tests, issue two declarations of the same tool: one with target="prod" (test_files forward-declares the test files), then one with target="test" (target_file IS the test file, test_files MUST be empty). Both may land in the same commit. The server does not pattern-match paths against test-directory conventions — the target declaration is your statement of intent.'
+    },
     test_files: {
       type: "array",
       items: { type: "string" },
-      description: "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. Test edits are made via separate edit_test_only_change calls. Required (non-empty) for SQLite-derived production tools; must be empty for edit_test_only_change."
+      description: 'Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. When target="prod", must be non-empty for impl tools (excluding edit_cosmetic). When target="test", must be empty (target_file IS the test file). Test edits land via a second invocation of the same tool with target="test".'
     }
   },
   additionalProperties: false
 };
+var { target: _omittedTarget, ...workflowSharedProperties } = implToolInputSchema.properties;
 var workflowToolInputSchema = {
   type: "object",
   required: [
@@ -17635,7 +17760,7 @@ var workflowToolInputSchema = {
     "test_files"
   ],
   properties: {
-    ...sqliteToolInputSchema.properties,
+    ...workflowSharedProperties,
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
@@ -17656,7 +17781,7 @@ var workflowToolInputSchema = {
   additionalProperties: false
 };
 function inputSchemaForTool(toolName) {
-  return TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName) ? workflowToolInputSchema : sqliteToolInputSchema;
+  return TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName) ? workflowToolInputSchema : implToolInputSchema;
 }
 function registerTools(server, options) {
   const handler = options.handler ?? makeStubHandler(options.context);
@@ -18510,8 +18635,8 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.4.3",
-  description: "MCP server with eighteen kind-specific edit tools that encode test obligations in tool descriptions",
+  version: "0.5.0",
+  description: "MCP server with seventeen kind-specific edit tools that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -19386,7 +19511,7 @@ ${catalog}
 If the typed_edit tool SCHEMAS are not loaded in your AI agent's tool
 list (the harness deferred them, or the MCP server connected late),
 the harness-native recovery is to call ToolSearch — e.g. query
-\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`
+\`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`
 — so the schemas land in the agent's callable surface.
 
 Running \`meta-edit help <tool_name>\` from a Bash tool emits the
@@ -19539,4 +19664,4 @@ export {
   main
 };
 
-//# debugId=300BC97E8D79C30664756E2164756E21
+//# debugId=4780849BA25F515C64756E2164756E21

@@ -221,6 +221,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "src/foo.ts",
       rationale: "fix",
       risk_level: "medium",
+      target: "prod",
       test_files: ["tests/foo.test.ts"],
       ...overrides,
     };
@@ -382,12 +383,13 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
-  it("succeeds for edit_test_only_change with empty test_files", () => {
+  it("succeeds for impl tool with target=test and empty test_files", () => {
     writeFile("tests/foo.test.ts", "describe('foo', ()=>{})\n");
-    const r = validateRequest("edit_test_only_change", {
+    const r = validateRequest("edit_boundary_condition", {
       target_file: "tests/foo.test.ts",
-      rationale: "tighten the assertion",
+      rationale: "tighten the boundary assertion",
       risk_level: "low",
+      target: "test",
       test_files: [],
     }, ctx());
     expect(r.ok).toBe(true);
@@ -398,18 +400,75 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
-  it("rejects edit_test_only_change with non-empty test_files", () => {
+  it("rejects impl tool with target=test and non-empty test_files", () => {
     writeFile("tests/foo.test.ts", "x\n");
-    const r = validateRequest("edit_test_only_change", {
+    const r = validateRequest("edit_boundary_condition", {
       target_file: "tests/foo.test.ts",
       rationale: "...",
       risk_level: "low",
+      target: "test",
       test_files: ["tests/foo.test.ts"],
     }, ctx());
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
     }
+  });
+
+  it("rejects impl tool with target=prod and missing test_files", () => {
+    writeFile("src/foo.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "tighten boundary",
+      risk_level: "low",
+      target: "prod",
+      test_files: [],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
+    }
+  });
+
+  it("rejects impl tool without target field", () => {
+    writeFile("src/foo.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "tighten boundary",
+      risk_level: "low",
+      test_files: ["tests/foo.test.ts"],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("target"))).toBe(true);
+    }
+  });
+
+  it("rejects edit_docs_only when target field is provided", () => {
+    writeFile("docs/a.md", "x\n");
+    const r = validateRequest("edit_docs_only", {
+      target_file: "docs/a.md",
+      rationale: "doc tweak",
+      risk_level: "low",
+      target: "prod",
+      test_files: [],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("target"))).toBe(true);
+    }
+  });
+
+  it("succeeds for edit_cosmetic with target=prod and empty test_files", () => {
+    writeFile("src/foo.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/foo.ts",
+      rationale: "reformat trailing whitespace",
+      risk_level: "low",
+      target: "prod",
+      test_files: [],
+    }, ctx());
+    expect(r.ok).toBe(true);
   });
 
   it("computes before_sha256 server-side for each additional_files entry", () => {

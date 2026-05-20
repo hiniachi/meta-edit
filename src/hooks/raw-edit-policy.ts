@@ -109,7 +109,7 @@ export function evaluateRawEdit(toolName: string): HookDecision {
       decision: "deny",
       reason:
         `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` +
-        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`,
     };
   }
   return { decision: "allow" };
@@ -195,7 +195,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
       reason:
         `meta-edit denies "apply_patch": its unified-diff input has no top-level file_path to bind a typed_edit declaration against. ` +
         `Use the opencode \`edit\` or \`write\` tool (which DO carry file_path) after a typed_edit declaration, or invoke a typed edit_* MCP tool directly. ` +
-        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`,
     };
   }
 
@@ -271,12 +271,13 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
           "empty file create authorized without typed_edit declaration. " +
           "For the actual content, declare an appropriate edit_<TYPE> next " +
           "(e.g. edit_state_transition / edit_boundary_condition for source code, " +
-          "edit_docs_only for Markdown / docs, edit_test_only_change for new tests).",
+          "edit_docs_only for Markdown / docs, or the matching impl tool with " +
+          "target=\"test\" for new test files).",
       };
     }
     // File exists — empty Write would truncate it. Fall through to
     // grant-lookup so the agent must declare what kind of "blank-out"
-    // edit this is (typically edit_refactor_only or edit_docs_only).
+    // edit this is (typically edit_cosmetic or edit_docs_only).
   }
 
   // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).
@@ -335,7 +336,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
         `Call a typed edit_* MCP tool first. ` +
         `If you DID declare it, the path or repo root differs between the declaration and this write — ` +
         `declare with this exact repository-relative path. ` +
-        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_refactor_only\`) to load the relevant schema before declaring.`,
+        `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`,
     };
   }
   const { grant, binding: bound } = match;

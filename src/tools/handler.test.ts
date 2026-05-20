@@ -62,6 +62,7 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     target_file: "src/foo.ts",
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
+    target: "prod",
     test_files: ["tests/foo.test.ts"],
     ...overrides,
   };
@@ -185,11 +186,15 @@ describe("makeIssuingHandler — validation rejection", () => {
     );
   });
 
-  it("rejects non-empty test_files for edit_test_only_change", async () => {
-    writeFile("src/foo.ts", "hello\n");
+  it("rejects non-empty test_files for impl tool with target=test", async () => {
+    writeFile("tests/foo.test.ts", "x\n");
     await expectRejection(
-      "edit_test_only_change",
-      modifyRequest({ test_files: ["tests/foo.test.ts"] }),
+      "edit_boundary_condition",
+      modifyRequest({
+        target_file: "tests/foo.test.ts",
+        target: "test",
+        test_files: ["tests/foo.test.ts"],
+      }),
       (w) => w.some((s) => s.includes("test_files")),
     );
   });
@@ -264,7 +269,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
         risk_level: "low",
         test_files: [],
         additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
-      },
+      } as EditToolRequest,
     );
     expect(result.warnings).toEqual([]);
     expect(result.token.length).toBeGreaterThan(0);
@@ -292,7 +297,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
       risk_level: "low",
       test_files: [],
       additional_files: additional,
-    });
+    } as EditToolRequest);
     // v0.4.2: non-existent additional_files entries are valid forward
     // declarations; each binds sha256("") just like target_file.
     expect(result.warnings).toEqual([]);

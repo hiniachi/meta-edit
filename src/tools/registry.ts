@@ -13,9 +13,10 @@ import {
   type ValidationContext,
 } from "./common.js";
 
-// JSON schema for the 17 SQLite-derived tools: target_file + the standard
-// declaration fields, NO `additional_files`. The MCP layer rejects unknown
-// properties outright (additionalProperties: false) so a 17-tool call
+// JSON schema for the 16 impl tools (15 SQLite-derived + edit_cosmetic):
+// target_file + the standard declaration fields + required `target`
+// (prod/test), NO `additional_files`. The MCP layer rejects unknown
+// properties outright (additionalProperties: false) so an impl-tool call
 // carrying the field never reaches the issuer.
 //
 // v0.2.1 thinning: client-supplied before_sha256 / after_sha256 fields are
@@ -24,12 +25,19 @@ import {
 // (descriptions read as a comfortable tool, not a hashing chore), the
 // client-supplied digests added friction without proportional protective
 // value.
-const sqliteToolInputSchema = {
+//
+// v0.5.0: `target` ("prod" | "test") is required on every impl tool.
+// edit_test_only_change was removed; test edits go through the kind-
+// specific impl tool with target: "test", paired with the original
+// target: "prod" call. edit_docs_only does NOT carry a target (the
+// workflowToolInputSchema below omits it).
+const implToolInputSchema = {
   type: "object",
   required: [
     "target_file",
     "rationale",
     "risk_level",
+    "target",
     "test_files",
   ],
   properties: {
@@ -47,11 +55,17 @@ const sqliteToolInputSchema = {
       enum: ["low", "medium", "high", "critical"],
       description: "Self-declared risk level. Recorded for audit only.",
     },
+    target: {
+      type: "string",
+      enum: ["prod", "test"],
+      description:
+        "Required. Declare whether this edit lands in production code (\"prod\") or test code (\"test\"). One declaration covers exactly one target. To pair an implementation change with its tests, issue two declarations of the same tool: one with target=\"prod\" (test_files forward-declares the test files), then one with target=\"test\" (target_file IS the test file, test_files MUST be empty). Both may land in the same commit. The server does not pattern-match paths against test-directory conventions — the target declaration is your statement of intent.",
+    },
     test_files: {
       type: "array",
       items: { type: "string" },
       description:
-        "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. Test edits are made via separate edit_test_only_change calls. Required (non-empty) for SQLite-derived production tools; must be empty for edit_test_only_change.",
+        "Paths of test files relevant to this edit. Forward declaration only — recorded in the audit log but NOT bound by this token. When target=\"prod\", must be non-empty for impl tools (excluding edit_cosmetic). When target=\"test\", must be empty (target_file IS the test file). Test edits land via a second invocation of the same tool with target=\"test\".",
     },
   },
   additionalProperties: false,
@@ -61,6 +75,12 @@ const sqliteToolInputSchema = {
 // adds the optional `additional_files` array (≤ MAX_ADDITIONAL_FILES).
 // v0.3.1 dropped edit_create_file and edit_create_planning_artifact;
 // empty file creation is now hook-level (no MCP declaration).
+// v0.5.0: edit_docs_only does NOT carry the prod/test `target` field
+// (documentation has its own surface); the impl-tool schema is the
+// source for the other shared properties via destructuring, then
+// `target` is excluded explicitly here.
+const { target: _omittedTarget, ...workflowSharedProperties } =
+  implToolInputSchema.properties;
 const workflowToolInputSchema = {
   type: "object",
   required: [
@@ -70,7 +90,7 @@ const workflowToolInputSchema = {
     "test_files",
   ],
   properties: {
-    ...sqliteToolInputSchema.properties,
+    ...workflowSharedProperties,
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
@@ -95,10 +115,10 @@ const workflowToolInputSchema = {
   additionalProperties: false,
 } as const;
 
-function inputSchemaForTool(toolName: ToolName): typeof sqliteToolInputSchema | typeof workflowToolInputSchema {
+function inputSchemaForTool(toolName: ToolName): typeof implToolInputSchema | typeof workflowToolInputSchema {
   return TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
     ? workflowToolInputSchema
-    : sqliteToolInputSchema;
+    : implToolInputSchema;
 }
 
 export type RegisterToolsOptions = {

@@ -18,8 +18,7 @@ import {
 // Explicit exempt set: tools for which test_files is NOT required.
 // Mirrors the filter in descriptions.ts. If the two diverge, the test fails.
 const EXPLICIT_EXEMPT: ReadonlySet<ToolName> = new Set([
-  "edit_refactor_only",
-  "edit_test_only_change",
+  "edit_cosmetic",
   "edit_docs_only",
 ]);
 

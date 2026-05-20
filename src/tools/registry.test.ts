@@ -12,15 +12,19 @@ import type { EditToolRequest, EditToolResult } from "./common.js";
 import type { ToolName } from "./descriptions.js";
 import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
-describe("eighteen tools", () => {
-  it("registers exactly eighteen tool names", () => {
+describe("seventeen tools", () => {
+  it("registers exactly seventeen tool names", () => {
     // v0.3.1: edit_create_file and edit_create_planning_artifact were
     // dropped. Empty file creation is now free at the deny-raw-edit
     // hook level; content fills go through the appropriate type-specific
-    // tool's modify path. Surface count: 17 SQLite-derived + 1 workflow
-    // tool (edit_docs_only) = 18.
-    expect<number>(TOOL_NAMES.length).toBe(18);
-    expect(new Set(TOOL_NAMES).size).toBe(18);
+    // tool's modify path.
+    // v0.5.0: edit_test_only_change was removed (test edits go through
+    // impl tools with target: "test"), and edit_refactor_only was
+    // narrowed and renamed to edit_cosmetic. Surface count: 15
+    // SQLite-derived impl tools + edit_cosmetic + 1 workflow tool
+    // (edit_docs_only) = 17.
+    expect<number>(TOOL_NAMES.length).toBe(17);
+    expect(new Set(TOOL_NAMES).size).toBe(17);
   });
 
   it("has a non-empty description for each tool", () => {
@@ -43,10 +47,14 @@ describe("eighteen tools", () => {
     expect(TOOL_NAMES).not.toContain("edit_create_planning_artifact" as never);
   });
 
-  it("treats edit_docs_only as test-files-optional, like edit_refactor_only", () => {
+  it("treats edit_docs_only and edit_cosmetic as test-files-optional", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_docs_only");
-    expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_refactor_only");
-    expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_test_only_change");
+    expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_cosmetic");
+  });
+
+  it("does NOT register edit_refactor_only or edit_test_only_change (v0.5.0 removal)", () => {
+    expect(TOOL_NAMES).not.toContain("edit_refactor_only" as never);
+    expect(TOOL_NAMES).not.toContain("edit_test_only_change" as never);
   });
 
   it("typed-edit-onboarding Skill catalog mentions every TOOL_NAMES entry (drift guard)", () => {
@@ -70,14 +78,14 @@ describe("eighteen tools", () => {
   });
 
   it("TOOLS_REQUIRING_TEST_FILES contains no tools that are in the explicit exempt set", () => {
-    const exempt = ["edit_refactor_only", "edit_test_only_change", "edit_docs_only"];
+    const exempt = ["edit_cosmetic", "edit_docs_only"];
     for (const name of exempt) {
       expect(TOOLS_REQUIRING_TEST_FILES).not.toContain(name);
     }
   });
 
   it("every tool in TOOL_NAMES is either in TOOLS_REQUIRING_TEST_FILES or in the explicit exempt set", () => {
-    const exempt = new Set(["edit_refactor_only", "edit_test_only_change", "edit_docs_only"]);
+    const exempt = new Set(["edit_cosmetic", "edit_docs_only"]);
     for (const name of TOOL_NAMES) {
       const required = TOOLS_REQUIRING_TEST_FILES.includes(name);
       const exempted = exempt.has(name);
@@ -86,14 +94,14 @@ describe("eighteen tools", () => {
   });
 
   it("all tools in the explicit exempt set are present in TOOL_NAMES", () => {
-    const exempt = ["edit_refactor_only", "edit_test_only_change", "edit_docs_only"];
+    const exempt = ["edit_cosmetic", "edit_docs_only"];
     for (const name of exempt) {
       expect(TOOL_NAMES).toContain(name as typeof TOOL_NAMES[number]);
     }
   });
 
   it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
-    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 3);
+    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 2);
   });
 
   it("includes the universal General principles block verbatim in every description", () => {
@@ -194,6 +202,7 @@ describe("registerTools — CallToolRequest handler", () => {
           target_file: "src/foo.ts",
           rationale: "test",
           risk_level: "medium",
+          target: "prod",
           test_files: ["tests/foo.test.ts"],
         },
       },
