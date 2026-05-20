@@ -61,12 +61,22 @@ jobs:
       # Node 22 still ships npm 10.x, which silently skips the OIDC
       # path and fails the publish with `ENEEDAUTH / need auth` even
       # when every OIDC claim (owner, repository, workflow, environment)
-      # matches the npm Trusted Publisher configuration. Upgrade to the
-      # current npm so `npm publish --provenance` actually requests the
-      # OIDC ID token, exchanges it for a registry bearer, and PUTs the
-      # tarball.
-      - name: Upgrade npm (Trusted Publisher OIDC needs >= 11.5.1)
-        run: npm install -g npm@latest
+      # matches the npm Trusted Publisher configuration.
+      #
+      # `npm install -g npm@latest` against the bundled npm 10.x fails
+      # with `MODULE_NOT_FOUND: Cannot find module 'promise-retry'`
+      # because reify-output unlinks the running npm's internal
+      # node_modules mid-install before the new modules land — the
+      # classic in-place self-upgrade race. Install into a separate
+      # prefix instead so the system npm never overwrites itself, then
+      # prepend that prefix to PATH so subsequent steps invoke the new
+      # binary.
+      - name: Install npm@latest into a separate prefix (Trusted Publisher OIDC needs >= 11.5.1)
+        run: |
+          set -euo pipefail
+          npm install -g --prefix "$HOME/.npm-latest" npm@latest
+          echo "$HOME/.npm-latest/bin" >> "$GITHUB_PATH"
+          "$HOME/.npm-latest/bin/npm" --version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
