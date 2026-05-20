@@ -23,6 +23,13 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # GitHub Environment name must match the npm Trusted Publisher
+    # configuration on https://www.npmjs.com/package/@hiniachi/meta-edit/access
+    # (Publishing access → Trusted Publishers → Environment name = "nia").
+    # OIDC claims are checked against all four keys (owner, repository,
+    # workflow filename, environment); a missing or wrong environment
+    # field causes npm to reject the publish with 404 Not Found.
+    environment: nia
     timeout-minutes: 15
     permissions:
       contents: read
