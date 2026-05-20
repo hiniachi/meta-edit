@@ -57,6 +57,17 @@ jobs:
           # the package.json scope and authenticates via OIDC token
           # exchange directly — no .npmrc shim required.
 
+      # Trusted Publisher OIDC token exchange landed in npm CLI 11.5.1.
+      # Node 22 still ships npm 10.x, which silently skips the OIDC
+      # path and fails the publish with `ENEEDAUTH / need auth` even
+      # when every OIDC claim (owner, repository, workflow, environment)
+      # matches the npm Trusted Publisher configuration. Upgrade to the
+      # current npm so `npm publish --provenance` actually requests the
+      # OIDC ID token, exchanges it for a registry bearer, and PUTs the
+      # tarball.
+      - name: Upgrade npm (Trusted Publisher OIDC needs >= 11.5.1)
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
