@@ -60,6 +60,39 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Diagnostic step: dump the OIDC token's claims so we can compare
+      # them byte-for-byte against the npm Trusted Publisher config.
+      # When a publish 404s despite the four configured keys (owner,
+      # repository, workflow_filename, environment) appearing correct,
+      # the mismatch is usually invisible at the UI layer (case-sensitive
+      # whitespace, an unexpected repo-rename, the wrong environment
+      # name on the workflow side, etc.). The claim dump puts the
+      # actual values that npm sees on screen.
+      #
+      # Only runs on workflow_dispatch to keep release-event logs clean
+      # and to avoid leaking diagnostic noise into the audit trail of a
+      # real publish. The token itself is requested with the npm
+      # audience so the claims reflect exactly what the npm registry
+      # validates against.
+      - name: Debug — dump OIDC claims (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('npm:registry.npmjs.org');
+            const parts = token.split('.');
+            const payload = JSON.parse(
+              Buffer.from(parts[1], 'base64url').toString('utf8'),
+            );
+            // Strip volatile / sensitive fields before printing.
+            delete payload.iat;
+            delete payload.exp;
+            delete payload.nbf;
+            delete payload.jti;
+            core.startGroup('OIDC claims (sanitized, npm audience)');
+            console.log(JSON.stringify(payload, null, 2));
+            core.endGroup();
+
       # Release tag (e.g. "v0.4.3") must match package.json.version. The
       # CI workflow already enforces package.json/plugin.json sync, so
       # checking against package.json is sufficient.
