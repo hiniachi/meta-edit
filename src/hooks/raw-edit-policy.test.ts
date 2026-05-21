@@ -76,12 +76,16 @@ async function issueGrant(
 // =====================================================================
 
 describe("evaluateRawEdit", () => {
-  it("denies Edit / Write / MultiEdit / NotebookEdit (canonical)", () => {
+  it("denies Edit / Write / MultiEdit / NotebookEdit (canonical) with reminder wording", () => {
     for (const t of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
       const r = evaluateRawEdit(t);
       expect(r.decision).toBe("deny");
       expect(r.reason).toContain(t);
-      expect(r.reason).toContain("edit_*");
+      // Reminder-style wording (docs/plan/reminder-style-hooks/rfc.md §7.2):
+      // prefix + first-person recovery framing + classification language.
+      expect(r.reason).toContain("meta-edit reminder:");
+      expect(r.reason).toContain("classification step");
+      expect(r.reason).toContain("typed edit tool");
     }
   });
 
@@ -110,7 +114,11 @@ describe("evaluateRawEdit", () => {
     const r = evaluateRawEdit("apply_patch");
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("apply_patch");
-    expect(r.reason).toContain("edit_*");
+    // Reminder-style wording (docs/plan/reminder-style-hooks/rfc.md §7.2):
+    // prefix + recovery framing ("next move") + typed-tool language.
+    expect(r.reason).toContain("meta-edit reminder:");
+    expect(r.reason).toContain("typed edit tool");
+    expect(r.reason).toContain("next move");
     // Case-insensitivity sanity (opencode emits lowercase, but a
     // future harness could capitalise — both must hit).
     expect(evaluateRawEdit("Apply_Patch").decision).toBe("deny");
@@ -800,7 +808,10 @@ describe("evaluateTokenedEdit — happy path", () => {
       log,
     });
     expect(r.decision).toBe("warn");
-    expect(r.reason).toMatch(/empty file create/);
+    // Reminder-style wording (docs/plan/reminder-style-hooks/rfc.md §7).
+    expect(r.reason).toContain("meta-edit reminder:");
+    expect(r.reason).toMatch(/empty file/);
+    expect(r.reason).toMatch(/declare an appropriate edit_<TYPE>/);
     // Auto-mkdir created the parent dirs.
     expect(fs.statSync(path.join(tmpRoot, "newdir/nested")).isDirectory()).toBe(true);
   });
@@ -1103,7 +1114,7 @@ describe("evaluateTokenedEdit — v0.4.2 grant-binding fixes", () => {
     expect(r1.decision).toBe("allow");
   });
 
-  it("categorizes the deny reason: undeclared", async () => {
+  it("categorizes the deny reason: undeclared (now reminder-style per RFC §7.2)", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
     writeFile("src/foo.ts", "x\n");
@@ -1119,7 +1130,13 @@ describe("evaluateTokenedEdit — v0.4.2 grant-binding fixes", () => {
       log,
     });
     expect(r.decision).toBe("deny");
-    expect(r.reason).toContain("[meta-edit:undeclared]");
+    // The `[meta-edit:undeclared]` categorization prefix was a classification
+    // recovery surface (RFC §6), so v0.5.1 reworded it to reminder style.
+    // Substring discriminator is the verbatim "no active typed_edit
+    // declaration" phrase that survived the rewrite.
+    expect(r.reason).toContain("meta-edit reminder:");
+    expect(r.reason).toContain("no active typed_edit declaration");
+    expect(r.reason).toContain("classification step");
   });
 
   it("categorizes the deny reason: stale (disk drifted from declaration)", async () => {
@@ -1143,6 +1160,10 @@ describe("evaluateTokenedEdit — v0.4.2 grant-binding fixes", () => {
     });
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("[meta-edit:stale]");
+    // Stale is a precondition / fail-closed surface, NOT a classification
+    // recovery surface, so RFC §6 keeps its wording imperative — the
+    // reminder prefix must not creep in.
+    expect(r.reason).not.toContain("meta-edit reminder:");
   });
 
   it("anti-hijack: an interleaved later declaration does not steal an earlier file's pending write", async () => {
@@ -1172,5 +1193,53 @@ describe("evaluateTokenedEdit — v0.4.2 grant-binding fixes", () => {
     // The disk-matching grant is chosen, so the write is allowed even
     // though a newer (LIFO-preferred) declaration exists.
     expect(r.decision).toBe("allow");
+  });
+});
+
+// =====================================================================
+// Regression: reminder-style prefix is scoped to classification-recovery
+// surfaces (RFC §6). Fail-closed errors and structural mismatches keep
+// imperative wording — they are "wrong state" / "wrong territory", not
+// "wrong tool".
+// =====================================================================
+
+describe("evaluateTokenedEdit — imperative wording preserved for fail-closed surfaces", () => {
+  it("missing file_path: imperative wording, no reminder prefix", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: { old_string: "x", new_string: "y" }, // no file_path
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("file_path");
+    expect(r.reason).not.toContain("meta-edit reminder:");
+  });
+
+  it("unreadable file (EISDIR): imperative fail-closed, no reminder prefix", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    // Create a directory at the target path so the readFileForBinding
+    // call fails with EISDIR.
+    const fs = await import("node:fs");
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, "src/dir-target"));
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/dir-target"),
+        old_string: "x",
+        new_string: "y",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/\[meta-edit:unreadable\]|could not read/);
+    expect(r.reason).not.toContain("meta-edit reminder:");
   });
 });

@@ -1232,3 +1232,98 @@ mis-marshals non-empty string arrays.
   the new surface; CLAUDE.md, three READMEs, the SKILL onboarding,
   the site landing page, and `plugin.json` (version 0.4.3 → 0.5.0)
   all reference seventeen consistently.
+
+
+## v0.5.1: reminder-style hook wording (PR-α of v0.6.0 plan)
+
+- Completed: 2026-05-21
+- What works:
+  - Hook messages on **classification-recovery** surfaces are rewritten
+    in self-reminder style with a `meta-edit reminder:` prefix and
+    first-person framing, per
+    `docs/plan/reminder-style-hooks/rfc.md` §6–§7. The denial /
+    enforcement behavior is unchanged — only the `reason` strings are
+    reworded.
+  - Rewrites land on six wording sites:
+    - `src/hooks/raw-edit-policy.ts`:
+      - `evaluateRawEdit()` raw Edit/Write/MultiEdit/NotebookEdit deny
+        (RFC §7.2)
+      - `evaluateTokenedEdit()` `apply_patch` deny (same recovery
+        scenario as raw-edit; the message explains why apply_patch
+        cannot bind a typed_edit grant)
+      - `evaluateTokenedEdit()` "no active typed_edit declaration"
+        deny — formerly tagged `[meta-edit:undeclared]` — replaced by
+        the reminder prefix since this is the canonical
+        classification-recovery surface (RFC §6)
+      - empty-Write warn (the post-empty-create nudge that asks the
+        agent to declare the kind of the content fill)
+    - `src/hooks/bash-write-policy.ts`:
+      - structural redirect warn (v0.1.5 surface, soft warn for
+        outside-safe-sink redirects) — RFC §7.3 verbatim
+      - `warnVerbReason()` helper for the mv / cp / rsync verb-warn
+  - SessionStart message (`src/hooks/session-onboarding.ts`
+    `buildOnboardingMessage()`) becomes a **merged template**: the
+    §7.1 reminder block is prepended to the existing
+    `typed-edit-onboarding` skill pointer block. The skill pointer is
+    retained (Codex PR #84 review #7 — replacing the function with
+    §7.1 alone would regress onboarding guidance). `hooks/hooks.json`
+    and `.claude-plugin/plugin.json` are unchanged (RFC §8 invariant).
+  - **Imperative wording preserved** on verb-deny (`sed -i`, `dd`,
+    `tee`, `decode-and-execute`, heredoc, `python -c`/`node -e`/…,
+    DENY_VERBS), protected-path denies (`.meta-edit/state/**`,
+    `.meta-edit/tmp/**`), and fail-closed surfaces (`[meta-edit:stale]`,
+    `[meta-edit:unreadable]`, `[meta-edit:path-mismatch]`,
+    `[meta-edit:expired]`/`consumed`/`consume-failed`). These are
+    structural-bypass or wrong-territory surfaces; RFC §6 explicitly
+    keeps them imperative.
+- Tests added (Phase 3 / Phase 4):
+  - `src/hooks/raw-edit-policy.test.ts`: updated four assertions whose
+    substring matchers tracked the old wording (`edit_*` →
+    `typed edit tool`; `[meta-edit:undeclared]` → reminder prefix +
+    `no active typed_edit declaration`); added a new describe block
+    asserting fail-closed surfaces (`missing file_path`, EISDIR) do
+    NOT contain `meta-edit reminder:` and stale keeps its
+    `[meta-edit:stale]` tag.
+  - `src/hooks/bash-write-policy.test.ts`: appended a "reminder-style
+    scoped to soft warns" describe block. Positive assertions
+    (`structural redirect warn`, `mv/cp/rsync verb-warn`) check the
+    reminder prefix and `classification language`; negative
+    assertions (verb-deny: sed -i / dd / tee / decode-and-execute /
+    heredoc / python -c / DENY_VERBS; protected-path: redirect to
+    `.meta-edit/state` + sed -i `.meta-edit/state`) check that the
+    reminder prefix is absent.
+  - `src/hooks/session-onboarding.test.ts` (new): snapshot test on
+    `buildOnboardingMessage()` asserting the reminder block,
+    semantic phrases (`classification step`, `stop and make the
+    declaration first`), and the retained skill pointer
+    (`typed-edit-onboarding`, `seventeen-tool catalog`, `ToolSearch`)
+    are all present, and that the reminder block precedes the skill
+    pointer in source order.
+  - Hook entry-point guard (`import.meta.main`) added to
+    `session-onboarding.ts` so unit tests can import
+    `buildOnboardingMessage` without the script's `readStdin()` call
+    hanging the test runner.
+  - Full suite: 818 tests pass (was 801 on main; +17 new assertions
+    landing through the three describe blocks above). `tsc --noEmit`
+    clean. `bun run build` clean — `dist/` regenerated and committed.
+- Spec deviations: `docs/plan/reminder-style-hooks/rfc.md` §6 table
+  was extended in the same change to enumerate the three reminder
+  surfaces the implementation generalized from the original two-row
+  split (the original table only listed "raw Edit deny" + "Bash
+  structural redirect warn" as reminder, with other soft warns
+  missing). The expanded table now records `apply_patch` deny,
+  empty-Write warn, structural-redirect warn, and mv/cp/rsync
+  verb-WARN as reminder; the fail-closed category row was widened to
+  enumerate `[meta-edit:stale]` / `unreadable` / `path-mismatch` /
+  `expired`/`consumed`/`consume-failed` and missing `file_path`. The
+  underlying principle ("soft warns get reminder; structural bypass /
+  audit-base intrusion / fail-closed errors stay imperative") is
+  unchanged. Per CLAUDE.md §4 the spec edit and the code that depends
+  on it land in the same commit. The "seventeen-tool catalog" phrase
+  in the SessionStart message and the `edit_docs_only` references in
+  `warnVerbReason()` / the empty-Write nudge / the structural-redirect
+  warn / the `evaluateRawEdit` ToolSearch hint are intentionally left
+  at their current names — those are workflow-axis-kinds (PR-β /
+  v0.6.0) rewrites per the RFC's landing order.
+- Version bump: `package.json` and `.claude-plugin/plugin.json` from
+  0.5.0 → 0.5.1 (patch — wording-only change, no surface change).

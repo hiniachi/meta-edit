@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -43,6 +44,7 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/hooks/session-onboarding.ts
 import * as fs4 from "node:fs";
@@ -324,6 +326,19 @@ function claimOnboardingMarker(markerPath, sessionId) {
 }
 function buildOnboardingMessage() {
   return [
+    "meta-edit reminder:",
+    "",
+    "I should not edit first and classify later.",
+    "",
+    "Before changing repository files, I should choose the typed edit tool",
+    "that matches the intent of the change. The tool choice is part of the",
+    "reasoning step, not just ceremony.",
+    "",
+    "If a direct edit or shell write would skip that declaration, I should",
+    "stop and make the declaration first.",
+    "",
+    "---",
+    "",
     "meta-edit MCP server is registered for this project. New session detected.",
     "",
     "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
@@ -355,10 +370,15 @@ async function main() {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
-main().then((code) => process.exit(code), (err) => {
-  process.stderr.write(`session-onboarding hook crashed: ${err.message}
+if (__require.main == __require.module) {
+  main().then((code) => process.exit(code), (err) => {
+    process.stderr.write(`session-onboarding hook crashed: ${err.message}
 `);
-  process.exit(0);
-});
+    process.exit(0);
+  });
+}
+export {
+  buildOnboardingMessage
+};
 
-//# debugId=FA658343E97B382564756E2164756E21
+//# debugId=92CFCAA638F34BAE64756E2164756E21

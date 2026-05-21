@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -43,6 +44,7 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/hooks/hook-runtime.ts
 async function readStdin() {
@@ -5568,7 +5570,13 @@ function evaluateRawEdit(toolName) {
   if (LOWER_RAW_EDIT_TOOLS.has(toolName.toLowerCase())) {
     return {
       decision: "deny",
-      reason: `meta-edit denies raw "${toolName}"; use a typed edit_* MCP tool. ` + `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
+      reason: `meta-edit reminder:
+
+` + `I was about to edit through raw "${toolName}" without a meta-edit declaration.
+
+` + `That would skip the intended classification step. The correct next move is to choose the typed edit tool that best describes this change, then perform the edit.
+
+` + `If the typed_edit tool schemas are not loaded in my tool list, I should use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
     };
   }
   return { decision: "allow" };
@@ -5586,7 +5594,13 @@ async function evaluateTokenedEdit(args) {
   if (lcName === "apply_patch") {
     return {
       decision: "deny",
-      reason: `meta-edit denies "apply_patch": its unified-diff input has no top-level file_path to bind a typed_edit declaration against. ` + `Use the opencode \`edit\` or \`write\` tool (which DO carry file_path) after a typed_edit declaration, or invoke a typed edit_* MCP tool directly. ` + `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
+      reason: `meta-edit reminder:
+
+` + `I was about to use "apply_patch", whose unified-diff input has no top-level file_path that the typed_edit declaration can bind against.
+
+` + `The correct next move is to use the opencode \`edit\` or \`write\` tool (which DO carry file_path) after a typed_edit declaration, or to invoke a typed edit_* MCP tool directly.
+
+` + `If the typed_edit tool schemas are not loaded in my tool list, I should use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
     };
   }
   const pathField = lcName === "notebookedit" ? "notebook_path" : "file_path";
@@ -5616,7 +5630,11 @@ async function evaluateTokenedEdit(args) {
       } catch {}
       return {
         decision: "warn",
-        reason: "empty file create authorized without typed_edit declaration. " + "For the actual content, declare an appropriate edit_<TYPE> next " + "(e.g. edit_state_transition / edit_boundary_condition for source code, " + "edit_docs_only for Markdown / docs, or the matching impl tool with " + 'target="test" for new test files).'
+        reason: `meta-edit reminder:
+
+` + "I created an empty file without a typed_edit declaration. " + `Empty creates are authorized, but the actual content fill is the part that should be classified.
+
+` + "The next move is to declare an appropriate edit_<TYPE> for the content " + "(e.g. edit_state_transition / edit_boundary_condition for source code, " + "edit_docs_only for Markdown / docs, or the matching impl tool with " + 'target="test" for new test files), then perform the content write through the typed surface.'
       };
     }
   }
@@ -5641,7 +5659,15 @@ async function evaluateTokenedEdit(args) {
   if (match === null) {
     return {
       decision: "deny",
-      reason: `[meta-edit:undeclared] no active typed_edit declaration covers "${canonical}" (repoRoot="${repoRoot}"). ` + `Call a typed edit_* MCP tool first. ` + `If you DID declare it, the path or repo root differs between the declaration and this write — ` + `declare with this exact repository-relative path. ` + `If the typed_edit tool schemas are not loaded in your tool list, use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
+      reason: `meta-edit reminder:
+
+` + `I was about to write "${canonical}" (repoRoot="${repoRoot}") but no active typed_edit declaration covers it.
+
+` + `That would skip the intended classification step. The correct next move is to call a typed edit_* MCP tool first, then perform the write.
+
+` + `If I DID declare it, the path or repo root differs between the declaration and this write — I should re-declare with this exact repository-relative path.
+
+` + `If the typed_edit tool schemas are not loaded in my tool list, I should use ToolSearch (e.g. query \`mcp meta-edit edit\` or \`select:mcp__plugin_meta-edit_meta-edit__edit_cosmetic\`) to load the relevant schema before declaring.`
     };
   }
   const { grant, binding: bound } = match;
@@ -6145,4 +6171,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=5173C50694132C5764756E2164756E21
+//# debugId=2E0D08588C7B758764756E2164756E21
