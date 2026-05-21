@@ -8,8 +8,8 @@ Status: **APPROVED**（2026-05-21）— 実装段階へ。本ドキュメント�
 | Author | nia |
 | Created | 2026-05-21 |
 | Target | v0.6.0（minor bump、reminder-hook PR を先 land） |
-| Touches | `src/hooks/raw-edit-policy.ts` の `reason` 文、`src/hooks/bash-write-policy.ts` の `reason` 文、新規 SessionStart hook |
-| Constitutional | 軽（既存 PreToolUse hook の wording 変更 + 新 SessionStart hook 1 件） |
+| Touches | `src/hooks/raw-edit-policy.ts` の `reason` 文、`src/hooks/bash-write-policy.ts` の `reason` 文、既存 `src/hooks/session-onboarding.ts` の message 文字列 |
+| Constitutional | 軽（既存 PreToolUse hook の wording 変更 + 既存 SessionStart hook の message 文字列のみ書き換え） |
 | Landing order | 本 RFC が先、workflow-kind RFC が後（後述 §10） |
 
 ---
@@ -21,8 +21,9 @@ This proposal changes the **wording style** of hook messages.
 It does **not** add new workflow edit kinds. It does **not** reclassify
 documentation edits. It does **not** change the meaning of existing
 edit tools. It only changes how hook output frames guidance, rejection,
-and recovery — plus adds **one** SessionStart hook that orients the
-model with the same reminder style.
+and recovery — plus rewrites the **existing** SessionStart hook's
+message (introduced in v0.3.1; no new hook registration, `hooks/hooks.json`
+unchanged) to use the same reminder style.
 
 The main idea: phrase hook messages as **self-reminders** rather than
 external commands.
@@ -210,6 +211,11 @@ stop and make the declaration first.
 
 短く保つ。policy 全文を dump しない。
 
+なお既存 `buildOnboardingMessage()` は本 reminder ブロックに加えて
+`typed-edit-onboarding` skill への pointer を含む。Phase 2 でこの
+skill pointer は **保持** し、reminder ブロックを冒頭に前置する
+**merged template** で差し替える（§11 Phase 2 参照）。
+
 ### 7.2 Raw Edit denial（rewrite）
 
 `src/hooks/raw-edit-policy.ts` の reason 文を以下のスタイルで再構成：
@@ -292,7 +298,7 @@ reminder-hook PR が先 land → workflow-kind PR が land 時にこの統合を
 | Reminder-hook PR | Workflow-kind PR |
 |---|---|
 | **Question**: hook wording を self-reminder にすると steering 改善するか | **Question**: edits を progress / observation / proposal / decision / explanation にどう分類すべきか |
-| **Changes**: hook message 文、SessionStart hook 1 件、test snapshots | **Changes**: new tools 5 件、provenance schema、cosmetic narrow、edit_docs_only 廃止 |
+| **Changes**: hook message 文、既存 SessionStart hook の message 文字列、test snapshots | **Changes**: new tools 5 件、provenance schema、cosmetic narrow、edit_docs_only 廃止 |
 | **No changes to**: tool taxonomy, docs classification, schema | **No changes to**: hook wording style |
 
 分離理由：
@@ -338,17 +344,26 @@ reminder-hook PR が先 land → workflow-kind PR が land 時にこの統合を
 
 ### Phase 2: SessionStart メッセージの書き換え
 
-- `src/hooks/session-onboarding.ts` の `buildOnboardingMessage()`
-  返却文字列を §7.1 のテキストに書き換え
+`src/hooks/session-onboarding.ts` の `buildOnboardingMessage()` 返却
+文字列を以下の **merged template** に差し替える：
+
+- 冒頭に §7.1 の reminder ブロックを前置
+- 直下に既存の `typed-edit-onboarding` skill pointer 行を **保持**
+  （現行の "load the seventeen-tool catalog and selection heuristic"
+  を含む block。reminder と skill pointer の併存が本 phase の唯一の
+  差分）
+
+すなわち skill pointer は **削除しない**。reminder ブロックを skill
+pointer の上に重ねる差分だけが本 phase の変更で、§7.1 の reminder
+文単体での「置換」ではない（PR レビュー指摘との整合）。
+
+副次条件：
+
 - hook 登録（`hooks/hooks.json`）、dedup（`.meta-edit/state/sessions/`
   への marker claim）、`additionalContext` 注入の各機構は **無変更**
 - 新規ファイル不要（既存 `session-onboarding.ts` の文字列のみ）
-
-注：現状の onboarding メッセージは `typed-edit-onboarding` skill への
-pointer も含む（"load the seventeen-tool catalog and selection heuristic"）。
-本 RFC では skill pointer の構造は維持しつつ、wording を reminder
-スタイルに揃える。"seventeen" → "twenty-one" の数値更新は workflow-kind
-RFC のスコープなので本 RFC では触らない（PR landing 順序で順次解決）。
+- "seventeen" → "twenty-one" の数値更新は workflow-kind RFC の
+  スコープなので本 RFC では触らない（PR landing 順序で順次解決）
 
 ### Phase 3: snapshot test
 
@@ -365,6 +380,8 @@ RFC のスコープなので本 RFC では触らない（PR landing 順序で順
 
 - `additionalContext` が空でない
 - 期待 prefix と semantic phrase を含む
+- 既存 skill pointer 文字列（"typed-edit-onboarding" 等）が引き続き
+  含まれていることも assert（merged template の整合確認）
 
 ### Phase 4: documentation
 
@@ -439,6 +456,9 @@ reasoning step, not just ceremony.
 If a direct edit or shell write would skip that declaration, I should
 stop and make the declaration first.
 ```
+
+加えて既存 `typed-edit-onboarding` skill pointer block を上記 reminder
+の直下に保持（Phase 2 merged template）。
 
 ### Raw Edit denial
 

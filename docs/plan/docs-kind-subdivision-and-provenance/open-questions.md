@@ -6,7 +6,7 @@ Status: **APPROVED**（2026-05-21）— Q1 / Q4 / Q5 確定済み（`rfc.md`
 
 | # | 論点 | 推し | 確度 | 状態 |
 |---|---|---|---|---|
-| 1 | `additional_files` 受理 cell（kind × prov 単位 accept/warn/reject） | マトリクスをそのまま判定テーブル化 | 高 | 議論中 |
+| 1 | `additional_files` 受理 cell（kind × prov 単位 accept/warn/reject） | マトリクスをそのまま判定テーブル化 | 高 | **決定** |
 | 2 | `edit_cosmetic` 境界例の追加 | （他ツール波及の設計変更検討のため一旦保留） | — | **PAUSED** |
 | 4 | `edit_cosmetic` の provenance マトリクス | `user_confirmed` / `accepted_artifact` / `direct_observation` のみ accept、`inference` / `speculation` は reject | 高 | **決定** |
 | 5 | legacy `edit_docs_only` マイグレーション | v0.6.0 で即時 reject、log/summary CLI は legacy bucket として読み込み | 高 | **決定** |
@@ -345,10 +345,10 @@ v0.7 で削除。
 
 | # | 状態 | 残作業 |
 |---|---|---|
-| Q1 | 議論中（matrix-driven 再評価） | `edit_proposal` 受理の最終承認、theme obligation 文言確定 |
+| Q1 | **決定** | RFC §3.3.2 マトリクスを実装にコード化。theme obligation 文言は rfc.md §3.3.2 に反映済み |
 | Q2 | **PAUSED** | 他ツール波及の設計変更が確定するのを待つ |
-| Q4 | **決定** | RFC §6 反映 |
-| Q5 | **決定** | RFC §6 反映 |
+| Q4 | **決定** | RFC §6 反映済み |
+| Q5 | **決定** | RFC §6 反映済み |
 
-Q4 / Q5 が決定済み、Q1 が user 確認待ち、Q2 が一時保留。承認後の
-RFC §6 更新は Q1 確定を待ってから一括で行う。
+Q1 / Q4 / Q5 が決定済み、Q2 が一時保留。RFC §3.3.x / §6 への反映も
+完了済み。

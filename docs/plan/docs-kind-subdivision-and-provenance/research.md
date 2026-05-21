@@ -91,21 +91,38 @@ URL）が含まれることを軽い構文チェックで要求。何が "artifa
 かはゆるく定義（`§`, `ADR-`, `issues/`, `RFC-`, URL パターン等）。
 不在なら warn（reject ではない、AI 申告の honesty 寄り）。
 
-### 3.3 `additional_files` の受理 kind
+### 3.3 `additional_files` の受理判定
 
-現状：`edit_docs_only` のみ。
+現状：`edit_docs_only` のみ受理（kind 単位 binary）。
 
-本 RFC：**5 新 kind のうち実用上 batch が必要なものに絞る**。候補：
+本 RFC：**判定は (kind, provenance) セル単位**（rfc.md §3.3.2 マトリクス、
+open-questions.md Q1 で確定）。`TOOLS_ACCEPTING_ADDITIONAL_FILES` を
+kind-binary な配列で持つ旧案（`["edit_explanation", "edit_decision"]`
+等）は **採用しない** — それでは `edit_proposal × accepted_artifact`
+や `edit_proposal × speculation` のような accept セルが誤って reject
+される。
+
+実装方針：
+
+- `evaluateAdditionalFiles(kind, prov) → "accept" | "warn" | "reject"`
+  を `src/tools/common.ts` に新設し、rfc.md §3.3.2 のマトリクスを
+  そのままコード化する
+- `validateRequest` は `additional_files` が指定されたときのみ本関数
+  を呼ぶ。`target_file` のみの単一 declaration は本マトリクスを引かず、
+  §3.3.1 のみで評価
+- `edit_progress` 行は全列 reject なので、`additional_files` 自体を
+  申告した時点で reject。それ以外の 4 kind は (kind, prov) によって
+  accept / warn / reject が分かれる
+
+参考シナリオ（accept セル）：
 
 - `edit_explanation` — 多言語 README 同期、docs/ 一括更新で batch が
   自然
 - `edit_decision` — リリース時の CHANGELOG + tag メタ + plugin.json
   bump が定型
-- `edit_progress` / `edit_observation` / `edit_proposal` — 各セッションの
-  1 ファイル単位が自然、batch 不要
-
-`TOOLS_ACCEPTING_ADDITIONAL_FILES = ["edit_explanation", "edit_decision"]`
-案。RFC 本体で確認要。
+- `edit_proposal × accepted_artifact` — audit document から起こす
+  issue 一括起票
+- `edit_proposal × speculation` — feature kickoff の探索的 issue burst
 
 ### 3.4 `edit_cosmetic` の narrow
 
@@ -156,10 +173,14 @@ hook 側の substring 検証も不要になった。
 
 | File | Action |
 |---|---|
-| `src/cli/log-cmd.ts:16, 66` | `edit_docs_only` 名前決め打ちで target 抜き扱いしている分岐を、`TOOLS_REQUIRING_TARGET` 補集合に置換。`--provenance` フィルタ追加 |
+| `src/cli/log-cmd.ts:16, 66` | `edit_docs_only` 名前決め打ちで target 抜き扱いしている分岐を、`TOOLS_REQUIRING_TARGET` 補集合に置換。`--provenance` フィルタ追加（複数指定は `--provenance speculation,inference` 形式） |
 | `src/cli/summary-cmd.ts:94, 122` | 新 5 kind 行を追加。`edit_docs_only` を legacy bucket 表示。provenance 別の小計列を追加 |
 | `src/cli/help-cmd.test.ts:65-69` | サンプル tool 名置換 |
-| 新規: `meta-edit drafts`（または `--drafts`） | マーカー付きブロック一覧表示（`provenance ∈ {inference, speculation}` のもの） |
+
+**`meta-edit drafts` サブコマンドは実装しない**。マーカーブロック前提
+の旧案だったが、RFC §3.4 でマーカー機構を廃止したため不要。`speculation`
+/ `inference` の抽出は `meta-edit log --provenance speculation,inference`
+で代替する。
 
 ### 3.8 Tests
 
@@ -186,10 +207,16 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 - §3.3.3 `edit_cosmetic + inference / speculation` の reject
 - `accepted_artifact + rationale-no-citation` の warn
 - `next_action` 文が provenance 5 値ごとに正しく branch されること（`inference` / `speculation` のとき prose リマインダが付加されること）
-- `edit_cosmetic` で情報変化を伴うコメント追加が reject されること（既存「stop and ask」の延長）
 - 旧 `edit_docs_only` を tool 名として呼び出すと **書き込み path で reject**（v0.6.0 Q5 決定）
 - 既存 jsonl の `edit_docs_only` エントリが log/summary CLI で legacy bucket として **読み出し可能** であること
 - impl 15 SQLite ツールでの provenance 受理（reject 組み合わせなし、`inference` / `speculation` も land、prose hedging を `next_action` で要求）
+
+**実装しないテスト**：`edit_cosmetic` がコメント内容を変えるパッチを
+受理 / 拒否する種の「パッチ内容検査ベース」のテストは追加しない。
+description-surface only の原則（CLAUDE.md §7.3, SPEC.md Article 7）
+に反するため、`edit_cosmetic` の narrowing は description verbatim と
+§3.3.3 の provenance reject（`inference` / `speculation`）でのみ
+表現する。
 
 ### 3.9 External documentation surfaces
 
@@ -226,10 +253,14 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 | `provenance` 必須化（21 全部） | No（宣言フィールド追加） | `target`, `rationale`, `test_files` |
 | 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` reject と同型 |
 | `accepted_artifact` citation 軽チェック | **境界**：文字列パターン照合のみ。「artifact が実在するか」「内容が宣言と整合か」は検証しない。warn のみ、reject しない | 既存 path-safety と同種の構文 lint |
-| ファイル内マーカー注入 | No（apply 時の文字列連結） | 既存になし、新規メカニズム |
 | パス matcher | **持たない**（採用しない） | — |
 
 diff 内容は読まない、宣言と実態の照合はしない。
+
+**マーカー注入機構も持たない**：RFC §3.4 で構造的マーカー（HTML
+コメント等）の埋め込み機構は採用しないことを決定。`speculation` /
+`inference` の uncertainty 表現は prose 文中の hedging（`**Unverified**:`,
+`TODO: verify — ` 等）のみで行う。
 
 ### 4.2 bet の信号は強まる
 
