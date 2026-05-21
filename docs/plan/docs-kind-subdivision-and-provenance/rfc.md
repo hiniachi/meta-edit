@@ -131,33 +131,99 @@ provenance:
 `direct_observation` / `accepted_artifact` / `user_confirmed` は
 通常運用、マーカーなし or 軽マーカー（§3.4）。
 
-### 3.4 ファイル内マーカー注入（apply 時、3 段階）
+### 3.4 ファイル内マーカー（AI 自書 + 任意サーバ検証）
 
-provenance に応じて apply フェーズで対象 patch の書き換えブロック
-前後にマーカーを挿入：
+#### 3.4.1 メカニズム
 
-| provenance | マーカー強度 | 形式 |
+meta-edit 自身は書かない（`src/tools/apply.ts` のコメント、SPEC
+Article 5 — 実際の write は native Edit/Write が行い、deny-raw-edit
+hook が grant を消費する）。よってマーカーは **AI が native Edit/
+Write の content 内に直接書く** 設計とする：
+
+1. AI は typed_edit を呼んで `edit_id` を受け取る
+2. 同 `edit_id` を含むマーカーを、続く native Edit/Write の new_string
+   / content 内に書き込む
+3. （任意）deny-raw-edit hook が write 直前に **substring 存在検証**
+   する：marker 文字列が含まれない場合 warn を出す（reject しない）
+
+substring 検証は `rationale.length > 0` と同種の構文的 lint であり
+diff 内容解析ではない（Article 7 セーフ）。
+
+#### 3.4.2 マーカー強度（2 段階）
+
+| provenance | マーカー | 説明 |
 |---|---|---|
-| `user_confirmed` | **none** | マーカーなし |
-| `accepted_artifact` | **none** | マーカーなし |
-| `direct_observation` | **light** | `<!-- meta-edit: observation (edit_id=...) -->` |
-| `inference` | **strong** | `<!-- meta-edit: INFERENCE — 再確認推奨 (edit_id=...) -->` |
-| `speculation` | **strong** | `<!-- meta-edit: SPECULATION — 未検証 (edit_id=...) -->` |
+| `user_confirmed` | 不要 | 決定稿として扱う |
+| `accepted_artifact` | 不要 | 決定稿として扱う |
+| `direct_observation` | **推奨**（required ではない） | 観察根拠の追記欄。1 行追加など friction が高い場合は省略可、ただし edit log には provenance が残る |
+| `inference` | **必須** | 検証されていない推論で land 済み、要再確認 |
+| `speculation` | **必須** | 未検証仮説、要検証 |
 
-`<!-- /meta-edit -->` で閉じる。Markdown では HTML コメントとして
-レンダリングされない。コード内コメントの場合は言語別コメント記法
-（`//`, `#`, `/* */`）で同等表現。
+`direct_observation` を必須にしないのは、`// XXX breaks for N>1000`
+のような 1 行コメント追加で marker 3 行を要求すると friction 過剰、
+AI が「じゃあコメントを書かない」に逃げる回避策となるため
+（RFC §6 元 open question #6 への回答）。
 
-注入位置は「**新規に追加された行 / hunk**」という構文的事実のみで
-決定（パッチ内容の意味解析は行わない、Article 7 違反回避）。
+#### 3.4.3 マーカー文字列テンプレート（言語非依存）
 
-#### マーカー昇格 / 除去パス
+AI は **編集対象ファイルの言語に合わせた comment 記法** で以下の
+テンプレートをラップする：
+
+```
+meta-edit: <PROVENANCE_LABEL> (edit_id=<EDIT_ID>) — <短い注記>
+... 編集された内容 ...
+/meta-edit (edit_id=<EDIT_ID>)
+```
+
+`<PROVENANCE_LABEL>` の値：
+
+- `direct_observation` → `observation`
+- `inference` → `INFERENCE — 再確認推奨`
+- `speculation` → `SPECULATION — 未検証`
+
+注釈（`— ...` 部分）は AI が rationale から抜粋して書く。
+edit_id は typed_edit のレスポンスから引用。
+
+言語別の wrapping 例：
+
+| 言語 | 開始マーカー | 終了マーカー |
+|---|---|---|
+| Markdown / HTML / XML / SVG | `<!-- meta-edit: ... -->` | `<!-- /meta-edit (edit_id=...) -->` |
+| JS / TS / Java / Go / Rust / C / C++ | `// meta-edit: ...` | `// /meta-edit (edit_id=...)` |
+| Python / Ruby / Bash / YAML / TOML | `# meta-edit: ...` | `# /meta-edit (edit_id=...)` |
+| SQL / Lua / Haskell | `-- meta-edit: ...` | `-- /meta-edit (edit_id=...)` |
+| Lisp / Clojure | `;; meta-edit: ...` | `;; /meta-edit (edit_id=...)` |
+| OCaml | `(* meta-edit: ... *)` | `(* /meta-edit (edit_id=...) *)` |
+| JSON | （comment 不可、log のみ） | — |
+| CSS | `/* meta-edit: ... */` | `/* /meta-edit (edit_id=...) */` |
+
+サーバは言語マップを持たない。description で例を示し、AI が
+ファイル拡張子から判断する。1 行 inline 形式（`// 実コンテンツ
+[meta-edit: observation edit_id=...]`）も description で許可：開始/
+終了マーカー型と inline 型のどちらでも presence 検証は通る
+（`edit_id=<EDIT_ID>` substring が new_string に含まれていれば OK）。
+
+#### 3.4.4 JSON / コメント不可ファイルの扱い
+
+JSON など comment 構文を持たないファイルでは：
+
+- マーカーを書き込まない
+- provenance は edit log にのみ残る
+- typed_edit のレスポンスに `marker_omitted: true` を含めて AI に通知
+  （後段の `meta-edit drafts` CLI で「ファイル内マーカー無しだが
+  inference/speculation 扱いの編集」を集計できるように）
+
+#### 3.4.5 マーカー昇格 / 除去パス
 
 - `speculation` → `user_confirmed` 等への昇格：**同じファイル / 同じ
-  行を再宣言**して上書き。apply 時に古いマーカーを除去
-- `direct_observation` 等の追記でマーカーが残っている領域を編集
-  する場合、新しい provenance のマーカーで囲み直す（古いマーカーは
-  消える）
+  edit_id 領域を再宣言**して上書き。新しい native Edit で marker
+  行を削除しつつ実コンテンツを残す
+- `direct_observation` 等の追記でマーカーが残っている領域を編集する
+  場合：新しい provenance に合わせて marker を書き換える（古い
+  edit_id の marker は新しい edit_id の marker に置き換わる）
+
+server は marker 寿命管理をしない（AI 自身の責務）。これは
+"description で行動を変える" 哲学と整合的。
 
 ### 3.5 `edit_cosmetic` の更なる narrow
 
@@ -205,7 +271,8 @@ provenance に応じて apply フェーズで対象 patch の書き換えブロ�
 | `provenance` 必須化 | No（宣言フィールド追加） | `target` / `rationale` / `test_files` |
 | 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` reject と同型 |
 | `accepted_artifact` citation lint | **境界**：文字列パターン照合のみ。artifact 実在 / 内容整合は検証しない。warn のみ | path-safety と同種の構文 lint |
-| マーカー注入 | No（apply 時の文字列連結） | 新規メカニズム |
+| マーカー（AI 自書） | No（content 文字列の組み立て） | 既存の `rationale` 文字列と同型 |
+| マーカー presence 検証（任意） | **境界**：substring 存在チェックのみ。AI が書いたか書いてないかしか見ない。中身の妥当性検証はしない。warn のみ | `rationale.length > 0` と同種の構文 lint |
 | **パス matcher** | **持たない** | — |
 
 diff 内容は読まない、宣言と実態の照合はしない、test 意味解析もしない。
@@ -382,8 +449,8 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
 2. **`edit_cosmetic` の境界例** — typo 修正と「情報を変える編集」の
    境界、`stale コメント削除` の扱い（§3.5 のテーブル）に追加例の
    要望はあるか
-3. **マーカーのコード言語別表現** — `//` / `#` / `/* */` / `<!-- -->`
-   / `;` / `--` のマッピングは実装時に decide で OK か？
+3. ~~マーカーのコード言語別表現~~ → **解決**（§3.4.3 で AI が言語別
+   wrapping を行う方式に決定。サーバは言語マップを持たない）
 4. **`edit_cosmetic` での provenance マトリクス** — RFC §3.3 は
    workflow と impl のみ。cosmetic は impl 側のルールに乗せる（warn
    なし、全 OK）か、それとも cosmetic の性質上 `direct_observation` /
@@ -391,9 +458,12 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
 5. **legacy `edit_docs_only` への自動マイグレーション** — 旧呼び出しは
    land 時点で reject、それとも一定期間 `edit_progress` にエイリアスして
    warn を出す移行期間を設けるか
-6. **`edit_observation` での `// XXX` 系コメント追加** — `edit_cosmetic`
-   からの移譲先として typical だが、code 内コメント 1 行の追加で
-   typed_edit 1 件が要るのは friction 過剰では？
+6. ~~`edit_observation` での `// XXX` 系コメント追加 friction~~ → **解決**
+   （§3.4.2 で `direct_observation` のマーカーを「推奨」に格下げ。
+   1 行コメント追加で marker 必須にならない）
+7. **マーカー presence 検証を入れるか** — §3.4.1 では「任意」と
+   したが、実装側で：(a) 入れる（observability 強化、warn 1 件だけ
+   増える）/ (b) 入れない（pure honor）。私の推し：(a)
 
 ---
 
@@ -414,11 +484,18 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
    - `accepted_artifact` citation lint
    - test：rejection / acceptance / warn
 
-3. **Phase C: マーカー注入**
-   - `src/tools/apply.ts` に 3 段階注入ロジック
-   - 言語別コメント記法のディスパッチ
-   - マーカー昇格 / 除去パス
-   - test：3 段階動作、上書き
+3. **Phase C: マーカー（AI 自書 + presence 検証）**
+   - description テンプレート文言の確定（§3.4.3）と `descriptions.ts`
+     への流し込み（Phase A の続きとして）
+   - deny-raw-edit hook に optional substring 存在検証を追加：
+     provenance が `inference` / `speculation` のとき edit_id
+     marker が write 内容に含まれているかチェック、不在なら warn
+   - typed_edit レスポンスに `marker_required: bool` と
+     `marker_example: string`（拡張子から推測した wrapping 例）を
+     追加してエージェントへフィードバック
+   - JSON 等 comment 不可ファイルでは `marker_omitted: true` を返す
+   - test：marker 含有 write の grant 消費、marker 欠落の warn、
+     昇格時の上書き、JSON での marker 省略動作
 
 4. **Phase D: 集計 + CLI**
    - `meta-edit summary` に provenance 内訳

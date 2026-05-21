@@ -77,8 +77,8 @@ hook 挙動, build/release プロファイル。本 RFC では **触らない**
 | `src/tools/descriptions.ts` | `TOOL_NAMES` 更新（17 → 21）：`edit_docs_only` 削除、`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` 追加。`TOOLS_REQUIRING_TEST_FILES` の除外集合更新（5 新 kind 全部除外）。`TOOLS_REQUIRING_TARGET` の除外集合更新（5 新 kind を除外）。`TOOL_DESCRIPTIONS` に新 5 件追加、`edit_docs_only` を削除。`edit_cosmetic` の description を narrow（コメント条項を削除）。impl 16 本の description に provenance guidance を追記 |
 | `src/tools/common.ts` | `TOOLS_ACCEPTING_ADDITIONAL_FILES` を見直し（後述 §3.3）。`EditToolRequestSchema` に `provenance` 必須フィールド追加（全 21 ツール対象）。`ProvenanceSchema = z.enum(["user_confirmed", "accepted_artifact", "direct_observation", "inference", "speculation"])`。`validateRequest` に provenance 必須化 + kind×provenance 無効組み合わせ検査 + `accepted_artifact` 選択時の rationale 内 artifact citation チェック（後述）追加 |
 | `src/tools/registry.ts` | JSON Schema に `provenance` を全 tool 追加。workflow-tool 判定（現状 `edit_docs_only` 決め打ち）を `TOOLS_ACCEPTING_ADDITIONAL_FILES` 由来に差し替え |
-| `src/tools/apply.ts` | provenance に応じたファイル内マーカー注入（3 段階：none / light / strong）。`edit_docs_only` 名前決め打ちの分岐を廃止 |
-| `src/state/edit-log.ts` | log エントリに `provenance` 追加（既存読み出しは optional として後方互換） |
+| `src/tools/apply.ts` | `edit_docs_only` 名前決め打ちの分岐を廃止（batch 受理 kind 集合へ）。typed_edit レスポンスに `marker_required` / `marker_example` / `marker_omitted` を含める軽い拡張のみ。**マーカー注入自体はサーバ側では行わない**（AI が native Edit/Write の content 内に直接書く設計、RFC §3.4） |
+| `src/state/edit-log.ts` | log エントリに `provenance` 追加（既存読み出しは optional として後方互換）。marker 存在ステータス（`marker_present: bool \| null`）の任意フィールド追加 |
 
 **重要：パス matcher は持たない**。AI の宣言のみで kind を確定する。
 プロジェクトごとにファイル配置が変わるためサーバ側で
@@ -129,14 +129,16 @@ description 内 "Comment edits (typo fix, ...)" 条項を：
 | docstring の API 例追記 | cosmetic | `edit_explanation` |
 | stale コメント削除 | cosmetic | `edit_observation`（"この情報は古いと観察した"） or stop-and-ask |
 
-### 3.5 Hooks（hint メッセージ更新）
+### 3.5 Hooks
 
 | File | Action |
 |---|---|
-| `src/hooks/raw-edit-policy.ts:274, 280` | `edit_docs_only` 参照を新 5 kind のリストに置換 |
-| `src/hooks/bash-write-policy.ts:491, 1205, 1996` | 同上、複数箇所 |
+| `src/hooks/raw-edit-policy.ts:274, 280` | hint 文の `edit_docs_only` 参照を新 5 kind のリストに置換。**機能追加**：grant 消費の直前で provenance を読み、`inference` / `speculation` の場合に `new_string` / `content` に `edit_id=<...>` の substring が含まれるかチェック、不在なら warn を出して edit log の marker_present を false でマーク（allow は変えない、reject しない） |
+| `src/hooks/bash-write-policy.ts:491, 1205, 1996` | hint 文の置換のみ |
 
-実装変更なし、文言のみ。
+raw-edit-policy 側に新規 ~30 LOC（substring 検索 + log 拡張）が入る。
+言語マップは持たない（AI が write 内容に書いた marker をリテラル
+検索するだけ）。bash-write-policy は文言変更のみ。
 
 ### 3.6 CLI
 
@@ -169,7 +171,8 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 - `provenance` 必須化 / enum 値域
 - 無効組み合わせ rejection（`edit_decision + inference`, `edit_decision + speculation`, `edit_explanation + speculation`）
 - `accepted_artifact + rationale-no-citation` の warn
-- マーカー注入の 3 段階動作（none / light / strong）
+- AI 自書マーカーの presence 検証（`inference` / `speculation` で marker 不在なら warn、`direct_observation` は marker 任意なので warn なし、`user_confirmed` / `accepted_artifact` は warn なし）
+- JSON など comment 不可ファイルで `marker_omitted: true` がレスポンスに含まれ、検証も skip されること
 - `edit_cosmetic` で情報変化を伴うコメント追加が reject されること（既存「stop and ask」の延長）
 - レガシー `edit_docs_only` エントリが log/summary CLI で legacy bucket に集計されること
 - impl 16 本での provenance 受理（reject 組み合わせなし、すべて warn + marker）
