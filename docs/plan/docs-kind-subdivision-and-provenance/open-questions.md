@@ -5,7 +5,7 @@ Status: **DRAFT**. RFC §6 の残 4 件を深掘り。`rfc.md` 本体を膨ら�
 
 | # | 論点 | 推し | 確度 | 状態 |
 |---|---|---|---|---|
-| 1 | `additional_files` 受理 kind | `edit_explanation` + `edit_decision` + `edit_proposal` | 中 | 議論中 |
+| 1 | `additional_files` 受理 cell（kind × prov 単位 accept/warn/reject） | マトリクスをそのまま判定テーブル化 | 高 | 議論中 |
 | 2 | `edit_cosmetic` 境界例の追加 | （他ツール波及の設計変更検討のため一旦保留） | — | **PAUSED** |
 | 4 | `edit_cosmetic` の provenance マトリクス | `user_confirmed` / `accepted_artifact` / `direct_observation` のみ accept、`inference` / `speculation` は reject | 高 | **決定** |
 | 5 | legacy `edit_docs_only` マイグレーション | v0.6.0 で即時 reject、log/summary CLI は legacy bucket として読み込み | 高 | **決定** |
@@ -23,99 +23,103 @@ Status: **DRAFT**. RFC §6 の残 4 件を深掘り。`rfc.md` 本体を膨ら�
 ユーザー指摘：**issue を大量に書くシナリオの friction が高そう** →
 `edit_proposal` も batch 受理すべきでは。
 
-### 設計判断マトリクス：kind × provenance で batch 需要を評価
+### 設計：マトリクスをそのまま validation ルールに
 
-セル = その (kind, provenance) 組み合わせで **batch シナリオが定型
-的に発生するか**。
+`additional_files` の受理判断を **kind 単位の binary（accept / reject）
+ではなく、(kind, provenance) セル単位の accept / warn / reject** に
+する。マトリクスがそのまま validateRequest の判定テーブル。
 
-凡例：
-- **○** = batch が定型的・反復的に発生（friction 大、受理の正当性
-  あり）
-- **△** = batch があれば便利だが頻度低、または theme が弱い
-- **—** = batch シナリオが構造的に無い、または kind×prov 自体が
-  reject される組み合わせ（§3.3 マトリクス参照）
+#### 判定テーブル（`additional_files` が指定されたときに引く）
 
 | kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
 |---|:---:|:---:|:---:|:---:|:---:|
-| `edit_progress` | — | — | — | — | — |
-| `edit_observation` | — | △ | △<br>(audit findings) | △<br>(§3.3 warn) | △ |
-| `edit_proposal` | △<br>(user 指示 triage) | **○**<br>(audit から起票 batch) | △ | △ | **○**<br>(feature kickoff issue burst) |
-| `edit_decision` | **○**<br>(release commit) | **○**<br>(spec ベース多面展開) | △ | —<br>(§3.3 reject) | —<br>(§3.3 reject) |
-| `edit_explanation` | **○**<br>(user 指示で多言語同期) | **○**<br>(spec ベース docs sweep) | **○**<br>(実装と doc 同期 batch) | △<br>(§3.3 warn) | —<br>(§3.3 reject) |
+| `edit_progress` | reject | reject | reject | reject | reject |
+| `edit_observation` | reject | warn | warn | warn | warn |
+| `edit_proposal` | warn | **accept** | warn | warn | **accept** |
+| `edit_decision` | **accept** | **accept** | warn | n/a ※ | n/a ※ |
+| `edit_explanation` | **accept** | **accept** | **accept** | warn | n/a ※ |
 
-### マトリクスからの受理判断
+※ `n/a` セルは §3.3 の kind×prov reject に該当するため additional_files
+判定まで到達しない（typed_edit 自体が reject される）。
 
-**ルール**：kind 行に ○ が 1 つ以上あれば accept、△ のみまたは — のみなら reject。
+#### セル値の意味
 
-| kind | ○ の数 | 受理 | 確度 | 主たる ○ シナリオ |
-|---|:---:|:---:|:---:|---|
-| `edit_progress` | 0 | **reject** | 高 | — |
-| `edit_observation` | 0 | **reject** | 中 | （v0.7 で再評価、audit findings 集約の friction を観察） |
-| `edit_proposal` | 2 | **accept** | 中 | accepted_artifact 列：audit から起点が明確な issue 一括起票<br>speculation 列：feature kickoff の探索的 issue burst |
-| `edit_decision` | 2 | **accept** | 高 | user_confirmed 列：release commit batch<br>accepted_artifact 列：spec で決まった事項を複数 file に転記 |
-| `edit_explanation` | 3 | **accept** | 高 | accepted_artifact 列：spec ベースで docs sweep（既存 `edit_docs_only` の主要動機）<br>user_confirmed 列：多言語 README 同期<br>direct_observation 列：実装と doc の同期 batch |
+- **accept** — そのまま land、warnings なし
+- **warn** — land する。warnings に「(kind, prov) では batch は
+  非典型。theme が薄い場合は別 declaration を検討」のメッセージを
+  追加。edit log は通常通り
+- **reject** — declaration 全体を reject。`additional_files` 自体は
+  zod スキーマで受け取った上で、validateRequest が「この (kind, prov)
+  では additional_files 受理対象外」として返す
 
-### `edit_proposal` の確度が中である理由
+#### 1 ファイル declaration（additional_files なし）の扱い
 
-○ が 2 つあるが、それぞれ theme の強さが違う：
+`additional_files` が指定されていない通常の typed_edit は本テーブルを
+引かない。`target_file` のみの declaration は §3.3 マトリクスのみで
+評価。
 
-- **accepted_artifact + batch**（audit 起票）：audit document
-  自体が theme として強固。rationale で `audit: docs/audit/2026-...md`
-  を引用すれば各 issue が同じ origin から派生していることが明確。
-  abuse しにくい。
-- **speculation + batch**（feature kickoff）：theme は「feature X
-  立ち上げ」と AI 申告に依存。「同じ feature の探索」は明確に
-  読めるが、AI が無関係な思いつきを bundle するリスクは構造的に
-  ある。
+### 設計の利点
 
-→ description で **theme obligation** を明示する必要あり（後述）。
-そのため確度は中。
+1. **マトリクスが仕様そのもの**：実装と仕様が完全一致、ズレが
+   生まれない
+2. **per-cell の細かさ**：`edit_proposal + speculation` は accept
+   しつつ `edit_proposal + user_confirmed` は warn にできる。
+   kind-binary では潰れていた解像度が活きる
+3. **warn の活用**：「batch すべきでない」と「絶対 reject」の中間が
+   実装可能。AI が誤って batch しようとしたケースで、reject ではなく
+   warn にして気付きを与える運用ができる
+4. **edit_observation の段階的解禁**：現状 warn にしておけば、v0.7
+   で「やはり audit batch は accept で良かった」と判明したらセルだけ
+   書き換える。kind 単位の accept/reject を切り替えるよりも変更コスト
+   が小さい
+
+### 各 accept セルの根拠（再掲）
+
+| セル | シナリオ |
+|---|---|
+| `edit_proposal × accepted_artifact` | audit document を起点とした issue 一括起票 |
+| `edit_proposal × speculation` | feature kickoff の探索的 issue burst |
+| `edit_decision × user_confirmed` | release commit batch（CHANGELOG + version + plugin.json） |
+| `edit_decision × accepted_artifact` | spec で決まった事項を複数 file に転記 |
+| `edit_explanation × user_confirmed` | ユーザー指示の多言語 README 同期 |
+| `edit_explanation × accepted_artifact` | spec ベースで docs sweep（既存 `edit_docs_only` の主要動機） |
+| `edit_explanation × direct_observation` | 実装と doc の同期 batch |
 
 ### 副次論点
 
-- **cardinality cap**: 既存 32 を踏襲。最大 use case の `edit_proposal`
-  issue burst も 10-20 件で収まる想定、32 は余裕。
-- **theme obligation の文言**（`edit_proposal` description 末尾候補）：
-  > 「`additional_files` を使う場合、bound files all relate to a
-  > single originating theme. Acceptable themes: a referenced audit
-  > document, a feature kickoff name, a triage session date.
-  > `rationale` MUST name the theme explicitly. Filing unrelated
-  > proposals in one batch breaks the per-proposal audit trail;
-  > submit each as its own declaration instead.」
-- **`edit_observation` 列の △ をどう扱うか**:
-  - 現状 reject だが、audit findings 集約（"`OBSERVED-FAILURES.md`
-    に 5件 一括追記" 等）はあり得る
-  - 実装後 6ヶ月程度の運用で friction が観察されたら v0.7 で accept
-    化
-  - 現時点で accept すると `edit_proposal` と同じく theme obligation
-    が要り、追加判断が増える。先送りが妥当
-- **provenance × additional_files の整合検査**:
-  - batch declaration では全 binding が **同じ provenance** であること
-    が semantics 上自然
-  - 例：`accepted_artifact` で audit 由来 batch なら 5 件全部が同
-    audit 由来であるべき
-  - サーバ側で強制せずとも、宣言が単一 provenance フィールドなので
-    自動的にそうなる（kind 同様、provenance も 1 declaration 1 値）
+- **cardinality cap**: 既存 32 を踏襲。reject セルでは cap に関わらず
+  reject。accept セルでも 32 超は reject（既存スキーマで強制）。
+- **warn セルでの theme 明示**: description で「warn セルで `additional_files`
+  を使うときは rationale に theme を明記」と obligation を課す
+  （theme obligation）：
 
-### 検討した代替案（マトリクス由来）
+  > `additional_files` を使う warn セル組み合わせでは、bound files
+  > all relate to a single originating theme. `rationale` MUST name
+  > the theme explicitly. テーマが言語化できないなら別 declaration
+  > に分けること。
 
-| 案 | accept する kind | コメント |
-|---|---|---|
-| (a) 全 5 kind | progress, observation, proposal, decision, explanation | progress に ○ が無く正当化弱い、abuse 温床 |
-| (b) ○ が 2 以上の kind のみ | proposal, decision, explanation | **推し**。マトリクスのルールと一致 |
-| (c) ○ が 3 の kind のみ | explanation のみ | decision の release batch friction を取りこぼす |
-| (d) (b) + observation | proposal, decision, explanation, observation | △ を ○ に格上げ。先取り過ぎ、v0.7 余地として残す方が安全 |
+- **accept セルでも theme は推奨**: warn セルでは MUST、accept セル
+  では SHOULD（audit 健全性のため）
+- **provenance × additional_files の自動整合**: provenance は 1
+  declaration 1 値。batch declaration では全 binding が同 provenance
+  になる（自動）。サーバ側追加チェック不要
 
-### 推し（再掲）
+### 検討した代替案
 
-**(b) `edit_explanation` + `edit_decision` + `edit_proposal`**。
-マトリクスの ○ 数ルールと一致。
+| 案 | コメント |
+|---|---|
+| (a) kind 単位 binary（旧推し） | per-cell の解像度が無い、warn 活用不可 |
+| (b) **cell 単位 accept/warn/reject**（新推し） | マトリクス = 仕様 = 実装、解像度高 |
+| (c) cell 単位だが warn を持たず accept/reject のみ | 二値で潰すと `edit_proposal × user_confirmed` のような微妙ケースで実害 |
 
-確度：
-- explanation, decision = **高**（複数の ○ が異なる provenance で
-  分散しており、batch 需要が一方向に偏らない）
-- proposal = **中**（speculation 列の theme obligation が運用観察で
-  要 verification）
+### 推し
+
+**(b) cell 単位 accept/warn/reject**。マトリクスをそのまま判定テーブル
+として使う。kind 単位 binary より高解像、warn での気付き運用が可能、
+将来の調整がセル書き換えで済む。
+
+確度：**高**（前案の binary 承認に matrix-cell の解像度を足しただけで、
+方向性は変わらない。実装も既存 `validateRequest` の延長で完結）。
 
 ---
 
