@@ -53,7 +53,10 @@ Status: **DRAFT** — ユーザー承認待ち。本 RFC は仕様提案。実�
 - `accepted_artifact` の引用先 artifact 内容との整合検証
 - 既存 jsonl への provenance backfill（旧データは null のまま受理）
 - `edit_policy_change` への provenance 適用（governance 軸は別検討）
-- 新セッション boot 時の log overlay（マーカー方式採用により不要）
+- 新セッション boot 時の log overlay / SessionStart 注入（prose
+  embedded uncertainty 方式採用により不要）
+- 構造的ファイル内マーカー（HTML コメント等の機械可読マーク）。
+  prose 自体に uncertainty を埋め込む方式（§3.4）に切り替え
 
 ---
 
@@ -122,108 +125,99 @@ provenance:
 #### 16 impl tools (15 SQLite + `edit_cosmetic`)
 
 **reject 組み合わせは設けない**（reject を増やすと AI が誤申告で
-通すリスクの方が高い）。全組み合わせ OK、ただし以下は **warn +
-ファイル内マーカー強化**：
+通すリスクの方が高い）。全組み合わせ OK。`next_action` が provenance
+に応じて branch し、`inference` / `speculation` の場合は prose 内に
+「Likely...」「**Unverified**:」等の hedging を残すよう description
+で語る（§3.4）。コード内コメントも prose 扱い：仮置きの実装変更で
+コメントを残すなら、コメント本文に hedging を入れる。
 
-- `inference` — 観察からの推論で書いた変更（要マーク）
-- `speculation` — 仮置き実装（強い注意喚起）
+### 3.4 不確実性は prose に埋め込む（マーカー不採用）
 
-`direct_observation` / `accepted_artifact` / `user_confirmed` は
-通常運用、マーカーなし or 軽マーカー（§3.4）。
+#### 3.4.1 方針
 
-### 3.4 ファイル内マーカー（AI 自書 + 任意サーバ検証）
+構造的マーカー（HTML コメント等）でファイルを囲むのではなく、
+**AI に不確実性を prose 自体で表現させる**。サーバはマーカーを
+注入しない、パースしない、検証しない。`provenance` enum は edit
+log の構造化フィールドとしてのみ存在し、ファイル本体には
+プレーンな自然言語で不確実性が現れる。
 
-#### 3.4.1 メカニズム
+採用理由：
 
-meta-edit 自身は書かない（`src/tools/apply.ts` のコメント、SPEC
-Article 5 — 実際の write は native Edit/Write が行い、deny-raw-edit
-hook が grant を消費する）。よってマーカーは **AI が native Edit/
-Write の content 内に直接書く** 設計とする：
+- ファイル内で確定・未確定の段落が混じる（壁打ち：「各ファイル内で
+  混じることもある」）。段落単位のマーカーは脆い
+- マーカー substring 検出は曖昧（壁打ち：B-1 評）
+- メタデータは「読まれない場所」、prose は「読まれる場所」。
+  未来の読み手（AI / 人間）が読むのは prose。signal を読まれる場所に
+  置くのが正しい
+- 言語別 wrapping 不要、JSON エッジケース不要、presence 検証不要
+- meta-edit の bet（description で行動を変える）と完全整合
 
-1. AI は typed_edit を呼んで `edit_id` を受け取る
-2. 同 `edit_id` を含むマーカーを、続く native Edit/Write の new_string
-   / content 内に書き込む
-3. （任意）deny-raw-edit hook が write 直前に **substring 存在検証**
-   する：marker 文字列が含まれない場合 warn を出す（reject しない）
+#### 3.4.2 provenance ごとの prose obligation（description で語る）
 
-substring 検証は `rationale.length > 0` と同種の構文的 lint であり
-diff 内容解析ではない（Article 7 セーフ）。
+| provenance | prose の書き方 |
+|---|---|
+| `user_confirmed` | 確定事項として書く。hedging（「likely」「probably」等）を入れない |
+| `accepted_artifact` | artifact を prose 内で引用する（rationale だけでなく本文にも）。例：「`ADR-007` に従い、...」「`SPEC.md §4` の述べる通り...」 |
+| `direct_observation` | 経験的記録として書く。「Running X produced Y」「I observed that...」のように観察元を可視化 |
+| `inference` | 推論であることを文中で明示。「Based on observed X, it appears that...」「Likely...」「Probably...」「観察から推論すると...」 |
+| `speculation` | **強い hedging を冒頭/見出しに**：「**未検証**: ...」「**Speculation**: ...」「Hypothesis: ...」「TODO: verify — ...」 |
 
-#### 3.4.2 マーカー強度（2 段階）
+これらは **全 21 ツールの description 共通フッター** に書く（次節
+§5 の各 description で参照）。
 
-| provenance | マーカー | 説明 |
-|---|---|---|
-| `user_confirmed` | 不要 | 決定稿として扱う |
-| `accepted_artifact` | 不要 | 決定稿として扱う |
-| `direct_observation` | **推奨**（required ではない） | 観察根拠の追記欄。1 行追加など friction が高い場合は省略可、ただし edit log には provenance が残る |
-| `inference` | **必須** | 検証されていない推論で land 済み、要再確認 |
-| `speculation` | **必須** | 未検証仮説、要検証 |
+#### 3.4.3 typed_edit レスポンスの `next_action` 分岐
 
-`direct_observation` を必須にしないのは、`// XXX breaks for N>1000`
-のような 1 行コメント追加で marker 3 行を要求すると friction 過剰、
-AI が「じゃあコメントを書かない」に逃げる回避策となるため
-（RFC §6 元 open question #6 への回答）。
+`next_action` 文に provenance ごとの prose リマインダを branch
+（既存 `next_action` の延長、新規スキーマ無し）：
 
-#### 3.4.3 マーカー文字列テンプレート（言語非依存）
+> Your declared provenance is `speculation`. Make sure your prose
+> itself flags the uncertainty (**Unverified**, "Hypothesis:",
+> "It might be that..." 等)— the reader will see the prose, not the
+> provenance field. Don't write speculative content as if confirmed.
 
-AI は **編集対象ファイルの言語に合わせた comment 記法** で以下の
-テンプレートをラップする：
+`user_confirmed` / `accepted_artifact` は標準の next_action のまま
+（追加リマインダ無し）。
+
+#### 3.4.4 昇格パス（speculation → user_confirmed）
+
+仮置きを確定昇格するときは：
+
+1. 同じ箇所を `provenance: user_confirmed` で再宣言
+2. 続く native Edit で prose の hedging を取り除く
+   （「**Unverified**: X likely happens」→「X happens」）
+
+特別な「マーカー除去」機構は存在しない。**prose 書き換えそのものが
+昇格作業**。これは自然で、AI に余計な仕組みを覚えさせない。
+
+#### 3.4.5 新セッションが認知する経路（簡素化）
+
+新チャットが `IMPLEMENTATION-LOG.md` 等を読むとき：
+
+- prose 自体が「**Unverified**: ...」「Likely...」等で uncertainty
+  を表現している → AI が自然言語として「これは仮置きだ」と認識
+- 構造マーカー / 注入機構なし、純粋に prose を読むだけで気付く
+- CLAUDE.md §11 への明示的な指示すら最小化できる（prose が自明）
+
+これが元問題（「過去チャット = 決定稿問題」）への解決策の本体。
+ファイル本体が決定稿の体裁を持たなければ、新セッションは決定稿と
+扱わない。
+
+#### 3.4.6 edit log は不変
+
+prose は session を跨いで書き換えられても、edit log の各 issued
+エントリには provenance がそのまま残る：
 
 ```
-meta-edit: <PROVENANCE_LABEL> (edit_id=<EDIT_ID>) — <短い注記>
-... 編集された内容 ...
-/meta-edit (edit_id=<EDIT_ID>)
+$ meta-edit log --provenance speculation
+edit_id=20260521-001  IMPLEMENTATION-LOG.md  edit_progress  speculation
+edit_id=20260521-007  OBSERVED-FAILURES.md   edit_observation speculation
+...
 ```
 
-`<PROVENANCE_LABEL>` の値：
-
-- `direct_observation` → `observation`
-- `inference` → `INFERENCE — 再確認推奨`
-- `speculation` → `SPECULATION — 未検証`
-
-注釈（`— ...` 部分）は AI が rationale から抜粋して書く。
-edit_id は typed_edit のレスポンスから引用。
-
-言語別の wrapping 例：
-
-| 言語 | 開始マーカー | 終了マーカー |
-|---|---|---|
-| Markdown / HTML / XML / SVG | `<!-- meta-edit: ... -->` | `<!-- /meta-edit (edit_id=...) -->` |
-| JS / TS / Java / Go / Rust / C / C++ | `// meta-edit: ...` | `// /meta-edit (edit_id=...)` |
-| Python / Ruby / Bash / YAML / TOML | `# meta-edit: ...` | `# /meta-edit (edit_id=...)` |
-| SQL / Lua / Haskell | `-- meta-edit: ...` | `-- /meta-edit (edit_id=...)` |
-| Lisp / Clojure | `;; meta-edit: ...` | `;; /meta-edit (edit_id=...)` |
-| OCaml | `(* meta-edit: ... *)` | `(* /meta-edit (edit_id=...) *)` |
-| JSON | （comment 不可、log のみ） | — |
-| CSS | `/* meta-edit: ... */` | `/* /meta-edit (edit_id=...) */` |
-
-サーバは言語マップを持たない。description で例を示し、AI が
-ファイル拡張子から判断する。1 行 inline 形式（`// 実コンテンツ
-[meta-edit: observation edit_id=...]`）も description で許可：開始/
-終了マーカー型と inline 型のどちらでも presence 検証は通る
-（`edit_id=<EDIT_ID>` substring が new_string に含まれていれば OK）。
-
-#### 3.4.4 JSON / コメント不可ファイルの扱い
-
-JSON など comment 構文を持たないファイルでは：
-
-- マーカーを書き込まない
-- provenance は edit log にのみ残る
-- typed_edit のレスポンスに `marker_omitted: true` を含めて AI に通知
-  （後段の `meta-edit drafts` CLI で「ファイル内マーカー無しだが
-  inference/speculation 扱いの編集」を集計できるように）
-
-#### 3.4.5 マーカー昇格 / 除去パス
-
-- `speculation` → `user_confirmed` 等への昇格：**同じファイル / 同じ
-  edit_id 領域を再宣言**して上書き。新しい native Edit で marker
-  行を削除しつつ実コンテンツを残す
-- `direct_observation` 等の追記でマーカーが残っている領域を編集する
-  場合：新しい provenance に合わせて marker を書き換える（古い
-  edit_id の marker は新しい edit_id の marker に置き換わる）
-
-server は marker 寿命管理をしない（AI 自身の責務）。これは
-"description で行動を変える" 哲学と整合的。
+過去に speculation で land した編集が、後で user_confirmed に昇格
+されても、log の方は両方の entry が並ぶ（issued は append-only、
+昇格時に古い entry を消したり書き換えたりしない）。audit としては
+これで十分。
 
 ### 3.5 `edit_cosmetic` の更なる narrow
 
@@ -246,18 +240,12 @@ server は marker 寿命管理をしない（AI 自身の責務）。これは
 > or change information go through the workflow kind matching the
 > intent (`edit_observation` / `edit_explanation` / `edit_proposal`).
 
-### 3.6 新セッションが認知する経路
+### 3.6 新セッションが認知する経路（§3.4.5 と統合済み）
 
-ファイル内マーカーがあれば新チャットは：
-
-1. `IMPLEMENTATION-LOG.md` 等を読んだ瞬間に
-   `<!-- meta-edit: INFERENCE — 再確認推奨 -->` を視認
-2. CLAUDE.md §11（「セッションの形」）に「マーカー付きブロックは
-   ユーザーに再確認」を追記（実装 PR で `edit_policy_change` 経由）
-
-`provenance ∈ {inference, speculation}` のブロックは新セッションで
-**自動的に再確認対象**として浮上する。`accepted_artifact` /
-`user_confirmed` は決定稿として扱われる。
+§3.4.5 参照。prose 自体が「**Unverified**: ...」「Likely...」
+「Hypothesis: ...」等で uncertainty を表現するため、新チャットは
+ファイルを読むだけで自然に識別する。CLAUDE.md §11 への明示追記は
+必須ではなくなる（あれば補強になる程度）。
 
 ---
 
@@ -271,8 +259,8 @@ server は marker 寿命管理をしない（AI 自身の責務）。これは
 | `provenance` 必須化 | No（宣言フィールド追加） | `target` / `rationale` / `test_files` |
 | 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` reject と同型 |
 | `accepted_artifact` citation lint | **境界**：文字列パターン照合のみ。artifact 実在 / 内容整合は検証しない。warn のみ | path-safety と同種の構文 lint |
-| マーカー（AI 自書） | No（content 文字列の組み立て） | 既存の `rationale` 文字列と同型 |
-| マーカー presence 検証（任意） | **境界**：substring 存在チェックのみ。AI が書いたか書いてないかしか見ない。中身の妥当性検証はしない。warn のみ | `rationale.length > 0` と同種の構文 lint |
+| 構造的マーカー | **採用しない**（§3.4） | — |
+| prose-embedded uncertainty | No（description guidance のみ、サーバは何もしない） | tool description 一般 |
 | **パス matcher** | **持たない** | — |
 
 diff 内容は読まない、宣言と実態の照合はしない、test 意味解析もしない。
@@ -433,10 +421,14 @@ meta-edit 全体の bet と整合的なリスクで、本 RFC が新規 raise �
 > Declare the epistemic source of this edit:
 > - `user_confirmed` — ユーザーがこの変更を明示した
 > - `accepted_artifact` — accepted spec / ADR / test / API に基づく
->   （rationale に引用を含めること）
+>   （rationale に引用、可能なら prose 内にも引用）
 > - `direct_observation` — 実行結果 / 読んだコード / log から直接観察
-> - `inference` — 観察からの推論（ファイル内マーカー付きで land する）
-> - `speculation` — 未検証の仮説（ファイル内マーカー付きで land する）
+>   （prose は「I observed X」「Running Y produced Z」のように
+>   観察元を可視化）
+> - `inference` — 観察からの推論（prose に「Based on observed X,
+>   it appears that...」「Likely...」等の推論フレーミングを必ず入れる）
+> - `speculation` — 未検証の仮説（prose 冒頭に「**Unverified**:」
+>   「**Hypothesis**:」等の強い hedging を必ず入れる）
 
 reject 組み合わせなし、`inference` / `speculation` はマーカー強化。
 
@@ -449,8 +441,8 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
 2. **`edit_cosmetic` の境界例** — typo 修正と「情報を変える編集」の
    境界、`stale コメント削除` の扱い（§3.5 のテーブル）に追加例の
    要望はあるか
-3. ~~マーカーのコード言語別表現~~ → **解決**（§3.4.3 で AI が言語別
-   wrapping を行う方式に決定。サーバは言語マップを持たない）
+3. ~~マーカー言語別表現~~ → **解決**（§3.4 マーカー自体を廃止、
+   prose-embedded uncertainty に切り替え）
 4. **`edit_cosmetic` での provenance マトリクス** — RFC §3.3 は
    workflow と impl のみ。cosmetic は impl 側のルールに乗せる（warn
    なし、全 OK）か、それとも cosmetic の性質上 `direct_observation` /
@@ -459,11 +451,9 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
    land 時点で reject、それとも一定期間 `edit_progress` にエイリアスして
    warn を出す移行期間を設けるか
 6. ~~`edit_observation` での `// XXX` 系コメント追加 friction~~ → **解決**
-   （§3.4.2 で `direct_observation` のマーカーを「推奨」に格下げ。
-   1 行コメント追加で marker 必須にならない）
-7. **マーカー presence 検証を入れるか** — §3.4.1 では「任意」と
-   したが、実装側で：(a) 入れる（observability 強化、warn 1 件だけ
-   増える）/ (b) 入れない（pure honor）。私の推し：(a)
+   （マーカー廃止により friction 消失。`// XXX breaks for N>1000`
+   のような prose コメントを書くだけ、追加の marker 行は無い）
+7. ~~マーカー presence 検証~~ → **解決**（マーカー廃止により検証不要）
 
 ---
 
@@ -484,29 +474,31 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
    - `accepted_artifact` citation lint
    - test：rejection / acceptance / warn
 
-3. **Phase C: マーカー（AI 自書 + presence 検証）**
-   - description テンプレート文言の確定（§3.4.3）と `descriptions.ts`
-     への流し込み（Phase A の続きとして）
-   - deny-raw-edit hook に optional substring 存在検証を追加：
-     provenance が `inference` / `speculation` のとき edit_id
-     marker が write 内容に含まれているかチェック、不在なら warn
-   - typed_edit レスポンスに `marker_required: bool` と
-     `marker_example: string`（拡張子から推測した wrapping 例）を
-     追加してエージェントへフィードバック
-   - JSON 等 comment 不可ファイルでは `marker_omitted: true` を返す
-   - test：marker 含有 write の grant 消費、marker 欠落の warn、
-     昇格時の上書き、JSON での marker 省略動作
+3. **Phase C: prose obligation の `next_action` 分岐**
+   - typed_edit の `next_action` 文を provenance ごとに branch
+     （§3.4.3）：`inference` / `speculation` のとき強い prose
+     リマインダを末尾に付与
+   - description フッターの prose obligation 表（§3.4.2）を全 21 本に
+     反映（Phase A の続きでも可）
+   - **コード変更はこれだけ**。マーカー注入 / presence 検証 / 言語
+     マップ / SessionStart hook はすべて不採用
+   - test：`next_action` が provenance ごとに正しく branch される
+     こと（5 値 × 代表 tool 2-3 本のスナップショット）
 
 4. **Phase D: 集計 + CLI**
    - `meta-edit summary` に provenance 内訳
    - `meta-edit log --provenance <値>` フィルタ
-   - `meta-edit drafts`（新規）でマーカー付きブロック一覧
    - legacy `edit_docs_only` bucket 表示
+   - `meta-edit drafts` は不採用（マーカー廃止のため）。代わりに
+     `meta-edit log --provenance speculation,inference` で同等の
+     audit が取れる
 
-5. **Phase E: CLAUDE.md §11 改訂**
-   - 新セッション boot 時の「マーカー付きブロックを再確認」規律を
-     追記
-   - `edit_policy_change` 経由
+5. **Phase E（任意）: CLAUDE.md §11 補強**
+   - prose の hedging だけで十分機能する想定だが、念のため §11 に
+     「過去セッションが書いた prose の hedging を尊重し、安易に
+     確定文に書き換えない」一文を追加するか検討
+   - 必須ではない。マーカー方式と違い、prose 表現は自明なので
+     skip 可能
 
 6. **Phase F: external surfaces 同期**
    - README ×3、site/index.html、plugin.json、marketplace.json の
