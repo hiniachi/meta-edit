@@ -81,8 +81,9 @@ intent によって違う tool を通る。
 - `target` フィールドは持たない（doc/workflow に prod/test 軸は
   無関係）
 - `test_files` は空 OK（required ではない）
-- `additional_files` は `edit_explanation` と `edit_decision` のみ受理
-  （多言語 README 同期、リリース一括 commit 等が定型）
+- `additional_files` の受理は **(kind, provenance) セル単位** で
+  accept / warn / reject を決定（§3.3.2）。kind 単位 binary では
+  なく、マトリクスがそのまま validation ルール
 
 ### 3.2 `provenance` 必須フィールド（全 21 ツール対象）
 
@@ -105,7 +106,16 @@ provenance:
 
 ### 3.3 Kind × provenance マトリクス
 
-#### 5 新 workflow kind
+本 RFC は (kind, provenance) を **2 軸の判定空間** として扱い、
+3 つの直交ルールを乗せる：
+
+- **§3.3.1** typed_edit declaration の validity（accept / warn / reject）
+- **§3.3.2** `additional_files` の受理（cell 単位で accept / warn / reject）
+- **§3.3.3** `edit_cosmetic` の独自ルール
+
+#### 3.3.1 typed_edit declaration の (kind, provenance) validity
+
+##### 5 workflow kind
 
 | kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
 |---|---|---|---|---|---|
@@ -122,7 +132,7 @@ provenance:
 - ※2 `explanation + inference` は公開面に推論が混ざる→典型的には
   `accepted_artifact` 由来であるべき。warn
 
-#### 16 impl tools (15 SQLite + `edit_cosmetic`)
+##### 15 SQLite-derived impl tools
 
 **reject 組み合わせは設けない**（reject を増やすと AI が誤申告で
 通すリスクの方が高い）。全組み合わせ OK。`next_action` が provenance
@@ -130,6 +140,77 @@ provenance:
 「Likely...」「**Unverified**:」等の hedging を残すよう description
 で語る（§3.4）。コード内コメントも prose 扱い：仮置きの実装変更で
 コメントを残すなら、コメント本文に hedging を入れる。
+
+##### `edit_cosmetic`（§3.3.3 別建て）
+
+cosmetic は semantic effect ゼロ前提のため、`inference` / `speculation`
+を許容しない。詳細は §3.3.3。
+
+#### 3.3.2 `additional_files` 受理マトリクス（cell 単位）
+
+`additional_files` が declaration に含まれるとき、本テーブルを引いて
+セル単位で accept / warn / reject を決定。kind 単位の binary 受理は
+**しない**。
+
+| kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `edit_progress` | reject | reject | reject | reject | reject |
+| `edit_observation` | reject | warn | warn | warn | warn |
+| `edit_proposal` | warn | **accept** | warn | warn | **accept** |
+| `edit_decision` | **accept** | **accept** | warn | n/a ※ | n/a ※ |
+| `edit_explanation` | **accept** | **accept** | **accept** | warn | n/a ※ |
+
+※ `n/a` は §3.3.1 で kind×prov 自体が reject されるセル
+（additional_files 判定まで到達しない）。
+
+##### セル値の意味
+
+- **accept** — そのまま land、warnings なし
+- **warn** — land する。warnings に「(kind, prov) では batch は
+  非典型。theme が薄い場合は別 declaration を検討」を追加。edit
+  log は通常通り
+- **reject** — declaration 全体を reject、`audit_error` に理由
+
+##### theme obligation（description で課す）
+
+- **warn セル**で `additional_files` を使うとき：rationale に theme
+  を **MUST** 明記
+- **accept セル**：SHOULD（audit 健全性のため）
+
+##### 1 ファイル declaration の扱い
+
+`additional_files` が指定されていない通常 declaration は本テーブルを
+引かない。`target_file` のみの宣言は §3.3.1 のみで評価。
+
+##### 採用根拠（Q1 確定）
+
+kind 単位 binary（`TOOLS_ACCEPTING_ADDITIONAL_FILES` 配列）よりも
+cell 単位の方が解像度が高く、`edit_proposal × user_confirmed` のような
+微妙ケースを warn にして気付きを与える運用ができる。詳細分析は
+`./open-questions.md` Q1 を参照。
+
+#### 3.3.3 `edit_cosmetic` の provenance マトリクス
+
+cosmetic は **whitespace + formatter + 情報不変コメント編集のみ**
+（§3.5）で semantic effect がゼロ。よって epistemic uncertainty
+（`inference` / `speculation`）を許容しない。
+
+| kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `edit_cosmetic` | OK | OK ◎ | OK ◎ | **reject** | **reject** |
+
+- `user_confirmed`：ユーザー指定（"formatter を走らせよ"）
+- `accepted_artifact`：style guide / `.editorconfig` / formatter 設定に従う（典型）
+- `direct_observation`：formatter を実際に走らせた結果（典型）
+- `inference` / `speculation`：cosmetic でこれを選ぶのは kind 選択が
+  間違っているシグナル。reject して再考を促す（"これ本当に
+  cosmetic か？情報変えてないか？"）
+
+##### 採用根拠（Q4 確定）
+
+`inference` / `speculation` の reject は uniformity を一部崩すが、
+cosmetic の semantic-effect-zero 性質と整合的で、誤った kind 選択を
+構造的に弾く。詳細は `./open-questions.md` Q4 を参照。
 
 ### 3.4 不確実性は prose に埋め込む（マーカー不採用）
 
@@ -436,24 +517,26 @@ reject 組み合わせなし、`inference` / `speculation` はマーカー強化
 
 ## 6. Remaining open questions
 
-1. **`additional_files` の受理 kind** — `edit_explanation` と
-   `edit_decision` のみ案で OK か？（RFC §3.1）
-2. **`edit_cosmetic` の境界例** — typo 修正と「情報を変える編集」の
-   境界、`stale コメント削除` の扱い（§3.5 のテーブル）に追加例の
-   要望はあるか
+詳細分析と判断根拠は `./open-questions.md`。
+
+1. ~~`additional_files` の受理 kind~~ → **決定**（§3.3.2 のセル
+   単位 accept/warn/reject マトリクス）
+2. **`edit_cosmetic` の境界例** — **PAUSED**：他ツールに波及する
+   設計変更を検討中のためペンディング。現状 §3.5 主要 7 例を暫定
 3. ~~マーカー言語別表現~~ → **解決**（§3.4 マーカー自体を廃止、
    prose-embedded uncertainty に切り替え）
-4. **`edit_cosmetic` での provenance マトリクス** — RFC §3.3 は
-   workflow と impl のみ。cosmetic は impl 側のルールに乗せる（warn
-   なし、全 OK）か、それとも cosmetic の性質上 `direct_observation` /
-   `accepted_artifact`（formatter ルール由来）のみ accept にするか
-5. **legacy `edit_docs_only` への自動マイグレーション** — 旧呼び出しは
-   land 時点で reject、それとも一定期間 `edit_progress` にエイリアスして
-   warn を出す移行期間を設けるか
+4. ~~`edit_cosmetic` での provenance マトリクス~~ → **決定**
+   （§3.3.3：`user_confirmed` / `accepted_artifact` /
+   `direct_observation` のみ accept、`inference` / `speculation` は
+   reject）
+5. ~~legacy `edit_docs_only` への自動マイグレーション~~ → **決定**
+   （v0.6.0 で書き込み path は即時 reject、log/summary CLI は legacy
+   bucket として読み出し）
 6. ~~`edit_observation` での `// XXX` 系コメント追加 friction~~ → **解決**
-   （マーカー廃止により friction 消失。`// XXX breaks for N>1000`
-   のような prose コメントを書くだけ、追加の marker 行は無い）
+   （マーカー廃止により friction 消失）
 7. ~~マーカー presence 検証~~ → **解決**（マーカー廃止により検証不要）
+
+残るのは Q2 のみ（他ツール波及の設計変更が決まり次第再開）。
 
 ---
 

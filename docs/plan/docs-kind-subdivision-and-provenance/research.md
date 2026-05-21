@@ -75,7 +75,7 @@ hook 挙動, build/release プロファイル。本 RFC では **触らない**
 | File | What changes |
 |---|---|
 | `src/tools/descriptions.ts` | `TOOL_NAMES` 更新（17 → 21）：`edit_docs_only` 削除、`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` 追加。`TOOLS_REQUIRING_TEST_FILES` の除外集合更新（5 新 kind 全部除外）。`TOOLS_REQUIRING_TARGET` の除外集合更新（5 新 kind を除外）。`TOOL_DESCRIPTIONS` に新 5 件追加、`edit_docs_only` を削除。`edit_cosmetic` の description を narrow（コメント条項を削除）。impl 16 本の description に provenance guidance を追記 |
-| `src/tools/common.ts` | `TOOLS_ACCEPTING_ADDITIONAL_FILES` を見直し（後述 §3.3）。`EditToolRequestSchema` に `provenance` 必須フィールド追加（全 21 ツール対象）。`ProvenanceSchema = z.enum(["user_confirmed", "accepted_artifact", "direct_observation", "inference", "speculation"])`。`validateRequest` に provenance 必須化 + kind×provenance 無効組み合わせ検査 + `accepted_artifact` 選択時の rationale 内 artifact citation チェック（後述）追加 |
+| `src/tools/common.ts` | `TOOLS_ACCEPTING_ADDITIONAL_FILES`（配列、kind 単位 binary）を **削除**、(kind, provenance) セル単位 lookup 関数 `evaluateAdditionalFiles(kind, prov) → "accept" \| "warn" \| "reject"` に置換（RFC §3.3.2 マトリクス由来）。`EditToolRequestSchema` に `provenance` 必須フィールド追加（全 21 ツール対象）。`ProvenanceSchema = z.enum(["user_confirmed", "accepted_artifact", "direct_observation", "inference", "speculation"])`。`validateRequest` に：(a) provenance 必須化、(b) §3.3.1 kind×prov reject/warn 検査、(c) `accepted_artifact` 選択時の rationale 内 artifact citation チェック、(d) `additional_files` 含む場合の §3.3.2 cell lookup、(e) §3.3.3 cosmetic 専用 reject ルール（`inference` / `speculation` reject）|
 | `src/tools/registry.ts` | JSON Schema に `provenance` を全 tool 追加。workflow-tool 判定（現状 `edit_docs_only` 決め打ち）を `TOOLS_ACCEPTING_ADDITIONAL_FILES` 由来に差し替え |
 | `src/tools/apply.ts` | `edit_docs_only` 名前決め打ちの分岐を廃止（batch 受理 kind 集合へ）。`next_action` 文を provenance ごとに branch（`inference` / `speculation` に prose リマインダを末尾付加）。**マーカー注入はしない**（RFC §3.4 で構造的マーカーを廃止、AI に prose 自体で uncertainty を表現させる方式に変更） |
 | `src/state/edit-log.ts` | log エントリに `provenance` 追加（既存読み出しは optional として後方互換）。`marker_present` 系フィールドは不要（マーカー機構なし） |
@@ -167,13 +167,16 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 追加テスト：
 
 - 新 5 kind の登録 / description verbatim 同期
-- `provenance` 必須化 / enum 値域
-- 無効組み合わせ rejection（`edit_decision + inference`, `edit_decision + speculation`, `edit_explanation + speculation`）
+- `provenance` 必須化 / enum 値域 / default なしで欠落 reject
+- §3.3.1 kind×prov rejection（`edit_decision + inference`, `edit_decision + speculation`, `edit_explanation + speculation`）と warn（`edit_observation + inference`, `edit_explanation + inference`）
+- §3.3.2 additional_files cell マトリクスの全 5×5 セル動作（accept / warn / reject / n/a）
+- §3.3.3 `edit_cosmetic + inference / speculation` の reject
 - `accepted_artifact + rationale-no-citation` の warn
 - `next_action` 文が provenance 5 値ごとに正しく branch されること（`inference` / `speculation` のとき prose リマインダが付加されること）
 - `edit_cosmetic` で情報変化を伴うコメント追加が reject されること（既存「stop and ask」の延長）
-- レガシー `edit_docs_only` エントリが log/summary CLI で legacy bucket に集計されること
-- impl 16 本での provenance 受理（reject 組み合わせなし、すべて warn + marker）
+- 旧 `edit_docs_only` を tool 名として呼び出すと **書き込み path で reject**（v0.6.0 Q5 決定）
+- 既存 jsonl の `edit_docs_only` エントリが log/summary CLI で legacy bucket として **読み出し可能** であること
+- impl 15 SQLite ツールでの provenance 受理（reject 組み合わせなし、`inference` / `speculation` も land、prose hedging を `next_action` で要求）
 
 ### 3.8 External documentation surfaces
 
