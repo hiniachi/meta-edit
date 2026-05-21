@@ -1,5 +1,5 @@
 import { EditLog, type EditLogEntry } from "../state/edit-log.js";
-import type { EditTarget, RiskLevel } from "../tools/common.js";
+import { ProvenanceSchema, type EditTarget, type Provenance, type RiskLevel } from "../tools/common.js";
 import { parseStrictSince } from "./parse-since.js";
 
 export type LogFilters = {
@@ -13,10 +13,18 @@ export type LogFilters = {
   risk?: RiskLevel | undefined;
   /**
    * Filter on the v0.5.0 prod/test target. Only issued/rejected impl-tool
-   * records carry it; edit_docs_only entries have no target and are dropped
-   * when this filter is set. Consumed records carry no target either.
+   * records carry it; the 5 workflow-axis kinds (and the legacy
+   * edit_docs_only bucket) have no target and are dropped when this
+   * filter is set. Consumed records carry no target either.
    */
   target?: EditTarget | undefined;
+  /**
+   * Filter on the v0.6.0 provenance field. Accepts a single value
+   * (`--provenance speculation`) or a comma-separated set
+   * (`--provenance speculation,inference`). Legacy v0.5.x entries that
+   * predate provenance are dropped when this filter is set.
+   */
+  provenance?: ReadonlySet<Provenance> | undefined;
   /** Inclusive lower bound on the record `ts` field. */
   since?: Date | undefined;
 };
@@ -63,11 +71,20 @@ export function filterEntries(
     }
     if (filters.target !== undefined) {
       // target only on issued/rejected impl-tool records (15 SQLite +
-      // edit_cosmetic). consumed records carry no target; edit_docs_only
-      // records have target absent by design; both are filtered out when
-      // --target is in play.
+      // edit_cosmetic). consumed records carry no target; workflow-axis
+      // kinds (5 v0.6.0 + legacy edit_docs_only) have target absent by
+      // design; both are filtered out when --target is in play.
       if (e.phase === "consumed") return false;
       if (e.target !== filters.target) return false;
+    }
+    if (filters.provenance !== undefined) {
+      // provenance only on issued/rejected v0.6.0+ records. consumed
+      // records carry no provenance; v0.5.x legacy entries (read-time
+      // optional per state/edit-log.ts) likewise do not. Both drop out
+      // when --provenance is in play.
+      if (e.phase === "consumed") return false;
+      if (e.provenance === undefined) return false;
+      if (!filters.provenance.has(e.provenance)) return false;
     }
     if (filters.since !== undefined) {
       if (ts.getTime() < filters.since.getTime()) return false;
@@ -87,6 +104,7 @@ export function parseLogArgs(argv: string[]): {
   let toolSeen = false;
   let riskSeen = false;
   let targetSeen = false;
+  let provenanceSeen = false;
   let sinceSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -114,6 +132,27 @@ export function parseLogArgs(argv: string[]): {
         return { ok: false, error: `--target must be prod or test (got "${v}")` };
       }
       filters.target = v;
+    } else if (arg === "--provenance") {
+      if (provenanceSeen) return { ok: false, error: "--provenance may only appear once" };
+      provenanceSeen = true;
+      const v = argv[++i];
+      if (v === undefined) return { ok: false, error: "--provenance requires a value" };
+      const parts = v.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      if (parts.length === 0) {
+        return { ok: false, error: `--provenance: empty value` };
+      }
+      const set = new Set<Provenance>();
+      for (const p of parts) {
+        const parsed = ProvenanceSchema.safeParse(p);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: `--provenance: invalid value "${p}" (expected one of user_confirmed, accepted_artifact, direct_observation, inference, speculation)`,
+          };
+        }
+        set.add(parsed.data);
+      }
+      filters.provenance = set;
     } else if (arg === "--since") {
       if (sinceSeen) return { ok: false, error: "--since may only appear once" };
       sinceSeen = true;

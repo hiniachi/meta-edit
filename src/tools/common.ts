@@ -26,6 +26,7 @@ import { z } from "zod";
 import {
   TOOLS_REQUIRING_TARGET,
   TOOLS_REQUIRING_TEST_FILES,
+  WORKFLOW_TOOLS,
   type ToolName,
 } from "./descriptions.js";
 import { isProtectedPath } from "../state/protected-paths.js";
@@ -37,6 +38,22 @@ export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
 export const EditTargetSchema = z.enum(["prod", "test"]);
 export type EditTarget = z.infer<typeof EditTargetSchema>;
+
+// v0.6.0: every typed_edit declaration carries a required `provenance`
+// field naming the epistemic source of the edit. Per SPEC §3 and the
+// workflow-axis RFC (docs/plan/docs-kind-subdivision-and-provenance/
+// rfc.md §3.2), the five values cover the epistemic strata that
+// past-chat artifacts conflate. Schema-level: required, no default. The
+// kind × provenance validity matrix lives below in
+// `evaluateKindProvenanceValidity()`.
+export const ProvenanceSchema = z.enum([
+  "user_confirmed",
+  "accepted_artifact",
+  "direct_observation",
+  "inference",
+  "speculation",
+]);
+export type Provenance = z.infer<typeof ProvenanceSchema>;
 
 const AdditionalFileSchema = z
   .object({
@@ -51,17 +68,149 @@ export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 // honest workflow tool cannot accidentally swamp the audit log with one call.
 export const MAX_ADDITIONAL_FILES = 32;
 
-// SQLite-derived tools (the 17): MUST omit `additional_files`.
-// Workflow tool (only 1 remaining post-v0.3.1: edit_docs_only): MAY
-// include it for sweeping documentation updates. v0.3.1 dropped
-// edit_create_file and edit_create_planning_artifact when empty
-// creates became free at the deny-raw-edit hook level (no MCP
-// declaration needed for an empty Write to a non-existent in-repo
-// path). additional_files now functions purely as a doc-batching
-// affordance.
-export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] = [
-  "edit_docs_only",
-];
+// Schema-level whitelist for `additional_files`: the 5 workflow-axis
+// kinds may declare the field; the 15 SQLite-derived impl tools and
+// edit_cosmetic MUST omit it. Acceptance of a particular declaration is
+// then decided cell-wise by `evaluateAdditionalFiles(kind, provenance)`
+// per RFC §3.3.2 — the workflow-axis-rfc replaces v0.5.x's kind-binary
+// `["edit_docs_only"]` whitelist with a (kind, provenance) cell matrix.
+export const TOOLS_ACCEPTING_ADDITIONAL_FILES: readonly ToolName[] =
+  WORKFLOW_TOOLS;
+
+// =====================================================================
+// Kind × Provenance matrices (RFC §3.3, v0.6.0)
+// =====================================================================
+//
+// The matrices below are the validation rule. They are the spec, in
+// the sense of CLAUDE.md §4: any change here must update
+// docs/SPEC.md §3 / §6 and
+// docs/plan/docs-kind-subdivision-and-provenance/rfc.md §3.3 in the
+// same commit.
+
+export type MatrixVerdict = "accept" | "warn" | "reject";
+
+/**
+ * §3.3.1 / §3.3.3 — base validity of a (kind, provenance) declaration.
+ * Returns:
+ *   - "accept" when the cell is OK
+ *   - "warn"  when the cell lands with a warning in audit_warnings
+ *   - "reject" when the entire declaration is rejected
+ *
+ * Cells from RFC §3.3.1:
+ *   workflow kinds — all OK except:
+ *     edit_observation + inference        -> warn
+ *     edit_decision + inference           -> reject
+ *     edit_decision + speculation         -> reject
+ *     edit_explanation + inference        -> warn
+ *     edit_explanation + speculation      -> reject
+ *   impl 15 SQLite kinds — all OK (no rejects, no warns; prose
+ *   obligation is in the description footer)
+ *   edit_cosmetic (§3.3.3) —
+ *     accept: user_confirmed, accepted_artifact, direct_observation
+ *     reject: inference, speculation
+ */
+export function evaluateKindProvenanceValidity(
+  kind: ToolName,
+  provenance: Provenance,
+): MatrixVerdict {
+  if (kind === "edit_cosmetic") {
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
+  if (kind === "edit_decision") {
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
+  if (kind === "edit_explanation") {
+    if (provenance === "speculation") return "reject";
+    if (provenance === "inference") return "warn";
+    return "accept";
+  }
+  if (kind === "edit_observation") {
+    if (provenance === "inference") return "warn";
+    return "accept";
+  }
+  // edit_progress, edit_proposal, and all 15 impl tools: all combinations OK.
+  return "accept";
+}
+
+/**
+ * §3.3.2 — `additional_files` acceptance matrix (cell-wise).
+ * Called only when `additional_files` is declared.
+ *
+ *                       u_c    a_a    d_o    inf    spec
+ * edit_progress         rej    rej    rej    rej    rej
+ * edit_observation      rej    warn   warn   warn   warn
+ * edit_proposal         warn   acc    warn   warn   acc
+ * edit_decision         acc    acc    warn   n/a    n/a
+ * edit_explanation      acc    acc    acc    warn   n/a
+ *
+ * The n/a cells are unreachable here because §3.3.1 already rejects
+ * the (kind, provenance) pair; the caller checks validity first.
+ * Defensive: if §3.3.1 ever loosens, an n/a cell falls through to
+ * "reject" so an additional_files declaration cannot slip through
+ * silently.
+ */
+export function evaluateAdditionalFiles(
+  kind: ToolName,
+  provenance: Provenance,
+): MatrixVerdict {
+  if (kind === "edit_progress") return "reject";
+  if (kind === "edit_observation") {
+    if (provenance === "user_confirmed") return "reject";
+    return "warn";
+  }
+  if (kind === "edit_proposal") {
+    if (provenance === "accepted_artifact") return "accept";
+    if (provenance === "speculation") return "accept";
+    return "warn";
+  }
+  if (kind === "edit_decision") {
+    if (provenance === "user_confirmed") return "accept";
+    if (provenance === "accepted_artifact") return "accept";
+    if (provenance === "direct_observation") return "warn";
+    return "reject"; // n/a guard
+  }
+  if (kind === "edit_explanation") {
+    if (provenance === "user_confirmed") return "accept";
+    if (provenance === "accepted_artifact") return "accept";
+    if (provenance === "direct_observation") return "accept";
+    if (provenance === "inference") return "warn";
+    return "reject"; // n/a guard (speculation already rejected by §3.3.1)
+  }
+  // Impl tools / edit_cosmetic do not accept additional_files at all —
+  // they are not in TOOLS_ACCEPTING_ADDITIONAL_FILES. Defensive reject
+  // in case the schema-level gate is bypassed.
+  return "reject";
+}
+
+/**
+ * Citation lint for `provenance: "accepted_artifact"`. RFC §3.2:
+ * "the rationale MUST include at least one artifact reference (`§...`,
+ * `ADR-...`, `issues/...`, `RFC-...`, or a URL); the server lints this
+ * and warns if no reference is present." This is a structure-only
+ * check — we do NOT verify the artifact exists or that its content is
+ * consistent with the declaration.
+ *
+ * Returns true when the rationale carries at least one acceptable
+ * artifact reference shape.
+ */
+const ARTIFACT_CITATION_RE = new RegExp(
+  [
+    "§",
+    "\\bADR-\\w",
+    "\\bRFC-\\w",
+    "\\bissues/",
+    "https?://",
+  ].join("|"),
+);
+export function rationaleHasArtifactCitation(rationale: string): boolean {
+  return ARTIFACT_CITATION_RE.test(rationale);
+}
 
 /**
  * z.preprocess shim: opencode (v1.14.x) mis-marshals empty `[]` array
@@ -105,10 +254,17 @@ export const EditToolRequestSchema = z
     rationale: z.string(),
     risk_level: RiskLevelSchema,
     // `target` is required on the 16 impl tools (15 SQLite-derived +
-    // edit_cosmetic) and absent on edit_docs_only. The schema accepts it
-    // as optional; validateRequest enforces presence-on-impl and
-    // absence-on-docs per TOOLS_REQUIRING_TARGET (see descriptions.ts).
+    // edit_cosmetic) and absent on the 5 workflow kinds. The schema
+    // accepts it as optional; validateRequest enforces presence-on-impl
+    // and absence-on-workflow per TOOLS_REQUIRING_TARGET (see
+    // descriptions.ts).
     target: EditTargetSchema.optional(),
+    // v0.6.0: every typed_edit declaration carries the epistemic-source
+    // declaration. Required at the schema boundary so an agent that
+    // forgets to declare it gets a zod validation error immediately,
+    // rather than a softer validateRequest warning that could be
+    // mistaken for "shippable".
+    provenance: ProvenanceSchema,
     test_files: z.preprocess(
       coerceJsonStringToArray("test_files"),
       z.array(z.string()),
@@ -123,6 +279,26 @@ export const EditToolRequestSchema = z
   .strict();
 
 export type EditToolRequest = z.infer<typeof EditToolRequestSchema>;
+
+/**
+ * Soft-signal warnings produced by validation matrices: a (kind, provenance)
+ * cell flagged "warn", a citation-lint miss on accepted_artifact, an
+ * additional_files cell flagged "warn". These are recorded in the edit
+ * log so audit can see the soft signal, and surfaced to the agent via
+ * `next_action`, but they do not block the declaration.
+ *
+ * Kept distinct from `warnings` (the rejection-channel field) so
+ * downstream consumers can tell "still landed, with caveat" apart from
+ * "rejected".
+ */
+export type AuditWarning = {
+  /** Stable category code so log readers can group consistently. */
+  code:
+    | "kind_provenance_warn"
+    | "additional_files_warn"
+    | "citation_lint_missing";
+  message: string;
+};
 
 export type EditToolResult = {
   /**
@@ -191,6 +367,8 @@ export type ValidationSuccess = {
   primaryBinding: ValidatedBinding;
   /** additional_files bindings (workflow tools only; empty otherwise). */
   additionalBindings: ValidatedBinding[];
+  /** Soft signals produced by v0.6.0 matrices (warn cells, citation lint). */
+  auditWarnings: AuditWarning[];
 };
 
 export type ValidationResult = ValidationFailure | ValidationSuccess;
@@ -211,11 +389,12 @@ export function validateRequest(
   ctx: ValidationContext,
 ): ValidationResult {
   const warnings: string[] = [];
+  const auditWarnings: AuditWarning[] = [];
 
   // ---- 0. Repo-root sentinel (A1 / issue 1530) ------------------------
   // The MCP server intentionally boots even when the configured root
   // lacks a `.git` / `.jj` directory, so ListTools can inject the
-  // seventeen tool descriptions into the agent's context. The actual
+  // twenty-one tool descriptions into the agent's context. The actual
   // typed_edit calls, however, must refuse to run against a non-repo
   // root — silently accepting them would write into an unrelated
   // directory under `process.cwd()`, defeating the protected-path /
@@ -230,7 +409,49 @@ export function validateRequest(
     warnings.push("rationale must be non-empty");
   }
 
-  // ---- 2a. target field presence (impl tools require it; docs forbids it) -
+  // ---- 1b. kind × provenance validity (RFC §3.3.1 / §3.3.3) -----------
+  // The matrix is the validation rule. Cosmetic + inference/speculation,
+  // decision + inference/speculation, and explanation + speculation are
+  // rejected here. Observation + inference and explanation + inference
+  // land but record a soft signal in auditWarnings.
+  const kpVerdict = evaluateKindProvenanceValidity(toolName, request.provenance);
+  if (kpVerdict === "reject") {
+    warnings.push(
+      `(kind=${toolName}, provenance=${request.provenance}) is rejected per ` +
+        `SPEC §3.3.1 / §3.3.3. Reclassify the edit: pick a kind whose ` +
+        `semantics permit this epistemic source, or pick a provenance ` +
+        `whose certainty matches this kind.`,
+    );
+  } else if (kpVerdict === "warn") {
+    auditWarnings.push({
+      code: "kind_provenance_warn",
+      message:
+        `(kind=${toolName}, provenance=${request.provenance}) is atypical ` +
+        `per SPEC §3.3.1. Land but consider whether the intent is closer ` +
+        `to a different workflow kind.`,
+    });
+  }
+
+  // ---- 1c. accepted_artifact citation lint (RFC §3.2) -----------------
+  // Structure-only check (warn, never reject): a rationale that names
+  // accepted_artifact as its source should also carry at least one
+  // syntactically-recognizable citation. The lint does not verify the
+  // artifact exists or that its content matches the declaration.
+  if (
+    request.provenance === "accepted_artifact" &&
+    !rationaleHasArtifactCitation(request.rationale)
+  ) {
+    auditWarnings.push({
+      code: "citation_lint_missing",
+      message:
+        `provenance="accepted_artifact" but the rationale has no ` +
+        `recognizable artifact reference (\`§...\`, \`ADR-...\`, ` +
+        `\`RFC-...\`, \`issues/...\`, or a URL). Add a citation so ` +
+        `future readers can re-source the artifact.`,
+    });
+  }
+
+  // ---- 2a. target field presence (impl tools require it; workflow forbids it) -
   const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
   if (toolRequiresTarget) {
     if (request.target === undefined) {
@@ -242,7 +463,7 @@ export function validateRequest(
     if (request.target !== undefined) {
       warnings.push(
         `${toolName} does not accept a target field (prod/test split does ` +
-          `not apply to this tool)`,
+          `not apply to this workflow tool)`,
       );
     }
   }
@@ -271,20 +492,42 @@ export function validateRequest(
   }
 
   // ---- 3. additional_files acceptance gate -----------------------------
-  // The 17 SQLite-derived tools MUST omit `additional_files`. The remaining
-  // workflow tool (edit_docs_only) MAY include it (cardinality already capped
-  // by zod via .max(MAX_ADDITIONAL_FILES) above). v0.3.1 dropped
-  // edit_create_file and edit_create_planning_artifact, so only edit_docs_only
-  // accepts the field today.
-  if (
-    request.additional_files !== undefined &&
-    !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)
-  ) {
-    warnings.push(
-      `${toolName} does not accept additional_files; this field is reserved for ` +
-        `the workflow tool (edit_docs_only). Submit each ` +
-        `file as its own typed_edit call.`,
-    );
+  // Schema-level: only the 5 workflow-axis kinds (WORKFLOW_TOOLS, mirrored
+  // into TOOLS_ACCEPTING_ADDITIONAL_FILES) may carry `additional_files`.
+  // The 15 SQLite-derived impl tools and edit_cosmetic MUST omit it.
+  //
+  // Cell-level (RFC §3.3.2): for the 5 workflow kinds, acceptance is
+  // decided by `evaluateAdditionalFiles(kind, provenance)`. The matrix
+  // returns "accept" / "warn" / "reject". A reject here fails the whole
+  // declaration; a warn records an audit signal and lands.
+  if (request.additional_files !== undefined) {
+    if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
+      warnings.push(
+        `${toolName} does not accept additional_files; this field is reserved ` +
+          `for the workflow-axis kinds (edit_observation, edit_proposal, ` +
+          `edit_decision, edit_explanation; edit_progress always rejects). ` +
+          `Submit each file as its own typed_edit call.`,
+      );
+    } else {
+      const afVerdict = evaluateAdditionalFiles(toolName, request.provenance);
+      if (afVerdict === "reject") {
+        warnings.push(
+          `(kind=${toolName}, provenance=${request.provenance}) does not ` +
+            `accept additional_files per SPEC §3.3.2. Split the declaration: ` +
+            `submit each file as its own typed_edit call, or pick a ` +
+            `(kind, provenance) cell that accepts batching.`,
+        );
+      } else if (afVerdict === "warn") {
+        auditWarnings.push({
+          code: "additional_files_warn",
+          message:
+            `additional_files batch under (kind=${toolName}, ` +
+            `provenance=${request.provenance}) is atypical per SPEC §3.3.2. ` +
+            `Land but consider splitting if the unifying theme is thin. ` +
+            `The rationale MUST name the theme explicitly.`,
+        });
+      }
+    }
   }
 
   // ---- 4. test_files path-safety (forward declaration only — no binding) -
@@ -325,8 +568,9 @@ export function validateRequest(
   }
 
   // ---- 6. additional_files path-safety + disk read --------------------
-  // v0.3.1: only edit_docs_only retains additional_files (multi-file
-  // doc sweeps). Each entry is a modify against an existing file.
+  // v0.6.0: the 5 workflow-axis kinds may carry additional_files.
+  // Acceptance was decided cell-wise in step 3; this step just resolves
+  // the bindings.
   const additionalBindings: ValidatedBinding[] = [];
   if (
     request.additional_files !== undefined &&
@@ -369,7 +613,7 @@ export function validateRequest(
   if (warnings.length > 0 || primaryBinding === null) {
     return { ok: false, warnings };
   }
-  return { ok: true, primaryBinding, additionalBindings };
+  return { ok: true, primaryBinding, additionalBindings, auditWarnings };
 }
 
 // ---------------------------------------------------------------------

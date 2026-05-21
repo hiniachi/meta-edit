@@ -66,9 +66,15 @@ export function issued(overrides: Partial<IssuedEntry> = {}): IssuedEntry {
     risk_level: "medium",
     // v0.5.0: impl-tool fixtures default to target: "prod" so existing
     // tests exercise the realistic shape (validateRequest requires
-    // `target` on every impl tool). edit_docs_only fixtures must
-    // override with `target: undefined` since docs has no target field.
+    // `target` on every impl tool). Workflow-kind fixtures must
+    // override with `target: undefined` since workflow kinds have no
+    // target field.
     target: "prod",
+    // v0.6.0: provenance is required on every typed_edit declaration.
+    // direct_observation is the typical fixture provenance (the test
+    // is asserting on bytes/structure the agent observed) and lands in
+    // every kind × provenance cell without warnings or rejects.
+    provenance: "direct_observation",
     test_files: ["tests/foo.test.ts"],
     binding: [{ file: "src/foo.ts", before_sha256: HEX64_A }],
     token: "met_20260430_0123456789",

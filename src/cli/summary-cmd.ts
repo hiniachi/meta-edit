@@ -103,6 +103,13 @@ export function formatSummary(
   }
   const byRisk = countBy(issuedEntries, (e) => e.risk_level);
   const byFile = countBy(issuedEntries, (e) => stripAnsi(e.target_file));
+  // v0.6.0: provenance breakdown over issued entries. Legacy v0.5.x
+  // entries lack the field and aggregate into the "unspecified" bucket
+  // (per state/edit-log.ts: provenance is optional on read for backward
+  // compat).
+  const byProvenance = countBy(issuedEntries, (e) =>
+    e.provenance === undefined ? "unspecified" : e.provenance,
+  );
 
   const lines: string[] = [];
   lines.push(`meta-edit summary (${sinceLabel})`);
@@ -116,7 +123,14 @@ export function formatSummary(
   lines.push("By tool (prod / test counts shown for impl tools):");
   const toolCounts = new Map<string, number>();
   for (const name of TOOL_NAMES) toolCounts.set(name, 0);
-  for (const [name, count] of byTool.entries()) toolCounts.set(name, count);
+  for (const [name, count] of byTool.entries()) {
+    // v0.6.0: legacy edit_docs_only entries from v0.5.x logs are NOT
+    // mixed into the live-tool table; they surface in a dedicated
+    // "legacy: edit_docs_only" bucket below per Q5.
+    if (name === "edit_docs_only") continue;
+    toolCounts.set(name, count);
+  }
+  const legacyDocsCount = byTool.get("edit_docs_only") ?? 0;
   const toolOrder = Array.from(toolCounts.entries()).sort((a, b) => b[1] - a[1]);
   for (const [name, count] of toolOrder) {
     if (count === 0 && name !== "edit_policy_change") {
@@ -147,6 +161,33 @@ export function formatSummary(
     lines.push(
       `  ${name.padEnd(28)}${String(count).padStart(4)}${targetSuffix}  (${pct(count, issuedEntries.length)})`,
     );
+  }
+  if (legacyDocsCount > 0) {
+    lines.push(
+      `  ${"legacy: edit_docs_only".padEnd(28)}${String(legacyDocsCount).padStart(4)}  (${pct(legacyDocsCount, issuedEntries.length)})`,
+    );
+  }
+  lines.push("");
+
+  lines.push("By provenance:");
+  const provenanceOrder = [
+    "user_confirmed",
+    "accepted_artifact",
+    "direct_observation",
+    "inference",
+    "speculation",
+    "unspecified",
+  ];
+  let anyProvenance = false;
+  for (const p of provenanceOrder) {
+    const count = byProvenance.get(p) ?? 0;
+    if (count === 0 && p !== "unspecified") continue;
+    if (count === 0 && p === "unspecified") continue;
+    lines.push(`  ${p.padEnd(20)} ${String(count).padStart(4)}  (${pct(count, issuedEntries.length)})`);
+    anyProvenance = true;
+  }
+  if (!anyProvenance) {
+    lines.push("  (no issued entries)");
   }
   lines.push("");
 

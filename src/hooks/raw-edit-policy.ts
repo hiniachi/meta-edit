@@ -276,13 +276,14 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
           "Empty creates are authorized, but the actual content fill is the part that should be classified.\n\n" +
           "The next move is to declare an appropriate edit_<TYPE> for the content " +
           "(e.g. edit_state_transition / edit_boundary_condition for source code, " +
-          "edit_docs_only for Markdown / docs, or the matching impl tool with " +
+          "edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision " +
+          "for Markdown / docs depending on intent, or the matching impl tool with " +
           "target=\"test\" for new test files), then perform the content write through the typed surface.",
       };
     }
     // File exists — empty Write would truncate it. Fall through to
     // grant-lookup so the agent must declare what kind of "blank-out"
-    // edit this is (typically edit_cosmetic or edit_docs_only).
+    // edit this is (typically edit_cosmetic, or one of the 5 workflow-axis kinds (edit_explanation / edit_progress / etc.)).
   }
 
   // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).

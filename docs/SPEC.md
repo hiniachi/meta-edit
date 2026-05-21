@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of seventeen kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 16 impl tools (15 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty-one kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 16 impl tools (15 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The 5 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation`) replace v0.5.x's single `edit_docs_only` and classify documentation / planning edits by the intent of the current session moment. Every declaration also carries a required `provenance` field naming the epistemic source of the edit (user_confirmed / accepted_artifact / direct_observation / inference / speculation), so a future session reading the file picks up uncertainty directly from the prose rather than treating past-chat artifacts as confirmed decisions. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -90,7 +90,7 @@ Article 7 forbids in MVP. Under the non-adversarial assumption, these
 are honest classification mistakes, not deception, and the cure is
 description-tuning (not detection).
 
-### Article 4 — Surface: seventeen tools (15 SQLite + edit_cosmetic + 1 workflow)
+### Article 4 — Surface: twenty-one tools (15 SQLite + edit_cosmetic + 5 workflow)
 
 **Fifteen SQLite-derived tools.** Each is one element of a bug-class
 classification grounded in SQLite's testing strategy
@@ -126,17 +126,29 @@ refactor". (See §4 for the verbatim description and the rationale.)
 edit_cosmetic
 ```
 
-**One workflow-required tool.** The development workflow imposes
-actions that are not "code edits as cognitive units" but "environment
-setup that the agent feels motivated to perform in batches" (sweeping
-documentation updates). Forcing those into a one-call-per-file rhythm
-creates friction that biases the agent toward shell-redirect bypass.
-The remaining workflow tool is recognized constitutionally as
-batch-friendly:
+**Five workflow-axis tools.** Documentation and planning edits divide
+naturally along an *intent axis*, not a path axis: the same Markdown
+file may pass through different tools across sessions depending on
+whether the current moment is recording work done, observing a
+gotcha, raising a proposal, recording a confirmed decision, or
+explaining shipped behavior to a reader. The five workflow tools
+classify those moments:
 
 ```
-edit_docs_only
+edit_progress      edit_observation      edit_proposal
+edit_decision      edit_explanation
 ```
+
+`edit_progress` records what was done in this session (typical target:
+`IMPLEMENTATION-LOG.md`). `edit_observation` records facts that
+outlive the session (typical target: `OBSERVED-FAILURES.md`, in-code
+`// XXX ...`). `edit_proposal` raises proposals, RFC drafts, ADR
+drafts, and open questions (typical target: `issues/`,
+`docs/plan/**`). `edit_decision` records confirmed decisions (cut
+CHANGELOG, accepted ADR). `edit_explanation` explains shipped
+behavior for a reader (typical target: README, JSDoc, docs/). Acceptance
+of multi-file batching via `additional_files` is cell-wise by
+(workflow kind × provenance) per §3.3.2.
 
 (v0.3.1 dropped `edit_create_file` and `edit_create_planning_artifact`:
 empty file creation is now free at the deny-raw-edit hook level — see
@@ -147,7 +159,15 @@ narrowed `edit_refactor_only` to `edit_cosmetic`: test edits flow
 through the kind-specific impl tool with `target: "test"`, paired
 with the original `target: "prod"` declaration so the prod/test pair
 lands inside the same kind's audit surface rather than disappearing
-into a generic test bucket.)
+into a generic test bucket. v0.6.0 split the v0.5.x `edit_docs_only`
+along the intent axis described above, so documentation edits are
+classified by what the session is doing rather than by which path the
+file sits under. Per Q5 in
+`docs/plan/docs-kind-subdivision-and-provenance/open-questions.md`,
+the v0.6.0 write path rejects calls naming `edit_docs_only`; the
+read path still surfaces legacy v0.5.x entries in a dedicated
+"legacy: edit_docs_only" bucket in `meta-edit summary` so audit
+continuity is preserved.)
 
 **prod/test target flag.** The 16 impl tools (15 SQLite-derived +
 `edit_cosmetic`) each require a `target: "prod" | "test"` field on
@@ -155,8 +175,21 @@ every declaration. One declaration covers exactly one target. Pairing
 implementation with its tests is two declarations of the same tool
 (target: "prod" then target: "test"); both may land in the same commit.
 When `target: "test"`, `target_file` IS the test file and `test_files`
-must be empty. `edit_docs_only` does NOT carry `target` — documentation
-has its own surface and the prod/test split does not apply.
+must be empty. The 5 workflow-axis tools do NOT carry `target` —
+documentation / workflow content has its own surface and the prod/test
+split does not apply.
+
+**Provenance flag.** Every declaration — all 21 tools — carries a
+required `provenance` field naming the epistemic source of the edit:
+one of `user_confirmed` / `accepted_artifact` / `direct_observation` /
+`inference` / `speculation`. The five values represent five distinct
+epistemic strata that past-chat artifacts otherwise conflate. The
+schema is strict (required, no default); the (kind, provenance) cell
+matrices in §3.3 then encode whether a particular declaration is
+accepted, accepted-with-warning, or rejected. Crucially, the prose of
+the edit is expected to carry the uncertainty itself — a future
+session reading the file picks up the hedging language directly, with
+no structural-marker machinery in the loop.
 
 The full per-tool descriptions live in Part II §4 of SPEC.md and in
 `src/tools/descriptions.ts` verbatim. They are unconstitutional only in
@@ -265,16 +298,20 @@ weaken the bet. Atomic multi-file rename (today's `apply.ts`
 invariant) is **not** preserved; partial application is recoverable in
 the friendly-AI threat model.
 
-**One workflow-required tool — 1 declaration ≡ N target_files.**
-`edit_docs_only` accepts a batch of files in one declaration. The
-binding's TTL covers the whole batch; native Edit / Write calls
-consume the batch's entries in any order until the declaration is
-exhausted or expires. Per-file classification has no cognitive value
-here (sweeping a docs rename across 30 markdown files
-is one act, not 30; scaffolding `index.ts` + `impl.ts` + `impl.test.ts`
-is one act, not three), and observation suggests that forcing them
-1-by-1 is the friction surface most likely to push the agent toward
-shell-redirect bypass.
+**Five workflow-axis kinds — 1 declaration ≡ 1 or N target_files.**
+The 5 workflow-axis kinds (`edit_progress`, `edit_observation`,
+`edit_proposal`, `edit_decision`, `edit_explanation`) MAY accept a
+batch of files in one declaration, with acceptance decided cell-wise
+by (kind, provenance) per §3.3.2. When `additional_files` is accepted
+or warned, the binding's TTL covers the whole batch; native Edit /
+Write calls consume the batch's entries in any order until the
+declaration is exhausted or expires. Per-file classification has no
+cognitive value at sweep moments (sweeping a docs rename across 30
+markdown files is one act, not 30), and observation suggests that
+forcing them 1-by-1 is the friction surface most likely to push the
+agent toward shell-redirect bypass. `edit_progress` is the lone
+workflow kind that rejects `additional_files` in every cell — a
+progress entry is per-moment and per-place by nature.
 
 **prod/test target flag.** Every impl tool (the 15 SQLite-derived +
 `edit_cosmetic`) carries a required `target: "prod" | "test"` field.
@@ -378,7 +415,8 @@ PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
 MCP server: meta-edit-mcp
   ├─ 15 SQLite-discipline-derived impl tools (single-file declarations, prod/test target flag)
   ├─ 1 cosmetic tool (single-file declarations, prod/test target flag, narrow scope)
-  ├─ 1 workflow tool (batch declarations of N files, no target flag)
+  ├─ 5 workflow-axis tools (batch declarations of N files cell-wise by (kind, provenance), no target flag)
+  ├─ Every declaration carries a required provenance field (v0.6.0)
   └─ Issues tokens; never writes files
 
 State
@@ -393,7 +431,7 @@ That is the entire system.
 
 ---
 
-## 3. The seventeen tools: common schema
+## 3. The twenty-one tools: common schema
 
 A typed_edit MCP call is a **declaration of intent**. The server validates the request, reads disk to compute `before_sha256` itself, issues a single-use token bound to one or more `(file, before_sha256)` tuples, and returns. **It does not write.** Native `Edit` / `Write` / `MultiEdit` performs the write under hook validation (see §5).
 
@@ -404,20 +442,34 @@ type EditToolRequest = {
   risk_level: "low" | "medium" | "high" | "critical";
 
   // REQUIRED on every impl tool (15 SQLite-derived + edit_cosmetic).
-  // Forbidden on edit_docs_only (documentation has its own surface;
-  // the prod/test split does not apply). One declaration covers
-  // exactly one target. Pair impl with tests via two declarations of
-  // the same tool — target: "prod" then target: "test"; both land in
-  // the same commit. See §4.
+  // Forbidden on the 5 workflow-axis kinds (edit_progress /
+  // edit_observation / edit_proposal / edit_decision /
+  // edit_explanation; documentation / workflow content has its own
+  // surface and the prod/test split does not apply). One declaration
+  // covers exactly one target. Pair impl with tests via two
+  // declarations of the same tool — target: "prod" then target:
+  // "test"; both land in the same commit. See §4.
   target?: "prod" | "test";
+
+  // REQUIRED on every tool (v0.6.0). Names the epistemic source of
+  // the edit. The (kind, provenance) cell matrices in §3.3 decide
+  // acceptance.
+  provenance:
+    | "user_confirmed"
+    | "accepted_artifact"
+    | "direct_observation"
+    | "inference"
+    | "speculation";
 
   test_files: string[];           // forward declaration; not bound by token
 
-  // ONLY accepted by the 1 workflow tool (edit_docs_only). The 16
-  // impl tools MUST omit this field; validation rejects its presence
-  // elsewhere. (v0.3.1 dropped edit_create_file and
-  // edit_create_planning_artifact; empty file creation is now a free
-  // hook-level action — see §5.1.)
+  // ONLY accepted by the 5 workflow-axis kinds (v0.6.0). The 15
+  // SQLite-derived impl tools and edit_cosmetic MUST omit this field;
+  // validation rejects its presence elsewhere. Acceptance of a
+  // particular workflow-kind declaration is further refined cell-wise
+  // by (kind, provenance) per §3.3.2. (v0.3.1 dropped edit_create_file
+  // and edit_create_planning_artifact; empty file creation is now a
+  // free hook-level action — see §5.1.)
   additional_files?: Array<{
     file: string;
   }>;
@@ -487,13 +539,15 @@ The MCP server enforces:
 
 - `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
 - `rationale` is non-empty after trim.
-- `target` field presence: required (`"prod"` or `"test"`) on every impl tool (15 SQLite-derived + `edit_cosmetic`); forbidden on `edit_docs_only`. Validation rejects both omissions and misplacements.
-- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and `edit_docs_only` regardless.
+- `target` field presence: required (`"prod"` or `"test"`) on every impl tool (15 SQLite-derived + `edit_cosmetic`); forbidden on the 5 workflow-axis kinds. Validation rejects both omissions and misplacements.
+- `provenance` field presence: required on every declaration (v0.6.0). The schema is strict (no default). Cell-level acceptance by (kind, provenance) is then decided per §3.3.
+- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 5 workflow-axis kinds regardless.
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a subsequent declaration of the same impl tool with `target: "test"`. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
 - v0.4.2 removed the v0.3.1 "create the empty file first via a `content === ""` Write, THEN declare" requirement. That ordering-sensitive dance was a primary cause of binding failures (issues/2026-05-17-grant-binding-canonicalization-parity.md). The free empty-`content` Write to a non-existent in-repo path is still authorized at the hook (it remains a convenient scaffold), but it is no longer a prerequisite for declaring against a new file.
-- `additional_files` is accepted only for the 1 workflow tool, with cardinality ≤ 32 (operational hygiene; not a constitutional value).
+- `additional_files` is accepted only for the 5 workflow-axis kinds, with cardinality ≤ 32 (operational hygiene; not a constitutional value). Per-cell acceptance / warning / rejection is further decided by §3.3.2.
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
+- Legacy `edit_docs_only` (v0.5.x and earlier): write path rejects on v0.6.0 as an unknown tool; read path surfaces past entries in a dedicated `legacy:` bucket — see `meta-edit summary` and §6.
 
 Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.
 
@@ -510,6 +564,82 @@ The result also carries a `next_action` field whenever a token is issued — a o
 
 The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 
+### 3.3. Kind × provenance matrices (v0.6.0)
+
+The `provenance` field is required on every declaration, and the
+(kind, provenance) cell decides whether the declaration is accepted,
+accepted-with-warning, or rejected. The matrices below are the
+validation rule.
+
+#### 3.3.1. Base validity of a (kind, provenance) declaration
+
+```
+                     u_c    a_a    d_o    inf    spec
+edit_progress        OK     OK     OK◎    OK     OK
+edit_observation     OK     OK     OK◎    warn   OK
+edit_proposal        OK     OK     OK     OK     OK◎
+edit_decision        OK◎    OK     OK     REJ    REJ
+edit_explanation     OK     OK◎    OK     warn   REJ
+
+(15 SQLite-derived + edit_policy_change impl tools): all OK for every
+provenance.
+edit_cosmetic: see §3.3.3.
+```
+
+`◎` denotes the typical provenance for that kind (description guides
+toward it). `warn` lands with an audit warning recorded in
+`audit_warnings`; the declaration still issues a grant. `REJ` rejects
+the declaration outright with a non-empty `warnings` array.
+
+#### 3.3.2. `additional_files` acceptance matrix
+
+Invoked only when the declaration carries `additional_files` AND the
+kind is one of the 5 workflow-axis kinds:
+
+```
+                     u_c    a_a    d_o    inf    spec
+edit_progress        REJ    REJ    REJ    REJ    REJ
+edit_observation     REJ    warn   warn   warn   warn
+edit_proposal        warn   ACC    warn   warn   ACC
+edit_decision        ACC    ACC    warn   n/a    n/a
+edit_explanation     ACC    ACC    ACC    warn   n/a
+```
+
+`ACC` = land without warning; `warn` = land with an `additional_files_warn`
+in `audit_warnings`; `REJ` = reject the declaration; `n/a` = unreachable
+because §3.3.1 already rejects the kind × provenance pair.
+
+When `additional_files` is declared in a warn cell, the rationale MUST
+name the unifying theme. When it is declared in an accept cell, the
+rationale SHOULD name the theme. (Lint-side: the server records the
+warn but does not enforce the rationale-must-name-theme rule beyond
+the description-level obligation.)
+
+#### 3.3.3. `edit_cosmetic` provenance matrix
+
+```
+                     u_c    a_a    d_o    inf    spec
+edit_cosmetic        OK     OK◎    OK◎    REJ    REJ
+```
+
+`edit_cosmetic` has zero semantic effect by definition, so epistemic
+uncertainty here signals that the kind selection is wrong. Declaring
+`inference` or `speculation` on `edit_cosmetic` is rejected — the
+agent should re-classify to the workflow kind whose intent matches
+(`edit_explanation` for reader-facing clarification, `edit_observation`
+for an observed fact, `edit_proposal` for an open question) or to the
+kind-specific impl tool whose semantics actually changed.
+
+#### 3.3.4. `accepted_artifact` citation lint
+
+When `provenance: "accepted_artifact"` is declared, the rationale
+should carry at least one syntactically-recognizable artifact reference
+(`§...`, `ADR-...`, `RFC-...`, `issues/...`, or a URL). The server
+lints the rationale and records a `citation_lint_missing` audit
+warning if no reference is present. The lint is structure-only — the
+server does not verify the artifact exists or that its content matches
+the declaration.
+
 ### Multi-kind precedence
 
 If a single change might fit multiple tools, prefer the more specific:
@@ -524,7 +654,7 @@ A change that spans multiple kinds and cannot be safely split should choose the 
 
 ---
 
-## 4. The seventeen tool descriptions
+## 4. The twenty-one tool descriptions
 
 These descriptions are the product. Everything else is plumbing.
 
@@ -555,14 +685,21 @@ Descriptions are written in English. They are tuned to length 200–500 words ea
 ### `edit_cosmetic`
 
 ```
-Surface-level edit with no semantic effect: whitespace, comments, or
-formatter output only.
+Surface-level edit with no semantic effect and no information change:
+whitespace, formatter output, or comment edits that do not change the
+information content of the comment.
 
 Use this tool when, and ONLY when, the patch is one of the following:
 - Whitespace adjustment (indentation, blank lines, trailing whitespace,
   line breaks)
-- Comment edits (typo fix, rewording, adding clarifying comments,
-  removing stale comments)
+- Comment edits that change NO information content (typo fix,
+  line-break reflow within a comment block, formatter-driven comment
+  reformatting). Comments that add or change information go through the
+  workflow kind that matches the comment's intent — `edit_explanation`
+  for reader-facing clarification, `edit_observation` for
+  observed-fact notes (`// XXX ...`, stale-comment deletions),
+  `edit_proposal` for open questions (`// TODO ...`,
+  `// FIXME ...`).
 - Output of a configured formatter run (gofmt, prettier, black, rustfmt,
   etc.) — the bytes produced by running the project's formatter, with
   no manual edits layered on top
@@ -616,6 +753,41 @@ did not catch it before you applied. This is a personal debt that posts
 to the user, not a detection bypass — acknowledging the slip is what
 keeps the typed surface honest.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
+Provenance combinations (cosmetic-specific):
+This tool accepts only `user_confirmed`, `accepted_artifact`, and
+`direct_observation`. Declaring `inference` or `speculation` here
+is rejected. cosmetic has zero semantic effect, so epistemic uncertainty
+is a structural signal that the kind selection is wrong: the patch
+likely adds or changes information (in which case use the matching
+workflow kind) or changes behavior (in which case use the kind-specific
+impl tool). Re-classify before retrying.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -662,6 +834,32 @@ declaration covers one target — pair a target: prod call with a
 target: test call to land both within the same commit. When target is
 "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -714,6 +912,32 @@ that exercise it. Pair the two declarations in the same commit. When
 target is "test", `target_file` IS the test file and `test_files`
 must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -754,6 +978,32 @@ Declare `target: "prod"` when editing the state machine in production
 code, or `target: "test"` when editing its transition tests. Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -800,6 +1050,32 @@ rollback / constraint tests). Pair the two declarations in the same
 commit. When target is "test", `target_file` IS the test file and
 `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -842,6 +1118,32 @@ itself, or `target: "test"` when editing the migration tests
 (idempotency, partial failure, fixture transformation, edge cases). Pair
 the two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -889,6 +1191,32 @@ compatibility, missing/extra field, status code). Pair the two
 declarations in the same commit. When target is "test", `target_file`
 IS the test file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -929,6 +1257,32 @@ itself, or `target: "test"` when editing its round-trip / old-format /
 invalid-input tests. Pair the two declarations in the same commit. When
 target is "test", `target_file` IS the test file and `test_files`
 must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -973,6 +1327,32 @@ failure paths and observable-error contracts. Pair the two declarations
 in the same commit. When target is "test", `target_file` IS the test
 file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1013,6 +1393,32 @@ logic in production code, or `target: "test"` when editing its
 exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1057,6 +1463,32 @@ production code, or `target: "test"` when editing the concurrency
 tests. Pair the two declarations in the same commit. When target is
 "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1103,6 +1535,32 @@ success, no-fire-on-failure, idempotency, correct recipient). Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1141,6 +1599,32 @@ code in production, or `target: "test"` when editing its tests
 collision). Pair the two declarations in the same commit. When target
 is "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1192,6 +1676,32 @@ production, or `target: "test"` when editing the allow / deny matrix
 tests and negative-side-effect tests. Pair the two declarations in the
 same commit. When target is "test", `target_file` IS the test file
 and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1254,6 +1764,32 @@ production, or `target: "test"` when editing tests that exercise the
 new configuration (reproducibility, default value, new-config behavior).
 Pair the two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1319,6 +1855,32 @@ entries, clean-checkout applicability). Pair the two declarations in
 the same commit. When target is "test", `target_file` IS the test
 file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1326,71 +1888,102 @@ General principles (apply to every edit):
 
 ---
 
-### `edit_docs_only`
+### Five workflow-axis kinds (v0.6.0)
 
-```
-Modify documentation, README, comments, or other narrative content
-that does not affect runtime behavior.
+The five workflow-axis kinds replace v0.5.x's single `edit_docs_only`.
+They classify documentation / planning edits by the intent of the
+current session moment, not by file path. Verbatim text mirrors
+`src/tools/descriptions.ts` per CLAUDE.md §4; here we summarize the
+shapes and route to that file for the full bodies.
 
-Use this tool when:
-- Editing Markdown files (README, docs/, *.md)
-- Editing inline code comments
-- Editing JSDoc / docstrings / Rustdoc that document existing API
-- Editing changelogs, release notes, contribution guides
-- Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
-- Filling content into a freshly-created (currently empty) Markdown file:
-  issues/*.md, ADRs, design docs, post-mortems, dogfood reports.
-  Empty files are created freely without an MCP declaration (see SPEC §5);
-  the content fill goes through this tool.
+Every workflow-axis tool:
 
-Required tests: NONE. test_files may be empty.
+- carries no `target` field (workflow content is not bound to the
+  prod/test axis)
+- requires no `test_files` (workflow content is not tested in the
+  impl-tool sense; `test_files` must be empty)
+- MAY carry `additional_files`, with per-cell acceptance per §3.3.2
+- carries the same required `provenance` field as every other tool
+- carries the standard `PROVENANCE_FOOTER` block + a kind-specific
+  `Provenance combinations` paragraph spelling out reject / warn cells
 
-This tool does NOT carry a `target` field: documentation has its own
-surface and the prod/test split does not apply. The prod/test target
-flag is required only on the 16 impl tools.
+#### `edit_progress`
 
-Recommended verifications (not enforced):
-- Internal links resolve
-- Code blocks (if any) are syntactically valid in their stated language
-- Terminology is consistent with the rest of the project documentation
-- No accidental references to renamed APIs or removed features
+Record what was actually done, tried, or observed in the current
+session — a session work-log entry. Typical target:
+`IMPLEMENTATION-LOG.md`. Rejects `additional_files` in every cell.
+All five provenance values accepted; the typical value is
+`direct_observation`. Inference / speculation lands but the prose
+obligation is strict (the body must carry hedging language; a
+work-log entry written in speculative provenance whose prose reads as
+confirmed is the exact "past-chat looks like a decision" failure this
+refactor prevents).
 
-This tool MUST NOT be used when:
-- The patch modifies any executable production code
-- The patch modifies test code (use the appropriate impl tool with
-  `target: "test"`, choosing the kind that matches the production
-  code the test exercises)
-- The patch modifies build, CI, or meta-edit configuration
-  (use edit_dependency_config or edit_policy_change)
-- The "documentation" change actually changes API contracts
-  documented in code (use edit_api_contract)
-- The patch updates README / docs to claim functionality that has not
-  yet shipped — describing future or aspirational behavior misleads
-  every future reader (including AI agents). Land the implementation
-  in the same change set or wait
-- The patch updates a CHANGELOG entry for a release that this commit
-  does not actually cut (CHANGELOG must reflect what merged, not what
-  is queued)
-- The patch contains a code example (fenced block, inline snippet)
-  that does not compile or run as written; broken examples mislead
-  readers more than no example
-- The patch updates a Markdown test fixture loaded by tests at runtime
-  (use the appropriate impl tool with `target: "test"` since the
-  fixture's content is part of the test contract)
-- The patch batches unrelated documentation changes across multiple
-  files in one declaration; each independent doc surface gets its own
-  edit_docs_only call so the rationale and audit trail stay tied to
-  the actual reason
+#### `edit_observation`
 
-Rationale: documentation changes have a different risk profile from
-code refactors. They cannot break runtime behavior, but they can
-mislead future readers (including future AI agents). Treat
-documentation as a contract with future readers.
+Record an observation, surprise, finding, or gotcha — content that
+outlives the session. Typical targets: `OBSERVED-FAILURES.md`, code
+comments that flag known-bad patterns (`// XXX ...`, `// HACK ...`),
+stale-comment deletions. Rejects `additional_files` for
+`user_confirmed`; warns for the other four provenance values.
+`edit_observation + inference` lands with a `kind_provenance_warn`
+audit signal — re-route to `edit_proposal` if the body reads as "this
+is what I think given what I saw". Implementing detectors for the
+observed pattern is OUT of scope per Article 7.
 
-General principles (apply to every edit):
-- Keep the code simple. Prefer three similar lines over a premature abstraction.
-- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
-```
+#### `edit_proposal`
+
+Raise a proposal, question, or open issue — content meant to start or
+continue a deliberation about what to do. Typical targets: files
+under `issues/`, RFC drafts under `docs/plan/`, ADR drafts, code
+comments that open a question (`// TODO ...`, `// FIXME ...`).
+Accepts `additional_files` for `accepted_artifact` and `speculation`
+(audit-driven issue burst, exploratory feature kickoff); warns for
+the other three provenance values. All five provenance values
+accepted at the base level; the typical value is `speculation`. When
+provenance is `speculation`, the prose MUST open with strong hedging.
+
+#### `edit_decision`
+
+Record a decision that has already been made. Typical targets:
+accepted ADRs, CHANGELOG entries for releases this commit actually
+cuts, release-commit batches that update CHANGELOG + version +
+plugin manifests in one place. Accepts `additional_files` for
+`user_confirmed` and `accepted_artifact`; warns for
+`direct_observation`. The base validity matrix rejects `inference`
+and `speculation` (decisions are confirmed by their nature; treating
+an inference or hypothesis as a decision is the exact misclassification
+the workflow-axis split is meant to surface). The typical provenance
+is `user_confirmed`.
+
+#### `edit_explanation`
+
+Explain or document known facts for a reader. Typical targets: README
+files (and their translations), `docs/`, JSDoc / docstrings, API
+documentation, code comments whose purpose is to explain how a thing
+works (`/** function does X */`). Accepts `additional_files` for
+`user_confirmed`, `accepted_artifact`, and `direct_observation`
+(multilingual sync, spec-driven sweep, impl/doc sync); warns for
+`inference`. The base validity matrix rejects `speculation`
+(explanations are contracts with future readers; speculative
+explanations mislead more than they clarify). The typical provenance
+is `accepted_artifact` (the explanation is derived from an accepted
+spec, ADR, or API contract; quote the artifact in the rationale and,
+where natural, in the prose).
+
+The full verbatim descriptions live in `src/tools/descriptions.ts`.
+Per CLAUDE.md §4 the spec text above must move in lockstep with the
+descriptions; the SQLite-style `Use this tool when`, `MUST NOT`,
+`additional_files cardinality`, `Provenance combinations`, and
+`General principles` blocks in `descriptions.ts` are the
+verbatim authority for what the agent reads.
+
+### `edit_docs_only` (legacy, v0.5.x and earlier)
+
+`edit_docs_only` was retired in v0.6.0 (see §4 above). The write path
+rejects new calls naming it; the read path (`meta-edit log`,
+`meta-edit summary`) surfaces legacy entries in a dedicated
+`legacy: edit_docs_only` bucket so audit continuity is preserved.
 
 ---
 
@@ -1517,7 +2110,22 @@ Each declaration produces two records:
  "token":"met_20260502_a3f9b2..."}
 ```
 
-The `target` field is `"prod"` or `"test"` on every impl tool (15 SQLite-derived + `edit_cosmetic`) and is omitted on `edit_docs_only` (documentation has its own surface; the prod/test split does not apply). Persisting it on the issued record is what lets audit analysis split a kind's edits into prod vs test rather than collapsing them into a single bucket. The paired `target: "test"` declaration appears as its own `issued` record with the same `kind` and a different `target_file`.
+The `target` field is `"prod"` or `"test"` on every impl tool (15 SQLite-derived + `edit_cosmetic`) and is omitted on the 5 workflow-axis kinds (workflow content has its own surface; the prod/test split does not apply). Persisting it on the issued record is what lets audit analysis split a kind's edits into prod vs test rather than collapsing them into a single bucket. The paired `target: "test"` declaration appears as its own `issued` record with the same `kind` and a different `target_file`.
+
+v0.6.0 additions: the issued record carries a required `provenance`
+field naming the epistemic source of the edit (one of `user_confirmed`
+/ `accepted_artifact` / `direct_observation` / `inference` /
+`speculation`), and an optional `audit_warnings` array recording soft
+signals from the (kind, provenance) cell matrices (codes:
+`kind_provenance_warn`, `additional_files_warn`,
+`citation_lint_missing`). Both fields are optional on read so the log
+remains backward-compatible with v0.5.x entries; `meta-edit summary`
+buckets v0.5.x entries as the `unspecified` provenance and surfaces
+legacy `edit_docs_only` entries in a dedicated `legacy:` bucket.
+
+The CLI exposes a `--provenance` filter on `meta-edit log` (e.g.
+`meta-edit log --provenance speculation,inference` to inspect every
+edit that was declared as exploratory).
 
 2. **Consumed** — written when the deny-raw-edit hook authorizes a native write (PreToolUse, before the write executes). "Consumed" denotes hook authorization; write success is not part of the audit log (see §5).
 
@@ -1588,9 +2196,18 @@ By tool (prod / test counts shown for impl tools):
   edit_permission_logic        6 (prod 3 / test 3) (13%)
   edit_external_side_effect    4 (prod 2 / test 2) ( 9%)
   edit_cosmetic                4 (prod 3 / test 1) ( 9%)
+  edit_explanation             3                   ( 6%)
+  edit_progress                2                   ( 4%)
   edit_dependency_config       2 (prod 1 / test 1) ( 4%)
   edit_policy_change           1 (prod 1 / test 0) ( 2%)
-  edit_docs_only               2                   ( 4%)
+  legacy: edit_docs_only       2                   ( 4%)
+
+By provenance:
+  user_confirmed       21  (44%)
+  accepted_artifact    15  (31%)
+  direct_observation    8  (17%)
+  inference             3  ( 6%)
+  speculation           1  ( 2%)
 
 By risk_level:
   low      28
@@ -1645,7 +2262,7 @@ meta-edit/
   src/
     tools/
       common.ts             shared types, validation, token issuance
-      descriptions.ts       the seventeen descriptions, verbatim from §4
+      descriptions.ts       the twenty-one descriptions, verbatim from §4
       registry.ts           MCP tool registration
     server.ts               MCP stdio server entry
     cli.ts                  CLI entry
@@ -1664,7 +2281,7 @@ meta-edit/
 
 ### Descriptions-verbatim rule
 
-`src/tools/descriptions.ts` contains the seventeen descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
+`src/tools/descriptions.ts` contains the twenty-one descriptions from §4 of this document, verbatim. Spec and code MUST stay in sync; any change to either updates both in the same change.
 
 Tool handlers share common logic via helpers, but each tool is registered separately under the MCP server with its own description. Per Article 4, tool selection is the cognitive intervention; the surface is not collapsed into a generic `kind`-parameterized handler.
 

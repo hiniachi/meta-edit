@@ -100,7 +100,7 @@ export function buildOnboardingMessage(): string {
     "meta-edit MCP server is registered for this project. New session detected.",
     "",
     "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
-    "Skill tool to load the seventeen-tool catalog and selection heuristic.",
+    "Skill tool to load the twenty-one-tool catalog and selection heuristic.",
     "Empty file creation is free (no MCP declaration); content fills go through",
     "the appropriate edit_<TYPE> tool against the now-empty file. Use ToolSearch",
     "with `select:mcp__plugin_meta-edit_meta-edit__edit_<name>` to load any",

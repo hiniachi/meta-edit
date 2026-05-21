@@ -32,16 +32,20 @@ edit_error_handling           edit_retry_timeout
 edit_concurrency              edit_external_side_effect
 edit_cache_invalidation       edit_permission_logic
 edit_dependency_config        edit_policy_change
-edit_docs_only
+edit_progress
+edit_observation
+edit_proposal
+edit_decision
+edit_explanation
 ```
 
-每个工具的描述都写明:何时使用、何时不该使用、必须伴随哪些测试、什么时候停下来询问用户。除 `edit_docs_only` 外的 16 个实现工具都要求 `target: "prod" | "test"` 字段——实现变更与对应测试以同一工具的两次声明配对落地,落在同一次提交里。
+每个工具的描述都写明:何时使用、何时不该使用、必须伴随哪些测试、什么时候停下来询问用户。除 5 个 workflow-axis kind 外的 16 个实现工具都要求 `target: "prod" | "test"` 字段——实现变更与对应测试以同一工具的两次声明配对落地,落在同一次提交里。
 
 > **v0.5.0**:旧的 `edit_test_only_change` 与 `edit_refactor_only` 已移除。测试编辑通过对应实现工具以 `target: "test"` 再声明一次完成。`edit_cosmetic` 取代了 `edit_refactor_only`,但只覆盖空白 / 注释 / 格式化器输出;重命名、抽取、删除死代码等不再有通用 refactor 出口,而是触发「停下询问」。
 
 ## 观察到的现象
 
-当请求的改动没有种类能干净匹配时,代理不会硬塞进最近的工具,而是**停下来询问**。我们在上下文使用率约 80% 的会话里观察到了这一点——这正是 `CLAUDE.md` 类指令通常已经失去约束力的区段。当时催生 workflow 工具 `edit_docs_only` 的完整对话记录,见[项目页](https://hiniachi.github.io/meta-edit/#proof)。
+当请求的改动没有种类能干净匹配时,代理不会硬塞进最近的工具,而是**停下来询问**。我们在上下文使用率约 80% 的会话里观察到了这一点——这正是 `CLAUDE.md` 类指令通常已经失去约束力的区段。当时催生 v0.5.x 工具 `edit_docs_only` 的完整对话记录,见[项目页](https://hiniachi.github.io/meta-edit/#proof)。
 
 ## 安装
 

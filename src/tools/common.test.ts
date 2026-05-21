@@ -15,11 +15,16 @@ import {
   EditToolRequestSchema,
   MAX_ADDITIONAL_FILES,
   SHA256_EMPTY,
+  evaluateAdditionalFiles,
+  evaluateKindProvenanceValidity,
+  rationaleHasArtifactCitation,
   sha256Hex,
   validateRequest,
   type EditToolRequest,
+  type Provenance,
   type ValidationContext,
 } from "./common.js";
+import type { ToolName } from "./descriptions.js";
 import {
   makeTmpRoot,
   cleanTmpRoot,
@@ -52,6 +57,7 @@ describe("EditToolRequestSchema — zod surface", () => {
       target_file: "src/foo.ts",
       rationale: "ok",
       risk_level: "medium",
+      provenance: "direct_observation",
       test_files: ["t.test.ts"],
     });
     expect(r.success).toBe(true);
@@ -63,6 +69,7 @@ describe("EditToolRequestSchema — zod surface", () => {
       target_file: "src/foo.ts",
       rationale: "ok",
       risk_level: "medium",
+      provenance: "direct_observation",
       test_files: [],
       before_sha256: "a".repeat(64),
     });
@@ -74,6 +81,7 @@ describe("EditToolRequestSchema — zod surface", () => {
       target_file: "src/foo.ts",
       rationale: "ok",
       risk_level: "medium",
+      provenance: "direct_observation",
       test_files: [],
       after_sha256: "b".repeat(64),
     });
@@ -89,8 +97,36 @@ describe("EditToolRequestSchema — zod surface", () => {
       target_file: "src/foo.ts",
       rationale: "ok",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: af,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects requests missing the v0.6.0 provenance field", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      // provenance: omitted
+      test_files: [],
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      // Zod's required-field error mentions the missing field by name.
+      const msg = JSON.stringify(r.error.issues);
+      expect(msg).toContain("provenance");
+    }
+  });
+
+  it("rejects requests with an invalid provenance value", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      provenance: "made-up-source",
+      test_files: [],
     });
     expect(r.success).toBe(false);
   });
@@ -110,6 +146,7 @@ describe("EditToolRequestSchema — zod surface", () => {
       target_file: "docs/a.md",
       rationale: "ok",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: [
         {
@@ -137,6 +174,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         target_file: "docs/a.md",
         rationale: "ok",
         risk_level: "low",
+        provenance: "direct_observation",
         test_files: "[]" as unknown as string[],
       });
     });
@@ -154,6 +192,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         target_file: "docs/a.md",
         rationale: "ok",
         risk_level: "low",
+        provenance: "direct_observation",
         test_files: '["src/foo.test.ts"]' as unknown as string[],
       });
     });
@@ -170,6 +209,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         target_file: "docs/a.md",
         rationale: "ok",
         risk_level: "low",
+        provenance: "direct_observation",
         test_files: [],
       });
     });
@@ -182,6 +222,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
       target_file: "docs/a.md",
       rationale: "ok",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: 42 as unknown as string[],
     });
     expect(parsed.success).toBe(false);
@@ -192,6 +233,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
       target_file: "docs/a.md",
       rationale: "ok",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: "not json" as unknown as string[],
     });
     expect(parsed.success).toBe(false);
@@ -204,6 +246,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         target_file: "docs/a.md",
         rationale: "ok",
         risk_level: "low",
+        provenance: "direct_observation",
         test_files: [],
         additional_files: "[]" as unknown as { file: string }[],
       });
@@ -222,6 +265,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "fix",
       risk_level: "medium",
       target: "prod",
+      provenance: "direct_observation",
       test_files: ["tests/foo.test.ts"],
       ...overrides,
     };
@@ -352,10 +396,11 @@ describe("validateRequest — disk + path-safety", () => {
   it("rejects duplicate canonical paths within additional_files", () => {
     writeFile("docs/a.md", "alpha\n");
     writeFile("docs/b.md", "beta\n");
-    const r = validateRequest("edit_docs_only", {
+    const r = validateRequest("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "...",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: [
         { file: "docs/b.md" },
@@ -370,10 +415,11 @@ describe("validateRequest — disk + path-safety", () => {
 
   it("rejects when target_file appears again as an additional_files entry", () => {
     writeFile("docs/a.md", "alpha\n");
-    const r = validateRequest("edit_docs_only", {
+    const r = validateRequest("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "...",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: [{ file: "docs/a.md" }],
     }, ctx());
@@ -389,6 +435,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "tests/foo.test.ts",
       rationale: "tighten the boundary assertion",
       risk_level: "low",
+      provenance: "direct_observation",
       target: "test",
       test_files: [],
     }, ctx());
@@ -406,6 +453,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "tests/foo.test.ts",
       rationale: "...",
       risk_level: "low",
+      provenance: "direct_observation",
       target: "test",
       test_files: ["tests/foo.test.ts"],
     }, ctx());
@@ -421,6 +469,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "src/foo.ts",
       rationale: "tighten boundary",
       risk_level: "low",
+      provenance: "direct_observation",
       target: "prod",
       test_files: [],
     }, ctx());
@@ -436,6 +485,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "src/foo.ts",
       rationale: "tighten boundary",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: ["tests/foo.test.ts"],
     }, ctx());
     expect(r.ok).toBe(false);
@@ -444,12 +494,13 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
-  it("rejects edit_docs_only when target field is provided", () => {
+  it("rejects edit_explanation when target field is provided", () => {
     writeFile("docs/a.md", "x\n");
-    const r = validateRequest("edit_docs_only", {
+    const r = validateRequest("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "doc tweak",
       risk_level: "low",
+      provenance: "direct_observation",
       target: "prod",
       test_files: [],
     }, ctx());
@@ -465,6 +516,7 @@ describe("validateRequest — disk + path-safety", () => {
       target_file: "src/foo.ts",
       rationale: "reformat trailing whitespace",
       risk_level: "low",
+      provenance: "direct_observation",
       target: "prod",
       test_files: [],
     }, ctx());
@@ -475,10 +527,11 @@ describe("validateRequest — disk + path-safety", () => {
     writeFile("docs/a.md", "alpha\n");
     writeFile("docs/b.md", "beta\n");
     writeFile("docs/c.md", "gamma\n");
-    const r = validateRequest("edit_docs_only", {
+    const r = validateRequest("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "rename product across the docs",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
     }, ctx());
@@ -490,6 +543,362 @@ describe("validateRequest — disk + path-safety", () => {
       );
       expect(byFile.get("docs/b.md")).toBe(sha256Hex("beta\n"));
       expect(byFile.get("docs/c.md")).toBe(sha256Hex("gamma\n"));
+    }
+  });
+});
+
+// =====================================================================
+// v0.6.0 kind × provenance matrices (RFC §3.3.x)
+// =====================================================================
+//
+// These tests are the spec, in the sense of CLAUDE.md §4: the
+// validation matrices in common.ts mirror the tables in
+// docs/SPEC.md §3.3 / docs/plan/docs-kind-subdivision-and-provenance/
+// rfc.md §3.3. Drift in either side trips an assertion here.
+
+describe("evaluateKindProvenanceValidity (RFC §3.3.1 / §3.3.3)", () => {
+  const ALL_PROVENANCES: Provenance[] = [
+    "user_confirmed",
+    "accepted_artifact",
+    "direct_observation",
+    "inference",
+    "speculation",
+  ];
+
+  it("edit_cosmetic accepts user_confirmed / accepted_artifact / direct_observation only", () => {
+    expect(evaluateKindProvenanceValidity("edit_cosmetic", "user_confirmed")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_cosmetic", "accepted_artifact")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_cosmetic", "direct_observation")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_cosmetic", "inference")).toBe("reject");
+    expect(evaluateKindProvenanceValidity("edit_cosmetic", "speculation")).toBe("reject");
+  });
+
+  it("edit_decision rejects inference / speculation", () => {
+    expect(evaluateKindProvenanceValidity("edit_decision", "user_confirmed")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_decision", "accepted_artifact")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_decision", "direct_observation")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_decision", "inference")).toBe("reject");
+    expect(evaluateKindProvenanceValidity("edit_decision", "speculation")).toBe("reject");
+  });
+
+  it("edit_explanation rejects speculation, warns on inference", () => {
+    expect(evaluateKindProvenanceValidity("edit_explanation", "user_confirmed")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_explanation", "accepted_artifact")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_explanation", "direct_observation")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_explanation", "inference")).toBe("warn");
+    expect(evaluateKindProvenanceValidity("edit_explanation", "speculation")).toBe("reject");
+  });
+
+  it("edit_observation warns on inference, accepts the rest", () => {
+    expect(evaluateKindProvenanceValidity("edit_observation", "user_confirmed")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_observation", "accepted_artifact")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_observation", "direct_observation")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_observation", "inference")).toBe("warn");
+    expect(evaluateKindProvenanceValidity("edit_observation", "speculation")).toBe("accept");
+  });
+
+  it("edit_progress and edit_proposal accept every provenance", () => {
+    for (const prov of ALL_PROVENANCES) {
+      expect(evaluateKindProvenanceValidity("edit_progress", prov)).toBe("accept");
+      expect(evaluateKindProvenanceValidity("edit_proposal", prov)).toBe("accept");
+    }
+  });
+
+  it("all 15 impl SQLite-derived tools accept every provenance (no rejects, no warns)", () => {
+    const impl: ToolName[] = [
+      "edit_boundary_condition",
+      "edit_boolean_condition",
+      "edit_state_transition",
+      "edit_db_schema",
+      "edit_data_migration",
+      "edit_api_contract",
+      "edit_serialization",
+      "edit_error_handling",
+      "edit_retry_timeout",
+      "edit_concurrency",
+      "edit_external_side_effect",
+      "edit_cache_invalidation",
+      "edit_permission_logic",
+      "edit_dependency_config",
+      "edit_policy_change",
+    ];
+    for (const kind of impl) {
+      for (const prov of ALL_PROVENANCES) {
+        expect(evaluateKindProvenanceValidity(kind, prov)).toBe("accept");
+      }
+    }
+  });
+});
+
+describe("evaluateAdditionalFiles (RFC §3.3.2)", () => {
+  it("edit_progress rejects in every cell", () => {
+    const provs: Provenance[] = [
+      "user_confirmed",
+      "accepted_artifact",
+      "direct_observation",
+      "inference",
+      "speculation",
+    ];
+    for (const prov of provs) {
+      expect(evaluateAdditionalFiles("edit_progress", prov)).toBe("reject");
+    }
+  });
+
+  it("edit_observation rejects user_confirmed, warns the rest", () => {
+    expect(evaluateAdditionalFiles("edit_observation", "user_confirmed")).toBe("reject");
+    expect(evaluateAdditionalFiles("edit_observation", "accepted_artifact")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_observation", "direct_observation")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_observation", "inference")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_observation", "speculation")).toBe("warn");
+  });
+
+  it("edit_proposal accepts accepted_artifact / speculation, warns the rest", () => {
+    expect(evaluateAdditionalFiles("edit_proposal", "user_confirmed")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_proposal", "accepted_artifact")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_proposal", "direct_observation")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_proposal", "inference")).toBe("warn");
+    expect(evaluateAdditionalFiles("edit_proposal", "speculation")).toBe("accept");
+  });
+
+  it("edit_decision accepts user_confirmed / accepted_artifact, warns direct_observation", () => {
+    expect(evaluateAdditionalFiles("edit_decision", "user_confirmed")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_decision", "accepted_artifact")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_decision", "direct_observation")).toBe("warn");
+    // inference / speculation are unreachable by §3.3.1 reject, but the
+    // matrix returns reject defensively so an additional_files call
+    // cannot slip through if §3.3.1 ever loosens.
+    expect(evaluateAdditionalFiles("edit_decision", "inference")).toBe("reject");
+    expect(evaluateAdditionalFiles("edit_decision", "speculation")).toBe("reject");
+  });
+
+  it("edit_explanation accepts user_confirmed / accepted_artifact / direct_observation, warns inference", () => {
+    expect(evaluateAdditionalFiles("edit_explanation", "user_confirmed")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_explanation", "accepted_artifact")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_explanation", "direct_observation")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_explanation", "inference")).toBe("warn");
+    // speculation is unreachable by §3.3.1 reject; defensive reject here.
+    expect(evaluateAdditionalFiles("edit_explanation", "speculation")).toBe("reject");
+  });
+
+  it("impl tools and edit_cosmetic reject additional_files at the matrix (the schema-level whitelist already filters them out)", () => {
+    const impls: ToolName[] = [
+      "edit_cosmetic",
+      "edit_boundary_condition",
+      "edit_state_transition",
+      "edit_api_contract",
+      "edit_policy_change",
+    ];
+    for (const kind of impls) {
+      expect(evaluateAdditionalFiles(kind, "direct_observation")).toBe("reject");
+    }
+  });
+});
+
+describe("rationaleHasArtifactCitation (RFC §3.2 citation lint)", () => {
+  it("accepts rationale carrying §-style spec references", () => {
+    expect(rationaleHasArtifactCitation("per SPEC.md §4")).toBe(true);
+  });
+
+  it("accepts ADR-* references", () => {
+    expect(rationaleHasArtifactCitation("following ADR-007")).toBe(true);
+  });
+
+  it("accepts RFC-* references", () => {
+    expect(rationaleHasArtifactCitation("per RFC-001 §3")).toBe(true);
+  });
+
+  it("accepts issues/* references", () => {
+    expect(rationaleHasArtifactCitation("see issues/2026-05-21-foo.md")).toBe(true);
+  });
+
+  it("accepts URL references", () => {
+    expect(rationaleHasArtifactCitation("see https://example.com/spec")).toBe(true);
+  });
+
+  it("rejects rationale with no recognizable artifact reference", () => {
+    expect(rationaleHasArtifactCitation("because it seems right")).toBe(false);
+    expect(rationaleHasArtifactCitation("the user agreed yesterday")).toBe(false);
+  });
+});
+
+describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
+  let tmpRoot2: string;
+  let writeFile2: (rel: string, content: string) => void;
+  let ctx2: () => ValidationContext;
+
+  beforeEach(() => {
+    tmpRoot2 = makeTmpRoot("kp");
+    fs.mkdirSync(path.join(tmpRoot2, ".git"));
+    writeFile2 = (rel, content) => writeFileIn(tmpRoot2, rel, content);
+    ctx2 = () => ({ repoRoot: tmpRoot2 });
+  });
+
+  afterEach(() => {
+    cleanTmpRoot(tmpRoot2);
+  });
+
+  function workflowReq(
+    kind: ToolName,
+    provenance: Provenance,
+    overrides: Partial<EditToolRequest> = {},
+  ): EditToolRequest {
+    return {
+      target_file: "docs/a.md",
+      rationale: "explain feature X (see SPEC.md §4)",
+      risk_level: "low",
+      provenance,
+      test_files: [],
+      ...overrides,
+    };
+  }
+
+  it("rejects edit_cosmetic + speculation", () => {
+    writeFile2("src/foo.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/foo.ts",
+      rationale: "reformat",
+      risk_level: "low",
+      target: "prod",
+      provenance: "speculation",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("§3.3"))).toBe(true);
+    }
+  });
+
+  it("rejects edit_decision + inference", () => {
+    writeFile2("docs/a.md", "x\n");
+    const r = validateRequest("edit_decision", workflowReq("edit_decision", "inference"), ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("rejected"))).toBe(true);
+    }
+  });
+
+  it("rejects edit_explanation + speculation", () => {
+    writeFile2("docs/a.md", "x\n");
+    const r = validateRequest("edit_explanation", workflowReq("edit_explanation", "speculation"), ctx2());
+    expect(r.ok).toBe(false);
+  });
+
+  it("accepts edit_observation + inference with a warn cell in auditWarnings", () => {
+    writeFile2("docs/notes.md", "x\n");
+    const r = validateRequest("edit_observation", {
+      target_file: "docs/notes.md",
+      rationale: "noted that X breaks Y",
+      risk_level: "low",
+      provenance: "inference",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.auditWarnings.some((w) => w.code === "kind_provenance_warn")).toBe(true);
+    }
+  });
+
+  it("warns when accepted_artifact rationale has no citation", () => {
+    writeFile2("docs/a.md", "x\n");
+    const r = validateRequest("edit_explanation", {
+      target_file: "docs/a.md",
+      rationale: "explain feature X",
+      risk_level: "low",
+      provenance: "accepted_artifact",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "citation_lint_missing"),
+      ).toBe(true);
+    }
+  });
+
+  it("does NOT warn on accepted_artifact rationale carrying §-style citation", () => {
+    writeFile2("docs/a.md", "x\n");
+    const r = validateRequest("edit_explanation", {
+      target_file: "docs/a.md",
+      rationale: "explain feature X per SPEC.md §4",
+      risk_level: "low",
+      provenance: "accepted_artifact",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "citation_lint_missing"),
+      ).toBe(false);
+    }
+  });
+
+  it("rejects edit_progress with additional_files (every cell rejects)", () => {
+    writeFile2("docs/log.md", "x\n");
+    writeFile2("docs/log2.md", "y\n");
+    const r = validateRequest("edit_progress", {
+      target_file: "docs/log.md",
+      rationale: "session work-log",
+      risk_level: "low",
+      provenance: "direct_observation",
+      test_files: [],
+      additional_files: [{ file: "docs/log2.md" }],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+  });
+
+  it("accepts edit_proposal + speculation + additional_files (typical kickoff burst)", () => {
+    writeFile2("issues/a.md", "x\n");
+    writeFile2("issues/b.md", "y\n");
+    const r = validateRequest("edit_proposal", {
+      target_file: "issues/a.md",
+      rationale: "feature kickoff: file follow-up issues",
+      risk_level: "low",
+      provenance: "speculation",
+      test_files: [],
+      additional_files: [{ file: "issues/b.md" }],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.additionalBindings.length).toBe(1);
+    }
+  });
+
+  it("warns on edit_explanation + inference + additional_files (atypical batch cell)", () => {
+    writeFile2("docs/a.md", "x\n");
+    writeFile2("docs/b.md", "y\n");
+    const r = validateRequest("edit_explanation", {
+      target_file: "docs/a.md",
+      rationale: "explain X based on observed behavior",
+      risk_level: "low",
+      provenance: "inference",
+      test_files: [],
+      additional_files: [{ file: "docs/b.md" }],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "additional_files_warn"),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects impl tools that supply additional_files (schema-level whitelist)", () => {
+    writeFile2("src/foo.ts", "x\n");
+    writeFile2("src/bar.ts", "y\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "tighten boundary",
+      risk_level: "low",
+      target: "prod",
+      provenance: "direct_observation",
+      test_files: ["tests/foo.test.ts"],
+      additional_files: [{ file: "src/bar.ts" }],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) => w.includes("does not accept additional_files")),
+      ).toBe(true);
     }
   });
 });

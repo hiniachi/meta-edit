@@ -12,19 +12,21 @@ import type { EditToolRequest, EditToolResult } from "./common.js";
 import type { ToolName } from "./descriptions.js";
 import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
-describe("seventeen tools", () => {
-  it("registers exactly seventeen tool names", () => {
+describe("twenty-one tools", () => {
+  it("registers exactly twenty-one tool names", () => {
     // v0.3.1: edit_create_file and edit_create_planning_artifact were
     // dropped. Empty file creation is now free at the deny-raw-edit
     // hook level; content fills go through the appropriate type-specific
     // tool's modify path.
     // v0.5.0: edit_test_only_change was removed (test edits go through
     // impl tools with target: "test"), and edit_refactor_only was
-    // narrowed and renamed to edit_cosmetic. Surface count: 15
-    // SQLite-derived impl tools + edit_cosmetic + 1 workflow tool
-    // (edit_docs_only) = 17.
-    expect<number>(TOOL_NAMES.length).toBe(17);
-    expect(new Set(TOOL_NAMES).size).toBe(17);
+    // narrowed and renamed to edit_cosmetic.
+    // v0.6.0: edit_docs_only was split along a workflow axis into five
+    // new kinds — edit_progress, edit_observation, edit_proposal,
+    // edit_decision, edit_explanation. Surface count: 15 SQLite-derived
+    // impl tools + edit_cosmetic + 5 workflow tools = 21.
+    expect<number>(TOOL_NAMES.length).toBe(21);
+    expect(new Set(TOOL_NAMES).size).toBe(21);
   });
 
   it("has a non-empty description for each tool", () => {
@@ -35,11 +37,31 @@ describe("seventeen tools", () => {
     }
   });
 
-  it("registers edit_docs_only with a verbatim documentation description", () => {
-    expect(TOOL_NAMES).toContain("edit_docs_only");
-    expect(TOOL_DESCRIPTIONS.edit_docs_only).toContain(
-      "Modify documentation, README, comments, or other narrative content",
+  it("registers each of the five workflow-axis kinds with a verbatim signature opening", () => {
+    expect(TOOL_NAMES).toContain("edit_progress" as ToolName);
+    expect(TOOL_DESCRIPTIONS.edit_progress).toContain(
+      "Record what was actually done, tried, or observed",
     );
+    expect(TOOL_NAMES).toContain("edit_observation" as ToolName);
+    expect(TOOL_DESCRIPTIONS.edit_observation).toContain(
+      "Record an observation, surprise, finding, or gotcha",
+    );
+    expect(TOOL_NAMES).toContain("edit_proposal" as ToolName);
+    expect(TOOL_DESCRIPTIONS.edit_proposal).toContain(
+      "Raise a proposal, question, or open issue",
+    );
+    expect(TOOL_NAMES).toContain("edit_decision" as ToolName);
+    expect(TOOL_DESCRIPTIONS.edit_decision).toContain(
+      "Record a decision that has already been made",
+    );
+    expect(TOOL_NAMES).toContain("edit_explanation" as ToolName);
+    expect(TOOL_DESCRIPTIONS.edit_explanation).toContain(
+      "Explain or document known facts for a reader",
+    );
+  });
+
+  it("does NOT register edit_docs_only (v0.6.0 removal)", () => {
+    expect(TOOL_NAMES).not.toContain("edit_docs_only" as never);
   });
 
   it("does NOT register edit_create_file or edit_create_planning_artifact (v0.3.1 removal)", () => {
@@ -47,9 +69,17 @@ describe("seventeen tools", () => {
     expect(TOOL_NAMES).not.toContain("edit_create_planning_artifact" as never);
   });
 
-  it("treats edit_docs_only and edit_cosmetic as test-files-optional", () => {
-    expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_docs_only");
+  it("treats edit_cosmetic and the 5 workflow kinds as test-files-optional", () => {
     expect(TOOLS_REQUIRING_TEST_FILES).not.toContain("edit_cosmetic");
+    for (const w of [
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+    ] as const) {
+      expect(TOOLS_REQUIRING_TEST_FILES).not.toContain(w);
+    }
   });
 
   it("does NOT register edit_refactor_only or edit_test_only_change (v0.5.0 removal)", () => {
@@ -59,7 +89,7 @@ describe("seventeen tools", () => {
 
   it("typed-edit-onboarding Skill catalog mentions every TOOL_NAMES entry (drift guard)", () => {
     // Codex review (v0.3.1 MED #6): the Skill ships a one-line
-    // catalog of all 18 tools as first-touch onboarding. If a tool is
+    // catalog of every tool as first-touch onboarding. If a tool is
     // renamed or added in TOOL_NAMES without updating the Skill, the
     // agent's first-tool choice would be misled. Pin the parity by
     // asserting the Skill markdown contains every tool name.
@@ -78,14 +108,28 @@ describe("seventeen tools", () => {
   });
 
   it("TOOLS_REQUIRING_TEST_FILES contains no tools that are in the explicit exempt set", () => {
-    const exempt = ["edit_cosmetic", "edit_docs_only"];
+    const exempt: ToolName[] = [
+      "edit_cosmetic",
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+    ];
     for (const name of exempt) {
       expect(TOOLS_REQUIRING_TEST_FILES).not.toContain(name);
     }
   });
 
   it("every tool in TOOL_NAMES is either in TOOLS_REQUIRING_TEST_FILES or in the explicit exempt set", () => {
-    const exempt = new Set(["edit_cosmetic", "edit_docs_only"]);
+    const exempt = new Set<ToolName>([
+      "edit_cosmetic",
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+    ]);
     for (const name of TOOL_NAMES) {
       const required = TOOLS_REQUIRING_TEST_FILES.includes(name);
       const exempted = exempt.has(name);
@@ -94,14 +138,21 @@ describe("seventeen tools", () => {
   });
 
   it("all tools in the explicit exempt set are present in TOOL_NAMES", () => {
-    const exempt = ["edit_cosmetic", "edit_docs_only"];
+    const exempt: ToolName[] = [
+      "edit_cosmetic",
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+    ];
     for (const name of exempt) {
-      expect(TOOL_NAMES).toContain(name as typeof TOOL_NAMES[number]);
+      expect(TOOL_NAMES).toContain(name);
     }
   });
 
   it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
-    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 2);
+    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 6);
   });
 
   it("includes the universal General principles block verbatim in every description", () => {
@@ -203,6 +254,7 @@ describe("registerTools — CallToolRequest handler", () => {
           rationale: "test",
           risk_level: "medium",
           target: "prod",
+          provenance: "direct_observation",
           test_files: ["tests/foo.test.ts"],
         },
       },

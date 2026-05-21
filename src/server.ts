@@ -18,7 +18,7 @@ export function createServer(options: CreateServerOptions = {}): Server {
   // Issue 1530: do NOT throw here even if the repo-root sentinel is
   // absent. A synchronous throw inside createServer kills the MCP server
   // before transport handshake — Claude Code marks the server failed
-  // for the session and the seventeen tool descriptions never reach the
+  // for the session and the twenty-one tool descriptions never reach the
   // running agent's context. Boot the server, let ListTools land the
   // descriptions, and let validateRequest surface the per-tool
   // not_a_repository error when the agent actually tries to edit.

@@ -137,6 +137,52 @@ describe("filterEntries", () => {
     expect(onlyTest[0]?.phase === "issued" && onlyTest[0]?.target).toBe("test");
     // edit_docs_only has no target — it must be excluded from both.
   });
+
+  it("filters by --provenance (single value, v0.6.0)", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260521_0001", provenance: "user_confirmed" }),
+      issued({ edit_id: "edit_20260521_0002", provenance: "speculation" }),
+      issued({ edit_id: "edit_20260521_0003", provenance: "inference" }),
+      // Legacy entry with no provenance (v0.5.x log).
+      issued({ edit_id: "edit_20260521_0004", provenance: undefined }),
+    ];
+    const onlySpec = filterEntries(mixed, {
+      provenance: new Set(["speculation"]),
+    });
+    expect(onlySpec.length).toBe(1);
+    expect(onlySpec[0]?.phase === "issued" && onlySpec[0]?.provenance).toBe(
+      "speculation",
+    );
+  });
+
+  it("filters by --provenance (comma-separated set, v0.6.0)", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260521_0001", provenance: "user_confirmed" }),
+      issued({ edit_id: "edit_20260521_0002", provenance: "speculation" }),
+      issued({ edit_id: "edit_20260521_0003", provenance: "inference" }),
+    ];
+    const r = filterEntries(mixed, {
+      provenance: new Set(["speculation", "inference"]),
+    });
+    expect(r.length).toBe(2);
+  });
+
+  it("--provenance filter drops legacy entries lacking the field", () => {
+    const mixed: EditLogEntry[] = [
+      issued({ edit_id: "edit_20260521_0001", provenance: "user_confirmed" }),
+      issued({ edit_id: "edit_20260521_0002", provenance: undefined }),
+    ];
+    const r = filterEntries(mixed, {
+      provenance: new Set([
+        "user_confirmed",
+        "accepted_artifact",
+        "direct_observation",
+        "inference",
+        "speculation",
+      ]),
+    });
+    expect(r.length).toBe(1);
+  });
 });
 
 describe("parseLogArgs", () => {
@@ -176,6 +222,40 @@ describe("parseLogArgs", () => {
 
   it("rejects duplicate --target flags", () => {
     const r = parseLogArgs(["--target", "prod", "--target", "test"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("parses --provenance (single value, v0.6.0)", () => {
+    const r = parseLogArgs(["--provenance", "speculation"]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.filters.provenance?.has("speculation")).toBe(true);
+      expect(r.filters.provenance?.size).toBe(1);
+    }
+  });
+
+  it("parses --provenance (comma-separated set, v0.6.0)", () => {
+    const r = parseLogArgs(["--provenance", "speculation,inference"]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.filters.provenance?.has("speculation")).toBe(true);
+      expect(r.filters.provenance?.has("inference")).toBe(true);
+      expect(r.filters.provenance?.size).toBe(2);
+    }
+  });
+
+  it("rejects an invalid --provenance value", () => {
+    const r = parseLogArgs(["--provenance", "made-up"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects an empty --provenance value", () => {
+    const r = parseLogArgs(["--provenance", ""]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects duplicate --provenance flags", () => {
+    const r = parseLogArgs(["--provenance", "user_confirmed", "--provenance", "inference"]);
     expect(r.ok).toBe(false);
   });
 

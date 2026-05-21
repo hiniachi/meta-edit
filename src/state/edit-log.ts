@@ -2,7 +2,11 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { EditTargetSchema, RiskLevelSchema } from "../tools/common.js";
+import {
+  EditTargetSchema,
+  ProvenanceSchema,
+  RiskLevelSchema,
+} from "../tools/common.js";
 
 // Append-only JSON Lines log of every typed_edit declaration and its
 // downstream consumption. Per docs/SPEC.md §6 (Case C, v0.2):
@@ -41,6 +45,22 @@ const BindingEntrySchema = z.object({
 });
 export type BindingEntry = z.infer<typeof BindingEntrySchema>;
 
+// v0.6.0: provenance + audit_warnings are appended to the issued / rejected
+// records. Read-time these fields are optional so the log is backward-
+// compatible with v0.5.x entries (which lack them); write-time the
+// typed_edit handler populates both. Legacy entries surface as
+// `provenance: undefined` and aggregate into the "unspecified" bucket
+// at `meta-edit summary` time.
+const AuditWarningEntrySchema = z.object({
+  code: z.enum([
+    "kind_provenance_warn",
+    "additional_files_warn",
+    "citation_lint_missing",
+  ]),
+  message: z.string(),
+});
+export type AuditWarningEntry = z.infer<typeof AuditWarningEntrySchema>;
+
 export const IssuedEntrySchema = z.object({
   edit_id: z.string(),
   ts: z.string(),
@@ -51,13 +71,18 @@ export const IssuedEntrySchema = z.object({
   risk_level: RiskLevelSchema,
   // v0.5.0: `target` is the prod/test surface flag declared by the agent
   // on every impl tool (15 SQLite-derived + edit_cosmetic). Optional in
-  // the schema because edit_docs_only never carries it. Persisting it
-  // here is what makes audit analysis able to split a kind's edits into
-  // prod vs test rather than collapsing them into one bucket — the whole
-  // point of the v0.5.0 reshape (the previous edit_test_only_change
-  // surface absorbed ~33% of declarations into a generic test bucket
-  // with no kind-specific risk weight).
+  // the schema because the 5 workflow kinds never carry it. Persisting
+  // it here is what makes audit analysis able to split a kind's edits
+  // into prod vs test rather than collapsing them into one bucket.
   target: EditTargetSchema.optional(),
+  // v0.6.0: provenance is required on new write-path entries (the typed_edit
+  // handler always populates it). Optional on read so the log can still
+  // consume v0.5.x entries that predate the field; meta-edit summary
+  // surfaces those as the "unspecified" bucket.
+  provenance: ProvenanceSchema.optional(),
+  // v0.6.0: soft-signal warnings from the validation matrices (warn cells,
+  // citation lint). Optional on read.
+  audit_warnings: z.array(AuditWarningEntrySchema).optional(),
   test_files: z.array(z.string()),
   binding: z.array(BindingEntrySchema).min(1),
   token: z.string(),
@@ -85,6 +110,10 @@ export const RejectedEntrySchema = z.object({
   // common cause of rejection-without-target is the new "target field
   // is required" validation itself).
   target: EditTargetSchema.optional(),
+  // v0.6.0: same intent as IssuedEntry.provenance — when present, log the
+  // declared epistemic source so audit can group rejections by
+  // (kind, provenance) cell. Optional on read for backward compat.
+  provenance: ProvenanceSchema.optional(),
   // SPEC §6: rejected records carry a non-empty audit_error so audit
   // consumers always have an actionable reason. (Codex review: LOW,
   // in-scope under Article 3.)
