@@ -3,12 +3,12 @@
 Status: **DRAFT**. RFC §6 の残 4 件を深掘り。`rfc.md` 本体を膨らませず
 ここに分離。
 
-| # | 論点 | 推し | 確度 |
-|---|---|---|---|
-| 1 | `additional_files` 受理 kind | `edit_explanation` + `edit_decision` のみ | 高 |
-| 2 | `edit_cosmetic` 境界例の追加 | 主要 7 例をテーブル拡張、残りは stop-and-ask 原則 | 中 |
-| 4 | `edit_cosmetic` の provenance マトリクス | `user_confirmed` / `accepted_artifact` / `direct_observation` のみ accept、`inference` / `speculation` は reject | 高 |
-| 5 | legacy `edit_docs_only` マイグレーション | v0.6.0 で即時 reject、log/summary CLI は legacy bucket として読み込み | 高 |
+| # | 論点 | 推し | 確度 | 状態 |
+|---|---|---|---|---|
+| 1 | `additional_files` 受理 kind | `edit_explanation` + `edit_decision` + `edit_proposal` | 中 | 議論中 |
+| 2 | `edit_cosmetic` 境界例の追加 | （他ツール波及の設計変更検討のため一旦保留） | — | **PAUSED** |
+| 4 | `edit_cosmetic` の provenance マトリクス | `user_confirmed` / `accepted_artifact` / `direct_observation` のみ accept、`inference` / `speculation` は reject | 高 | **決定** |
+| 5 | legacy `edit_docs_only` マイグレーション | v0.6.0 で即時 reject、log/summary CLI は legacy bucket として読み込み | 高 | **決定** |
 
 ---
 
@@ -18,53 +18,86 @@ Status: **DRAFT**. RFC §6 の残 4 件を深掘り。`rfc.md` 本体を膨ら�
 
 `additional_files`（1 declaration が複数ファイル binding を一括して
 受け取る workflow 機能、cap = 32）を、新 5 kind のうち **どれに付与
-するか**。RFC §3.1 の暫定は `edit_explanation` + `edit_decision`。
+するか**。
 
-### 各 kind の batch 必要性
+ユーザー指摘：**issue を大量に書くシナリオの friction が高そう** →
+`edit_proposal` も batch 受理すべきでは。
 
-| kind | 典型シーン | batch が要るか |
-|---|---|---|
-| `edit_progress` | `IMPLEMENTATION-LOG.md` 1 ファイル追記 | **不要**。1 セッション 1 ログ entry が原則 |
-| `edit_observation` | `OBSERVED-FAILURES.md` 追記 ± 関連コード行コメント | **不要**。観察と該当コードへの `// XXX` は別 declaration で良い（混ぜると audit が読みにくい） |
-| `edit_proposal` | `issues/2026-...md` 新規 1 ファイル中心 | **不要**。RFC ドラフトで `research.md` + `rfc.md` を同時に書いても 2 declaration で十分 |
-| `edit_decision` | CHANGELOG + `package.json` + `.claude-plugin/plugin.json` を release で同時更新 | **要**（リリース commit のための定型 batch） |
-| `edit_explanation` | 多言語 README 3 言語同期、docs/ 配下の関連ページ複数 | **要**（既存 `edit_docs_only` の主要動機） |
+### Use case × kind マトリクス（declaration 数）
+
+セル = 想定 declaration 数（batch なしの場合）。`✓` は batch なしで
+十分、`!` は batch あれば便利、`!!` は batch がないと friction 顕著。
+
+| Use case ↓ \ Kind → | edit_progress | edit_observation | edit_proposal | edit_decision | edit_explanation |
+|---|:---:|:---:|:---:|:---:|:---:|
+| 1 ファイル単発 | 1 ✓ | 1 ✓ | 1 ✓ | 1 ✓ | 1 ✓ |
+| 2-3 関連ファイル同時 | 2 ✓ | 2-3 ! | 2 !（RFC: research+rfc） | 3-4 **!!**（release commit） | 3-5 **!!**（多言語 README） |
+| 5-10 関連ファイル一括 | rare | rare | 5-10 **!!**（issue burst, audit findings） | rare | 5-10 **!!**（docs sweep） |
+| ≥10（大規模 batch） | rare | あり得る（audit 集約） | あり得る（triage day） | rare | あり得る（大規模 docs リライト） |
+
+### Kind ごとの受理判断（マトリクス）
+
+| Kind | 受理 | 確度 | 主な根拠 | 反対論 |
+|---|:---:|:---:|---|---|
+| `edit_progress` | **reject** | 高 | 1 セッション 1 進捗 entry が原則、batch シナリオが構造的に無い | — |
+| `edit_observation` | **reject** | 中 | 観察は個別の cognitive unit、別 declaration が audit 健全。ただし audit findings の集約 batch では friction あり | audit / code review で 10件 観察を一気に記録するシーンの friction（v0.7 で再検討余地） |
+| `edit_proposal` | **accept** | 中 | issue burst（feature 立ち上げ時の 5-10件起票）、triage day の friction が大きい。「Issues とか大量に書くの摩擦大きそう」という user 観察と整合 | 各 issue は通常独立した cognitive unit。bundle すると rationale が薄まる → description で **theme obligation**（"all bound proposals must share a common originating theme or audit"）を明示して対応 |
+| `edit_decision` | **accept** | 高 | release commit（CHANGELOG + version + plugin.json + tag-related）の定型 batch。ADR + 関連 spec 状態更新の連動 | — |
+| `edit_explanation` | **accept** | 高 | 多言語 README 同期、docs/ 配下の関連ページ一括更新が定型。既存 `edit_docs_only` の主要動機 | — |
 
 ### 検討した代替案
 
-**(a) 5 kind 全てに付与** — 「念のため」。abuse の温床になる
-（audit が読みにくい混在 batch）。却下。
+**(a) 5 kind 全てに付与** — 念のため。`edit_progress` で batch する
+意味が構造的にないので、abuse 温床になる。却下。
 
-**(b) `edit_explanation` + `edit_decision` のみ**（推し）— 既存
-`edit_docs_only` の batch 必要性を 2 つの軸（公開面同期 / リリース
-batch）に分解し、それぞれに正当性が明確。残り 3 kind は 1 declaration
-1 ファイル原則で運用。
+**(b) `edit_explanation` + `edit_decision` のみ**（前推し） — sweep
+性が明確な 2 kind のみ。`edit_proposal` の friction を取りこぼす。
 
-**(c) `edit_explanation` のみ**（厳しめ） — `edit_decision` のリリース
-batch（CHANGELOG + plugin.json + package.json）を別 declaration ×3 に
-分割。friction はあるが audit は綺麗。`edit_decision` の使用頻度は
-低いので 3 declaration が大きな negative ではないという見方。
+**(c) `edit_explanation` + `edit_decision` + `edit_proposal`**（新推し） —
+ユーザー指摘の friction を取り込む。`edit_proposal` には theme
+obligation を description で課して abuse を抑える。
+
+**(d) (c) + `edit_observation`** — audit findings batch も拾う。
+ただし観察を batch する shame シナリオは frequency 低く、現時点で
+正当化が弱い。observation 不足 → v0.7 で観察結果を見て再評価
+する余地を残す。
 
 ### 副次論点
 
-- **cardinality cap**: 既存の 32 を踏襲。`edit_explanation` の多言語
-  README 同期は 3-5、`edit_decision` のリリース batch も同程度。32
-  は十分余裕。
-- **declaration ↔ file 一致の audit**: `additional_files` を持つ
-  kind では、edit log entry が複数 binding を 1 行で持つ。これは
-  既存 `edit_docs_only` と同じ形なので summary CLI 側の対応不要。
-- **`accepted_artifact` provenance との相互作用**: 多言語 README
-  同期で `accepted_artifact: SPEC.md §4` を引用する場合、batch
-  全件が同じ artifact 由来でなければならない（一括 declaration の
-  semantics 上自然）。description で明示する。
+- **cardinality cap**: 既存 32 を踏襲。`edit_proposal` の issue burst
+  も 32 で覆える（10件超は稀）。
+- **theme obligation の文言**（`edit_proposal` description 末尾）：
+  「`additional_files` を使う場合、bound files all relate to a
+  single originating theme (e.g., 'audit results from session
+  YYYY-MM-DD', 'feature X kickoff'). Filing unrelated proposals in
+  one batch breaks the per-proposal audit trail; submit each as its
+  own declaration instead.」
+- **edit_decision との provenance 整合性**: release batch では
+  `provenance: user_confirmed`（リリースを user が決定した）が典型。
+  description で誘導。
+- **edit_proposal の typical provenance との関係**: `speculation`
+  が典型なので、batch declaration での全件が speculation でも問題
+  ない。theme は「同じ origin から派生した一連の仮説」として正当化
+  される。
 
 ### 推し（再掲）
 
-**(b) `edit_explanation` + `edit_decision` のみ**。確度高。
+**(c) `edit_explanation` + `edit_decision` + `edit_proposal`**。
+確度：explanation/decision は **高**、proposal は **中**
+（theme obligation の効きが運用観察で要 verification）。
+
+`edit_observation` を入れる v0.7 余地は残す（観察結果次第）。
 
 ---
 
-## Q2. `edit_cosmetic` 境界例の追加
+## Q2. `edit_cosmetic` 境界例の追加 — **PAUSED**
+
+> ユーザーから「他のツールにも関わる設計変更を思いついた」との保留指示。
+> 当該設計変更が確定するまで本問は議論せず、現状の RFC §3.5 主要 7 例
+> のみを暫定として残す。再開時に下記の追加候補マトリクスを基点に
+> 再評価する。
+
+（以下は paused 前の分析、参考として残置）
 
 ### 問い
 
@@ -132,7 +165,17 @@ RFC §3.5 のテーブルは 7 例。実運用で迷う追加ケースをどこ�
 
 ---
 
-## Q4. `edit_cosmetic` の provenance マトリクス
+## Q4. `edit_cosmetic` の provenance マトリクス — **決定**
+
+決定：**(b) `user_confirmed` / `accepted_artifact` / `direct_observation`
+のみ accept、`inference` / `speculation` は reject**（ユーザー
+確認済み）。
+
+`inference` / `speculation` を reject すること自体が「semantic
+effect 0 のはずの cosmetic で epistemic uncertainty が出てきたら、
+kind 選択が間違っている」というシグナルになる。
+
+（以下は決定前の分析、参考として残置）
 
 ### 問い
 
@@ -196,7 +239,12 @@ optional。
 
 ---
 
-## Q5. legacy `edit_docs_only` マイグレーション
+## Q5. legacy `edit_docs_only` マイグレーション — **決定**
+
+決定：**(a) 即時 reject（書き込み path）+ legacy bucket（log/summary
+CLI の読み出し path）**（ユーザー確認済み）。
+
+（以下は決定前の分析、参考として残置）
 
 ### 問い
 
@@ -259,10 +307,14 @@ v0.7 で削除。
 
 ---
 
-## 全体まとめ
+## 全体まとめ（更新後）
 
-4 問すべて推し確度 高/中。これで残る不確定要素は実装時の運用観察
-（Q2 の例追加のチューニング）のみ。
+| # | 状態 | 残作業 |
+|---|---|---|
+| Q1 | 議論中（matrix-driven 再評価） | `edit_proposal` 受理の最終承認、theme obligation 文言確定 |
+| Q2 | **PAUSED** | 他ツール波及の設計変更が確定するのを待つ |
+| Q4 | **決定** | RFC §6 反映 |
+| Q5 | **決定** | RFC §6 反映 |
 
-承認されれば RFC §6 を更新し、本文書を「決定事項」として参照する
-形にできる。
+Q4 / Q5 が決定済み、Q1 が user 確認待ち、Q2 が一時保留。承認後の
+RFC §6 更新は Q1 確定を待ってから一括で行う。
