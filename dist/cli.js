@@ -18199,6 +18199,7 @@ var implToolInputSchema = {
     "rationale",
     "risk_level",
     "target",
+    "provenance",
     "test_files"
   ],
   properties: {
@@ -18220,6 +18221,17 @@ var implToolInputSchema = {
       enum: ["prod", "test"],
       description: 'Required. Declare whether this edit lands in production code ("prod") or test code ("test"). One declaration covers exactly one target. To pair an implementation change with its tests, issue two declarations of the same tool: one with target="prod" (test_files forward-declares the test files), then one with target="test" (target_file IS the test file, test_files MUST be empty). Both may land in the same commit. The server does not pattern-match paths against test-directory conventions — the target declaration is your statement of intent.'
     },
+    provenance: {
+      type: "string",
+      enum: [
+        "user_confirmed",
+        "accepted_artifact",
+        "direct_observation",
+        "inference",
+        "speculation"
+      ],
+      description: 'Required (v0.6.0). The epistemic source of this edit: user_confirmed (the user explicitly stated it this session), accepted_artifact (based on an accepted spec / ADR / test / API; rationale should cite §..., ADR-..., RFC-..., issues/..., or a URL), direct_observation (observed from execution / logs / just-read code; the prose should make the observation source visible), inference (reasoned from observation; the prose must frame it as an inference — "Based on X, it appears that...", "Likely..."), speculation (an unverified hypothesis; the prose must open with strong hedging — "**Unverified**: ...", "**Hypothesis**: ...", "TODO: verify — ..."). The reader sees the prose, not this field — the load-bearing obligation is that the prose itself carries the hedging language. See docs/SPEC.md §3.3 for the (kind, provenance) acceptance matrices.'
+    },
     test_files: {
       type: "array",
       items: { type: "string" },
@@ -18235,6 +18247,7 @@ var workflowToolInputSchema = {
     "target_file",
     "rationale",
     "risk_level",
+    "provenance",
     "test_files"
   ],
   properties: {
@@ -18242,14 +18255,14 @@ var workflowToolInputSchema = {
     additional_files: {
       type: "array",
       maxItems: MAX_ADDITIONAL_FILES,
-      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 1 workflow tool (edit_docs_only). Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
+      description: "OPTIONAL. Additional files governed by this single declaration. Available only on the 5 workflow-axis kinds (edit_progress / edit_observation / edit_proposal / edit_decision / edit_explanation). Acceptance is decided cell-wise by (kind, provenance) per docs/SPEC.md §3.3.2 — edit_progress rejects every cell; edit_observation rejects user_confirmed and warns the rest; edit_proposal accepts accepted_artifact / speculation and warns the rest; edit_decision and edit_explanation accept their typical cells. Each entry is the repository-relative path of a file the declaration covers; the deny-raw-edit hook consumes entries in any order until the grant is exhausted or its TTL expires. Cardinality cap: " + String(MAX_ADDITIONAL_FILES) + ".",
       items: {
         type: "object",
         required: ["file"],
         properties: {
           file: {
             type: "string",
-            description: "Repository-relative path. Same path-safety rules as target_file. The file MUST exist on disk (edit_docs_only is modify-only). For new files, do an empty-content native Write first (free at the deny-raw-edit hook) and then declare the typed_edit against the now-empty file."
+            description: "Repository-relative path. Same path-safety rules as target_file. Modify-mode against an existing file is the typical pattern; for new files, do an empty-content native Write first (free at the deny-raw-edit hook) and then declare the typed_edit against the now-empty file."
           }
         },
         additionalProperties: false
@@ -19158,7 +19171,7 @@ function createGrantsStore(repoRoot) {
 var package_default = {
   name: "@hiniachi/meta-edit",
   version: "0.6.0",
-  description: "MCP server with seventeen kind-specific edit tools that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag",
+  description: "MCP server with twenty-one kind-specific edit tools (15 SQLite-derived + edit_cosmetic + 5 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
   type: "module",
@@ -20069,7 +20082,7 @@ function parseOpencodeArgs(argv) {
 // src/docs-urls.ts
 var BASE = `https://github.com/hiniachi/meta-edit/blob/v${VERSION}`;
 var SPEC_URL = `${BASE}/docs/SPEC.md`;
-var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-seventeen-tool-descriptions`;
+var SPEC_TOOLS_URL = `${BASE}/docs/SPEC.md#4-the-twenty-one-tool-descriptions`;
 var SPEC_BASH_HOOK_URL = `${BASE}/docs/SPEC.md#52-deny-bash-write-bypass`;
 
 // src/cli/help-cmd.ts
@@ -20150,7 +20163,7 @@ function renderToolHelp(name) {
 
 ${TOOL_DESCRIPTIONS[name]}
 
-See ${SPEC_TOOLS_URL} for all seventeen tool descriptions.
+See ${SPEC_TOOLS_URL} for all twenty-one tool descriptions.
 `;
 }
 
@@ -20286,4 +20299,4 @@ export {
   main
 };
 
-//# debugId=BD37B7B2955C266B64756E2164756E21
+//# debugId=C523AB021536C9E464756E2164756E21

@@ -283,7 +283,7 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     }
     // File exists — empty Write would truncate it. Fall through to
     // grant-lookup so the agent must declare what kind of "blank-out"
-    // edit this is (typically edit_cosmetic or edit_docs_only).
+    // edit this is (typically edit_cosmetic, or one of the 5 workflow-axis kinds (edit_explanation / edit_progress / etc.)).
   }
 
   // 3. NotebookEdit re-allowed in v0.2.4 (issue 0105-notebookedit).

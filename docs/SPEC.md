@@ -753,6 +753,41 @@ did not catch it before you applied. This is a personal debt that posts
 to the user, not a detection bypass — acknowledging the slip is what
 keeps the typed surface honest.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
+Provenance combinations (cosmetic-specific):
+This tool accepts only `user_confirmed`, `accepted_artifact`, and
+`direct_observation`. Declaring `inference` or `speculation` here
+is rejected. cosmetic has zero semantic effect, so epistemic uncertainty
+is a structural signal that the kind selection is wrong: the patch
+likely adds or changes information (in which case use the matching
+workflow kind) or changes behavior (in which case use the kind-specific
+impl tool). Re-classify before retrying.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -799,6 +834,32 @@ declaration covers one target — pair a target: prod call with a
 target: test call to land both within the same commit. When target is
 "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -851,6 +912,32 @@ that exercise it. Pair the two declarations in the same commit. When
 target is "test", `target_file` IS the test file and `test_files`
 must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -891,6 +978,32 @@ Declare `target: "prod"` when editing the state machine in production
 code, or `target: "test"` when editing its transition tests. Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -937,6 +1050,32 @@ rollback / constraint tests). Pair the two declarations in the same
 commit. When target is "test", `target_file` IS the test file and
 `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -979,6 +1118,32 @@ itself, or `target: "test"` when editing the migration tests
 (idempotency, partial failure, fixture transformation, edge cases). Pair
 the two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1026,6 +1191,32 @@ compatibility, missing/extra field, status code). Pair the two
 declarations in the same commit. When target is "test", `target_file`
 IS the test file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1066,6 +1257,32 @@ itself, or `target: "test"` when editing its round-trip / old-format /
 invalid-input tests. Pair the two declarations in the same commit. When
 target is "test", `target_file` IS the test file and `test_files`
 must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1110,6 +1327,32 @@ failure paths and observable-error contracts. Pair the two declarations
 in the same commit. When target is "test", `target_file` IS the test
 file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1150,6 +1393,32 @@ logic in production code, or `target: "test"` when editing its
 exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1194,6 +1463,32 @@ production code, or `target: "test"` when editing the concurrency
 tests. Pair the two declarations in the same commit. When target is
 "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1240,6 +1535,32 @@ success, no-fire-on-failure, idempotency, correct recipient). Pair the
 two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
 
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1278,6 +1599,32 @@ code in production, or `target: "test"` when editing its tests
 collision). Pair the two declarations in the same commit. When target
 is "test", `target_file` IS the test file and `test_files` must be
 empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1329,6 +1676,32 @@ production, or `target: "test"` when editing the allow / deny matrix
 tests and negative-side-effect tests. Pair the two declarations in the
 same commit. When target is "test", `target_file` IS the test file
 and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1391,6 +1764,32 @@ production, or `target: "test"` when editing tests that exercise the
 new configuration (reproducibility, default value, new-config behavior).
 Pair the two declarations in the same commit. When target is "test",
 `target_file` IS the test file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1455,6 +1854,32 @@ that exercise the new policy (validity, readability of existing log
 entries, clean-checkout applicability). Pair the two declarations in
 the same commit. When target is "test", `target_file` IS the test
 file and `test_files` must be empty.
+
+Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- `user_confirmed` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- `accepted_artifact` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (`§...`, `ADR-...`, `issues/...`, `RFC-...`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- `direct_observation` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- `inference` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- `speculation` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.

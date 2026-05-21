@@ -104,6 +104,33 @@ describe("EditToolRequestSchema — zod surface", () => {
     expect(r.success).toBe(false);
   });
 
+  it("rejects requests missing the v0.6.0 provenance field", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      // provenance: omitted
+      test_files: [],
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      // Zod's required-field error mentions the missing field by name.
+      const msg = JSON.stringify(r.error.issues);
+      expect(msg).toContain("provenance");
+    }
+  });
+
+  it("rejects requests with an invalid provenance value", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      provenance: "made-up-source",
+      test_files: [],
+    });
+    expect(r.success).toBe(false);
+  });
+
   it("rejects unknown risk_level", () => {
     const r = EditToolRequestSchema.safeParse({
       target_file: "src/foo.ts",

@@ -7245,7 +7245,7 @@ function matchesReadOnlyVerbCpBypass(rawSegment) {
     if (isInRepoWriteTarget(target)) {
       return {
         decision: "deny",
-        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (edit_cosmetic, ` + `edit_docs_only, or whichever type fits the change) instead of ` + `redirecting a read-only verb's stdout to a repository path. For ` + `new files, native Write with content = "" is hook-authorized; ` + `then declare a typed_edit for the content. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
+        reason: `\`${verb} ... > <in-repo target>\` is functionally a copy/transform ` + `into a repo file. Use a typed edit_* tool (edit_cosmetic for source code, ` + `edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision for Markdown / docs by intent, or whichever kind-specific impl tool fits the change) instead of ` + `redirecting a read-only verb's stdout to a repository path. For ` + `new files, native Write with content = "" is hook-authorized; ` + `then declare a typed_edit for the content. Out-of-repo redirects (` + `/dev/null, /tmp/, /var/tmp/, ~/.claude/) remain allowed.`
       };
     }
   }
@@ -8250,4 +8250,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=3BC78D44211B670E64756E2164756E21
+//# debugId=C99A094A70D0500A64756E2164756E21
