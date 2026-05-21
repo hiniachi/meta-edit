@@ -1,8 +1,7 @@
 # Research — `edit_docs_only` 解体 + workflow-axis kinds + epistemic provenance
 
-Status: **DRAFT** (not approved). 同フォルダの `rfc.md` の影響範囲調査。
-壁打ちでの方向転換（パス軸 → workflow 軸、provenance を impl 16本にも展開、
-5 値 epistemic ladder）を反映済み。
+Status: **APPROVED**（2026-05-21）— `rfc.md` の影響範囲調査。実装
+PR でこの map を参照する。
 
 ---
 

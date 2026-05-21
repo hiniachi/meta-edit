@@ -1,6 +1,8 @@
 # RFC — workflow-axis kinds + epistemic provenance
 
-Status: **DRAFT** — ユーザー承認待ち。本 RFC は仕様提案。実装は走らせない。
+Status: **APPROVED**（2026-05-21）— 実装段階へ。本ドキュメントが
+仕様の source。実装 PR はこれを参照する。Q2 のみ PAUSED（user 側で
+別設計変更検討中）、land 後の v0.6.1 で再開する。
 影響範囲は同フォルダの `research.md`。
 
 | Field | Value |

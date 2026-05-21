@@ -1,6 +1,7 @@
 # Research — Reminder-Style Hooks
 
-Status: **DRAFT**. `rfc.md` の影響範囲調査。
+Status: **APPROVED**（2026-05-21）— `rfc.md` の影響範囲調査。実装
+PR でこの map を参照する。
 
 ---
 

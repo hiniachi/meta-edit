@@ -1,6 +1,7 @@
 # RFC — Reminder-Style Hooks
 
-Status: **DRAFT** — ユーザー承認待ち。実装はまだ走らせない。
+Status: **APPROVED**（2026-05-21）— 実装段階へ。本ドキュメントが
+仕様の source。実装 PR はこれを参照する。
 
 | Field | Value |
 |---|---|
