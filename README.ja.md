@@ -32,16 +32,20 @@ edit_error_handling           edit_retry_timeout
 edit_concurrency              edit_external_side_effect
 edit_cache_invalidation       edit_permission_logic
 edit_dependency_config        edit_policy_change
-edit_docs_only
+edit_progress
+edit_observation
+edit_proposal
+edit_decision
+edit_explanation
 ```
 
-各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、いつ立ち止まってユーザーに尋ねるか――この四点が書かれている。`edit_docs_only` を除く16個の実装ツールには `target: "prod" | "test"` が必須で、実装変更とそのテスト編集はそれぞれ独立した宣言として記録され、同じコミットに並ぶ。
+各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、いつ立ち止まってユーザーに尋ねるか――この四点が書かれている。5つの workflow-axis kind を除く16個の実装ツールには `target: "prod" | "test"` が必須で、実装変更とそのテスト編集はそれぞれ独立した宣言として記録され、同じコミットに並ぶ。
 
 > **v0.5.0**: 以前の `edit_test_only_change` と `edit_refactor_only` は廃止された。テスト編集は、そのテストが対応する実装種類のツールを `target: "test"` で再度呼び出すことで行う。`edit_cosmetic` は旧 `edit_refactor_only` を空白・コメント・フォーマッタ出力のみに狭めたもので、リネームや関数抽出やデッドコード削除などは「停止して尋ねる」経路に流れる――汎用リファクタの逃げ場は意図的に置かない。
 
 ## 観察された挙動
 
-依頼された変更にどの種類もきれいに当てはまらないとき、エージェントは近い型に無理やり押し込まずに、**立ち止まって尋ねる**。これがコンテキスト使用率およそ80%――`CLAUDE.md` の指示が通常効かなくなる領域――でも起こることを確認している。18番目のツール `edit_docs_only` の元になった全文ログは、[プロジェクトページ](https://hiniachi.github.io/meta-edit/#proof)に掲載してある。
+依頼された変更にどの種類もきれいに当てはまらないとき、エージェントは近い型に無理やり押し込まずに、**立ち止まって尋ねる**。これがコンテキスト使用率およそ80%――`CLAUDE.md` の指示が通常効かなくなる領域――でも起こることを確認している。v0.5.x の `edit_docs_only` の元になった全文ログは、[プロジェクトページ](https://hiniachi.github.io/meta-edit/#proof)に掲載してある。
 
 ## インストール
 

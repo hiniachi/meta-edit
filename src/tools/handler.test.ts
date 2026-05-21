@@ -62,6 +62,7 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     target_file: "src/foo.ts",
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
+    provenance: "direct_observation",
     target: "prod",
     test_files: ["tests/foo.test.ts"],
     ...overrides,
@@ -160,13 +161,14 @@ describe("makeIssuingHandler — successful declaration", () => {
     }
   });
 
-  it("omits `target` on the issued log entry for edit_docs_only (no prod/test split)", async () => {
+  it("omits `target` on the issued log entry for edit_explanation (no prod/test split)", async () => {
     writeFile("docs/a.md", "alpha\n");
     const { handler, log } = makeHandler();
-    await handler("edit_docs_only", {
+    await handler("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "doc tweak",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
     } as EditToolRequest);
     const entries = log.readAll();
@@ -175,7 +177,7 @@ describe("makeIssuingHandler — successful declaration", () => {
     expect(entry.phase).toBe("issued");
     if (entry.phase === "issued") {
       expect(entry.target).toBeUndefined();
-      expect(entry.kind).toBe("edit_docs_only");
+      expect(entry.kind).toBe("edit_explanation");
     }
   });
 
@@ -317,17 +319,18 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(entries[0]?.phase).toBe("rejected");
   });
 
-  it("accepts additional_files on edit_docs_only and binds every entry", async () => {
+  it("accepts additional_files on edit_explanation and binds every entry", async () => {
     writeFile("docs/a.md", "alpha\n");
     writeFile("docs/b.md", "beta\n");
     writeFile("docs/c.md", "gamma\n");
     const { handler, grants } = makeHandler();
     const result = await handler(
-      "edit_docs_only",
+      "edit_explanation",
       {
         target_file: "docs/a.md",
         rationale: "rename product across the docs",
         risk_level: "low",
+        provenance: "direct_observation",
         test_files: [],
         additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
       } as EditToolRequest,
@@ -345,17 +348,18 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(byFile.get("docs/c.md")).toBe(sha256Hex("gamma\n"));
   });
 
-  it("accepts edit_docs_only when additional_files entries do not exist yet, binding sha256(\"\")", async () => {
+  it("accepts edit_explanation when additional_files entries do not exist yet, binding sha256(\"\")", async () => {
     writeFile("docs/a.md", "alpha\n");
     const { handler, grants } = makeHandler();
     const additional = [];
     for (let i = 0; i < 32; i++) {
       additional.push({ file: `docs/extra${i}.md` });
     }
-    const result = await handler("edit_docs_only", {
+    const result = await handler("edit_explanation", {
       target_file: "docs/a.md",
       rationale: "...",
       risk_level: "low",
+      provenance: "direct_observation",
       test_files: [],
       additional_files: additional,
     } as EditToolRequest);

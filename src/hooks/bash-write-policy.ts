@@ -491,8 +491,10 @@ function evaluateSegment(
         "(/dev/null, /tmp/, /var/tmp/, /run/, /sys/).\n\n" +
         "If this command changes repository files, that would bypass meta-edit's typed edit surface. " +
         "The next move should be to declare the edit kind first " +
-        "(e.g. edit_state_transition / edit_cosmetic / edit_docs_only " +
-        "for new content; for new files, native Write with content = \"\" is " +
+        "(e.g. edit_state_transition / edit_cosmetic for source code; " +
+        "edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision " +
+        "for Markdown / docs depending on intent; " +
+        "for new files, native Write with content = \"\" is " +
         "hook-authorized first, then declare the typed edit_* for the content) " +
         "and use the normal edit path.\n\n" +
         "If the command is only inspecting files or running tests, it should not write to the repository. " +
@@ -1207,7 +1209,9 @@ function warnVerbReason(verb: string): string {
     `I was about to use "${verb}", which can write into the repository ` +
     `(rename/move, copy, or sync).\n\n` +
     `If this command changes repository content, the next move should be to declare the edit kind first ` +
-    `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only for content; ` +
+    `(e.g. edit_cosmetic / edit_state_transition for source code; ` +
+    `edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision ` +
+    `for Markdown / docs depending on intent; ` +
     `for new files, native Write with content = "" is hook-authorized first, then declare the typed edit_* for the content) ` +
     `and use the normal edit path.\n\n` +
     `If "${verb}" here is a legitimate non-edit use (rename/move, copy templates/fixtures, backup, deploy/sync), ` +

@@ -76,7 +76,7 @@ describe("formatSummary", () => {
     expect(text).toMatch(/edit_boundary_condition\s+3 \(prod 2 \/ test 1\)/);
   });
 
-  it("omits prod/test split for edit_docs_only (no target field)", () => {
+  it("v0.6.0: legacy edit_docs_only entries surface in a dedicated 'legacy:' bucket (Q5)", () => {
     const entries: EditLogEntry[] = [
       issued({
         edit_id: "edit_20260430_0001",
@@ -87,10 +87,14 @@ describe("formatSummary", () => {
       }),
     ];
     const text = formatSummary(entries, undefined);
-    // edit_docs_only row should be present but WITHOUT a "(prod X / test Y)"
-    // segment — its row collapses to the legacy flat format.
-    expect(text).toMatch(/edit_docs_only\s+1 {2}\(100%\)/);
-    expect(text).not.toMatch(/edit_docs_only\s+\d+ \(prod/);
+    // Per Q5 (open-questions.md): write path rejects new edit_docs_only
+    // calls, but read path still surfaces pre-v0.6 entries — separately
+    // from the live-tool table — so audit retains continuity. The
+    // bucket label is "legacy: edit_docs_only".
+    expect(text).toContain("legacy: edit_docs_only");
+    expect(text).toMatch(/legacy: edit_docs_only\s+1 {2}\(100%\)/);
+    // The live-tool table must NOT also list edit_docs_only as a row.
+    expect(text).not.toMatch(/^ {2}edit_docs_only\s+\d+/m);
   });
 
   it("omits prod/test split for all-legacy impl-tool entries (pre-v0.5 audit logs)", () => {

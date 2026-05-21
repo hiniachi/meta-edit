@@ -399,7 +399,7 @@ function evaluateSegment(rawSegment, opts = {}) {
 
 ` + "I was about to write files through Bash redirection " + "(`>` / `>>` / `>|`) to a path outside the safe-sink allowlist " + `(/dev/null, /tmp/, /var/tmp/, /run/, /sys/).
 
-` + "If this command changes repository files, that would bypass meta-edit's typed edit surface. " + "The next move should be to declare the edit kind first " + "(e.g. edit_state_transition / edit_cosmetic / edit_docs_only " + 'for new content; for new files, native Write with content = "" is ' + "hook-authorized first, then declare the typed edit_* for the content) " + `and use the normal edit path.
+` + "If this command changes repository files, that would bypass meta-edit's typed edit surface. " + "The next move should be to declare the edit kind first " + "(e.g. edit_state_transition / edit_cosmetic for source code; " + "edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision " + "for Markdown / docs depending on intent; " + 'for new files, native Write with content = "" is ' + "hook-authorized first, then declare the typed edit_* for the content) " + `and use the normal edit path.
 
 ` + "If the command is only inspecting files or running tests, it should not write to the repository. " + "This redirect is permitted but recorded as a bypass-risk and may be tightened to deny in a future version."
     };
@@ -859,7 +859,7 @@ function warnVerbReason(verb) {
 
 ` + `I was about to use "${verb}", which can write into the repository ` + `(rename/move, copy, or sync).
 
-` + `If this command changes repository content, the next move should be to declare the edit kind first ` + `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only for content; ` + `for new files, native Write with content = "" is hook-authorized first, then declare the typed edit_* for the content) ` + `and use the normal edit path.
+` + `If this command changes repository content, the next move should be to declare the edit kind first ` + `(e.g. edit_cosmetic / edit_state_transition for source code; ` + `edit_explanation / edit_progress / edit_observation / edit_proposal / edit_decision ` + `for Markdown / docs depending on intent; ` + `for new files, native Write with content = "" is hook-authorized first, then declare the typed edit_* for the content) ` + `and use the normal edit path.
 
 ` + `If "${verb}" here is a legitimate non-edit use (rename/move, copy templates/fixtures, backup, deploy/sync), ` + `it is permitted — but recorded as a bypass-risk and may be tightened back to deny in a future version. ` + `Writes to .meta-edit/state/** and .meta-edit/tmp/** remain hard-denied regardless of verb. ` + `See OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
 }
@@ -1777,4 +1777,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=296FEF6AE537F02B64756E2164756E21
+//# debugId=D1635B2BE635C06164756E2164756E21

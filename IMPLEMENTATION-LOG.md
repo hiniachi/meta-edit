@@ -1327,3 +1327,112 @@ mis-marshals non-empty string arrays.
   v0.6.0) rewrites per the RFC's landing order.
 - Version bump: `package.json` and `.claude-plugin/plugin.json` from
   0.5.0 → 0.5.1 (patch — wording-only change, no surface change).
+
+## v0.6.0: workflow-axis kinds + epistemic provenance (PR-β)
+
+- Completed: 2026-05-21
+- What works:
+  - **Tool surface 17 → 21.** `edit_docs_only` retired and replaced by
+    5 workflow-axis kinds — `edit_progress`, `edit_observation`,
+    `edit_proposal`, `edit_decision`, `edit_explanation` — that
+    classify documentation / planning edits by the intent of the
+    current session moment instead of by file path. `edit_cosmetic`
+    further narrowed: comment edits that change information are
+    explicitly out of scope and route to the matching workflow kind.
+    `src/tools/descriptions.ts` and `docs/SPEC.md` §4 land verbatim in
+    the same change (CLAUDE.md §4 invariant).
+  - **Provenance field required on every declaration.** All 21 tools
+    require `provenance: user_confirmed | accepted_artifact |
+    direct_observation | inference | speculation`. Schema is strict,
+    no default. The five-value enum represents the five epistemic
+    strata that past-chat artifacts otherwise conflate.
+  - **Cell-wise (kind × provenance) validation matrices** (RFC §3.3,
+    SPEC §3.3 verbatim) implemented in `src/tools/common.ts`:
+    - §3.3.1 base validity: `edit_cosmetic + inference|speculation`
+      reject, `edit_decision + inference|speculation` reject,
+      `edit_explanation + speculation` reject;
+      `edit_observation + inference` and
+      `edit_explanation + inference` warn; impl 15 SQLite-derived
+      tools accept every cell.
+    - §3.3.2 `additional_files` acceptance: full 5×5 cell matrix
+      (`evaluateAdditionalFiles(kind, prov)` lookup). `edit_progress`
+      rejects every cell; `edit_observation` rejects user_confirmed
+      and warns the rest; `edit_proposal` accepts
+      accepted_artifact / speculation and warns the rest;
+      `edit_decision` and `edit_explanation` accept their typical
+      cells, warn direct_observation / inference respectively, and
+      reject n/a cells defensively (in case §3.3.1 ever loosens).
+    - §3.3.3 `edit_cosmetic` provenance: accepts
+      user_confirmed / accepted_artifact / direct_observation only.
+    - §3.2 `accepted_artifact` citation lint: warn (not reject) when
+      the rationale lacks any `§...` / `ADR-...` / `RFC-...` /
+      `issues/...` / URL pattern.
+    - The matrices land warnings as typed `AuditWarning` records
+      (codes: `kind_provenance_warn`, `additional_files_warn`,
+      `citation_lint_missing`) into the edit log's
+      `audit_warnings` field.
+  - **`next_action` branches by provenance (Phase C).** When the
+    declared provenance is `inference` or `speculation`, the typed_edit
+    response appends a reminder-style prose-obligation note: the
+    reader sees the prose, not the provenance field, so the agent
+    must surface the hedging in the body. When the validation
+    matrices recorded audit warnings, the response summarizes them
+    inline so the agent can fix the rationale / prose before the
+    native write lands. The reminder wording follows the v0.5.1
+    reminder-style hooks (`meta-edit reminder:` prefix, first-person
+    framing).
+  - **CLI (Phase D).** `meta-edit log --provenance <val>` filter
+    added; supports single (`--provenance speculation`) and
+    comma-separated (`--provenance speculation,inference`) values.
+    `meta-edit summary` adds a "By provenance" breakdown and surfaces
+    legacy v0.5.x `edit_docs_only` entries in a dedicated
+    "legacy: edit_docs_only" bucket (Q5 read-path compatibility).
+    The live-tool table no longer mixes legacy entries in with the
+    21-tool inventory.
+  - **Hook reason messages updated (Phase F slice).** The empty-Write
+    warn (`src/hooks/raw-edit-policy.ts`), the bash structural
+    redirect warn, and `warnVerbReason()` all replace
+    `edit_docs_only` examples with the new 5 workflow-axis kinds.
+  - **External surfaces synced (Phase F).** `README.md` /
+    `README.ja.md` / `README.zh-CN.md` updated to twenty-one tools;
+    `.claude-plugin/plugin.json` description and
+    `.claude-plugin/marketplace.json` descriptions updated to name
+    the new tool count and the provenance field;
+    `skills/typed-edit-onboarding/SKILL.md` rewritten to describe the
+    21-tool surface, the 5 workflow kinds, the provenance
+    obligations, and the per-cell `additional_files` semantics.
+    `src/hooks/session-onboarding.ts` updates "seventeen-tool catalog"
+    → "twenty-one-tool catalog".
+- Tests added:
+  - `src/tools/common.test.ts`: 27 new tests across four describe
+    blocks — `evaluateKindProvenanceValidity` (all 5 workflow kinds +
+    impl 15 SQLite tools + `edit_cosmetic` covering every cell),
+    `evaluateAdditionalFiles` (full §3.3.2 5×5 matrix),
+    `rationaleHasArtifactCitation` (positive/negative samples for
+    each artifact-pattern), `validateRequest` integration tests
+    (reject / warn / accept end-to-end with file disk reads).
+  - `src/cli/log-cmd.test.ts`: `--provenance` flag parsing (single,
+    comma-separated, invalid values, duplicates) and filter behavior
+    (single-value, set, legacy-entry drop).
+  - `src/cli/summary-cmd.test.ts`: legacy `edit_docs_only` entries
+    surface in the dedicated bucket; the live-tool table excludes
+    them.
+  - `src/tools/registry.test.ts`: tool count assertions updated
+    (`length === 21`, `21 === 15 + 6`), per-workflow-kind verbatim
+    opening assertions, "v0.6.0 removal" guard on `edit_docs_only`.
+  - `src/tools/descriptions.test.ts`: explicit exempt set widened to
+    the 6 no-test-files-required tools.
+  - `src/cli/help-cmd.test.ts`: sample tool migrated from
+    `edit_docs_only` to `edit_explanation`.
+  - `src/hooks/session-onboarding.test.ts`: catalog phrase updated to
+    "twenty-one-tool catalog".
+  - Full suite: 855 tests pass (was 818 on the v0.5.1 main; +37 net
+    new assertions). `tsc --noEmit` clean. `bun run build` clean —
+    `dist/` regenerated.
+- Spec deviations: none. `src/tools/descriptions.ts` and
+  `docs/SPEC.md` §4 are kept verbatim per CLAUDE.md §4. The
+  validation-matrix tables in SPEC §3.3 are the authoritative form
+  the implementation reads; the descriptions / RFC just summarize.
+  Q2 (`edit_cosmetic` boundary examples) remains PAUSED for v0.6.1.
+- Version bump: `package.json` and `.claude-plugin/plugin.json` from
+  0.5.1 → 0.6.0 (minor — tool surface expansion + provenance field).

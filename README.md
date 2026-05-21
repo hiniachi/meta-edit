@@ -8,7 +8,7 @@
 **Languages:** **English** · [日本語](./README.ja.md) · [简体中文](./README.zh-CN.md)
 
 > An MCP server that replaces a coding agent's single `Edit` tool with
-> **seventeen kind-specific edit tools**. Each tool carries — in its own
+> **twenty-one kind-specific edit tools**. Each tool carries — in its own
 > description — the testing obligations for that kind of change. The 16
 > impl tools additionally carry a required `target: "prod" | "test"`
 > flag so test edits are visible inside their kind's audit surface.
@@ -30,7 +30,7 @@ in front of the model at the moment of action.
 
 `meta-edit` puts obligations there. A single generic `Edit` is too coarse —
 you cannot write "produce a boundary test when changing `<` to `<=`" on it
-without also misfiring on a typo fix. So we split: `Edit` becomes seventeen
+without also misfiring on a typo fix. So we split: `Edit` becomes twenty-one
 edits, one per kind of change. The agent must pick a kind before it can
 edit. **Picking the kind is the reasoning step.**
 
@@ -40,7 +40,7 @@ values, MC/DC condition coverage, anomaly testing, per-change checklists —
 translated from C-library quality discipline into application-level edit
 categories.
 
-## The seventeen tools
+## The twenty-one tools
 
 ```
 edit_cosmetic                 edit_boundary_condition
@@ -51,12 +51,16 @@ edit_error_handling           edit_retry_timeout
 edit_concurrency              edit_external_side_effect
 edit_cache_invalidation       edit_permission_logic
 edit_dependency_config        edit_policy_change
-edit_docs_only
+edit_progress
+edit_observation
+edit_proposal
+edit_decision
+edit_explanation
 ```
 
 Each description specifies: when to use it, when *not* to use it, which
 tests must accompany the edit, and when to stop and ask the user. The 16
-impl tools (everything except `edit_docs_only`) carry a required
+impl tools (everything except the 5 workflow-axis kinds) carry a required
 `target: "prod" | "test"` flag — prod/test pairs land as two
 declarations of the same tool, both in the same commit.
 
@@ -74,7 +78,7 @@ When no kind cleanly fits a requested change, the agent **stops and asks**
 instead of forcing the change through the nearest tool. We have observed
 this at ~80% context utilisation — exactly the regime where `CLAUDE.md`
 normally loses its grip. The transcript that led to the workflow tool
-`edit_docs_only` is on the
+The 5 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation`) are on the
 [project page](https://hiniachi.github.io/meta-edit/#proof).
 
 ## Install
@@ -88,7 +92,7 @@ This repo *is* a single-plugin marketplace.
 /plugin install meta-edit@meta-edit
 ```
 
-That auto-registers the MCP server (seventeen `edit_*` tools) and the two
+That auto-registers the MCP server (twenty-one `edit_*` tools) and the two
 safety hooks (`deny-raw-edit`, `deny-bash-write-bypass`). The plugin runs
 prebuilt JavaScript shipped under `dist/`; **Node 20+ is the only runtime
 requirement** — no Bun, no `npm install`, no build step.
@@ -129,14 +133,14 @@ meta-edit install-opencode --scope user
 Writes the MCP server and the `@hiniachi/meta-edit/opencode` plugin into
 `opencode.json`. Reference snippet:
 [`examples/.opencode/opencode.json`](./examples/.opencode/opencode.json).
-Same seventeen tool descriptions, same audit log, same grant flow as the
+Same twenty-one tool descriptions, same audit log, same grant flow as the
 Claude Code path.
 
 ## Reference
 
 | | |
 | --- | --- |
-| Full spec (the seventeen descriptions, declaration + token binding, the protocol) | [`docs/SPEC.md`](./docs/SPEC.md) |
+| Full spec (the twenty-one descriptions, declaration + token binding, the protocol) | [`docs/SPEC.md`](./docs/SPEC.md) |
 | Edit log schema (`issued` / `consumed` / `rejected` records) | [`docs/SPEC.md` §6](./docs/SPEC.md) |
 | Observed failure modes (the v0.2+ backlog) | [`OBSERVED-FAILURES.md`](./OBSERVED-FAILURES.md) |
 | CI sample (run `meta-edit summary` on PR) | [`examples/.github/workflows/meta-edit-summary.yml`](./examples/.github/workflows/meta-edit-summary.yml) |

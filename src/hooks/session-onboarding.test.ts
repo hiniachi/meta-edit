@@ -31,7 +31,7 @@ describe("buildOnboardingMessage — merged reminder + skill pointer template", 
     // pointer survived.
     expect(msg).toContain("typed-edit-onboarding");
     expect(msg).toContain("Skill tool");
-    expect(msg).toContain("seventeen-tool catalog");
+    expect(msg).toContain("twenty-one-tool catalog");
     expect(msg).toContain("ToolSearch");
   });
 

@@ -16554,19 +16554,62 @@ var TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   "edit_policy_change",
-  "edit_docs_only"
+  "edit_progress",
+  "edit_observation",
+  "edit_proposal",
+  "edit_decision",
+  "edit_explanation"
 ];
-var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_cosmetic" && name !== "edit_docs_only");
-var TOOLS_REQUIRING_TARGET = TOOL_NAMES.filter((name) => name !== "edit_docs_only");
+var WORKFLOW_TOOLS = [
+  "edit_progress",
+  "edit_observation",
+  "edit_proposal",
+  "edit_decision",
+  "edit_explanation"
+];
+var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_cosmetic" && !WORKFLOW_TOOLS.includes(name));
+var TOOLS_REQUIRING_TARGET = TOOL_NAMES.filter((name) => !WORKFLOW_TOOLS.includes(name));
+var PROVENANCE_FOOTER = `Provenance (required):
+Declare the epistemic source of this edit. Pick exactly one of:
+- \`user_confirmed\` — the user explicitly stated this in the current
+  session. Quote or summarize the user's instruction in the rationale.
+  Do not select this when you "feel" the user would agree.
+- \`accepted_artifact\` — based on an accepted spec / ADR / test / API.
+  The rationale MUST include at least one artifact reference
+  (\`§...\`, \`ADR-...\`, \`issues/...\`, \`RFC-...\`, or a URL); the
+  server lints this and warns if no reference is present. Where natural,
+  quote the artifact in the prose itself, not only in the rationale.
+- \`direct_observation\` — observed from execution, logs, or code you
+  just read. Make the observation source visible in the prose ("Running
+  X produced Y", "I observed that ...", "src/foo.ts:42 reads ...") so
+  future readers can re-verify.
+- \`inference\` — reasoned from observation, not directly observed.
+  Frame the inference explicitly in the prose ("Based on observed X, it
+  appears that ...", "Likely ...", "Probably ..."). Do not write
+  inferences as if they were confirmed.
+- \`speculation\` — an unverified hypothesis. Open the prose with strong
+  hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO:
+  verify — ..."). The reader sees the prose, not the provenance field.
+
+The prose-uncertainty obligation is load-bearing: a later session that
+reads this file picks up the hedging language directly, with no
+structural-marker machinery in the loop.`;
 var TOOL_DESCRIPTIONS = {
-  edit_cosmetic: `Surface-level edit with no semantic effect: whitespace, comments, or
-formatter output only.
+  edit_cosmetic: `Surface-level edit with no semantic effect and no information change:
+whitespace, formatter output, or comment edits that do not change the
+information content of the comment.
 
 Use this tool when, and ONLY when, the patch is one of the following:
 - Whitespace adjustment (indentation, blank lines, trailing whitespace,
   line breaks)
-- Comment edits (typo fix, rewording, adding clarifying comments,
-  removing stale comments)
+- Comment edits that change NO information content (typo fix,
+  line-break reflow within a comment block, formatter-driven comment
+  reformatting). Comments that add or change information go through the
+  workflow kind that matches the comment's intent — \`edit_explanation\`
+  for reader-facing clarification, \`edit_observation\` for
+  observed-fact notes (\`// XXX ...\`, stale-comment deletions),
+  \`edit_proposal\` for open questions (\`// TODO ...\`,
+  \`// FIXME ...\`).
 - Output of a configured formatter run (gofmt, prettier, black, rustfmt,
   etc.) — the bytes produced by running the project's formatter, with
   no manual edits layered on top
@@ -16620,6 +16663,17 @@ did not catch it before you applied. This is a personal debt that posts
 to the user, not a detection bypass — acknowledging the slip is what
 keeps the typed surface honest.
 
+${PROVENANCE_FOOTER}
+
+Provenance combinations (cosmetic-specific):
+This tool accepts only \`user_confirmed\`, \`accepted_artifact\`, and
+\`direct_observation\`. Declaring \`inference\` or \`speculation\` here
+is rejected. cosmetic has zero semantic effect, so epistemic uncertainty
+is a structural signal that the kind selection is wrong: the patch
+likely adds or changes information (in which case use the matching
+workflow kind) or changes behavior (in which case use the kind-specific
+impl tool). Re-classify before retrying.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16659,6 +16713,8 @@ declaration covers one target — pair a target: prod call with a
 target: test call to land both within the same commit. When target is
 "test", \`target_file\` IS the test file and \`test_files\` must be
 empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16704,6 +16760,8 @@ that exercise it. Pair the two declarations in the same commit. When
 target is "test", \`target_file\` IS the test file and \`test_files\`
 must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16737,6 +16795,8 @@ Declare \`target: "prod"\` when editing the state machine in production
 code, or \`target: "test"\` when editing its transition tests. Pair the
 two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16776,6 +16836,8 @@ rollback / constraint tests). Pair the two declarations in the same
 commit. When target is "test", \`target_file\` IS the test file and
 \`test_files\` must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16811,6 +16873,8 @@ itself, or \`target: "test"\` when editing the migration tests
 (idempotency, partial failure, fixture transformation, edge cases). Pair
 the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16851,6 +16915,8 @@ compatibility, missing/extra field, status code). Pair the two
 declarations in the same commit. When target is "test", \`target_file\`
 IS the test file and \`test_files\` must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16884,6 +16950,8 @@ itself, or \`target: "test"\` when editing its round-trip / old-format /
 invalid-input tests. Pair the two declarations in the same commit. When
 target is "test", \`target_file\` IS the test file and \`test_files\`
 must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16921,6 +16989,8 @@ failure paths and observable-error contracts. Pair the two declarations
 in the same commit. When target is "test", \`target_file\` IS the test
 file and \`test_files\` must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -16954,6 +17024,8 @@ logic in production code, or \`target: "test"\` when editing its
 exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
 two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -16991,6 +17063,8 @@ production code, or \`target: "test"\` when editing the concurrency
 tests. Pair the two declarations in the same commit. When target is
 "test", \`target_file\` IS the test file and \`test_files\` must be
 empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17030,6 +17104,8 @@ success, no-fire-on-failure, idempotency, correct recipient). Pair the
 two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -17061,6 +17137,8 @@ code in production, or \`target: "test"\` when editing its tests
 collision). Pair the two declarations in the same commit. When target
 is "test", \`target_file\` IS the test file and \`test_files\` must be
 empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17105,6 +17183,8 @@ production, or \`target: "test"\` when editing the allow / deny matrix
 tests and negative-side-effect tests. Pair the two declarations in the
 same commit. When target is "test", \`target_file\` IS the test file
 and \`test_files\` must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17160,6 +17240,8 @@ production, or \`target: "test"\` when editing tests that exercise the
 new configuration (reproducibility, default value, new-config behavior).
 Pair the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
+
+${PROVENANCE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17218,66 +17300,352 @@ entries, clean-checkout applicability). Pair the two declarations in
 the same commit. When target is "test", \`target_file\` IS the test
 file and \`test_files\` must be empty.
 
+${PROVENANCE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_docs_only: `Modify documentation, README, comments, or other narrative content
-that does not affect runtime behavior.
+  edit_progress: `Record what was actually done, tried, or observed in the current
+session — a session work-log entry. The most common target is
+\`IMPLEMENTATION-LOG.md\`, but the same intent applies wherever the
+project keeps session work-log notes.
 
-Use this tool when:
-- Editing Markdown files (README, docs/, *.md)
-- Editing inline code comments
-- Editing JSDoc / docstrings / Rustdoc that document existing API
-- Editing changelogs, release notes, contribution guides
-- Editing project meta-documentation (CHANGELOG, ROADMAP, post-mortems)
-- Filling content into a freshly-created (currently empty) Markdown file:
-  issues/*.md, ADRs, design docs, post-mortems, dogfood reports.
-  Empty files are created freely without an MCP declaration (see SPEC §5);
-  the content fill goes through this tool.
+Use this tool when, and ONLY when, the entry is one of the following:
+- "I implemented X" — recording a concrete change that was just made
+- "I tried Y, and Z was the result" — recording an attempt and its
+  outcome (whether the attempt worked or not)
+- "what worked / known issues / open questions" sections about what
+  happened in this session
+- Phase-completion entries that summarize what shipped in the session
+- Dogfood notes about the agent's own behavior in this session
 
-Required tests: NONE. test_files may be empty.
+This tool MUST NOT be used for:
+- Recording decisions ("we will adopt X") — those are \`edit_decision\`,
+  written only after the decision is confirmed
+- Recording observations generalized beyond the session ("X breaks when
+  Y") — those are \`edit_observation\` (the observation outlives the
+  session that found it)
+- Proposing changes or raising open questions about the future — those
+  are \`edit_proposal\`
+- Describing how the system works for a future reader — that is
+  \`edit_explanation\`
+- Editing executable production code, test code, or configuration —
+  use the matching kind-specific impl tool
+- Asserting authoritative outcomes about other sessions' work
+  (\`I observed that the previous session's X is wrong\`) — observation
+  about another session's artifact is \`edit_observation\` or
+  \`edit_proposal\`
 
-This tool does NOT carry a \`target\` field: documentation has its own
-surface and the prod/test split does not apply. The prod/test target
-flag is required only on the 16 impl tools.
+Required tests: NONE. Progress notes are not executable; \`test_files\`
+must be empty.
+
+This tool does NOT carry a \`target\` field: workflow / progress
+content does not belong to the prod/test axis. The prod/test target
+flag is required only on the 16 impl tools (15 SQLite-derived +
+\`edit_cosmetic\`).
+
+\`additional_files\` cardinality:
+This tool rejects \`additional_files\` in every provenance cell.
+Progress is a per-session, per-place record — a batched progress note
+across multiple files is almost always two separate moments fused, and
+the audit log stays cleaner when each moment is its own declaration.
+Split the entry.
+
+Rationale: a progress entry exists to record what happened in this
+session moment, not to argue for or against a course of action.
+Conflating progress with decisions or proposals erases the distinction
+between "done" and "should be done" — the exact distinction this
+refactor is meant to restore.
+
+${PROVENANCE_FOOTER}
+
+Provenance combinations (edit_progress-specific):
+All five provenance values are accepted. The typical value is
+\`direct_observation\` (the agent observed itself doing the work).
+\`inference\` / \`speculation\` are accepted but the prose obligation
+is strict: hedging language must surface in the body, not only in the
+provenance field. A session work-log entry written with
+\`speculation\` provenance whose prose reads as a confirmed outcome is
+the exact "past-chat looks like a decision" failure this refactor is
+meant to prevent.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_observation: `Record an observation, surprise, finding, or gotcha — content that
+is meant to outlive the session that found it. The most common targets
+are \`OBSERVED-FAILURES.md\`, code comments that flag known-bad
+patterns (\`// XXX ...\`, \`// HACK ...\`), and bug-pattern notes
+elsewhere in the project.
+
+Use this tool when, and ONLY when, the entry is one of the following:
+- "A breaks B when condition C holds" — recording a discovered failure
+  pattern that will matter to future sessions
+- "Adding code comment that an existing pattern is unsafe / surprising
+  / load-bearing" (\`// XXX heredoc + redirect bypasses cat-substring
+  scan\`)
+- Stale-comment deletion that records "the previous comment was wrong"
+- Dogfood records of agent behavior that generalizes beyond one
+  session (\`AI consistently misclassifies X as Y when ...\`)
+
+This tool MUST NOT be used for:
+- Proposing a fix for the observation — observation and proposal are
+  separate edits. If you want to record both ("X is broken, we should
+  do Y about it"), write the observation here and a paired
+  \`edit_proposal\` for the fix
+- Writing an observation as a decision ("we will not use X because of
+  this") — that is \`edit_decision\`
+- Implementing a detector or check for the observed pattern — patch-
+  content detection is out of scope per Article 7 / CLAUDE.md §3
+- Editing executable code or tests — observation tools record
+  observations; the kind-specific impl tool implements them
+- Citing observations you did not actually make ("I observed that ..."
+  with no concrete trace) — \`direct_observation\` provenance requires
+  a visible observation source in the prose
+
+Required tests: NONE. Observations are not executable; \`test_files\`
+must be empty.
+
+This tool does NOT carry a \`target\` field. The prod/test target flag
+is required only on the 16 impl tools.
+
+\`additional_files\` cardinality:
+This tool rejects \`additional_files\` for \`user_confirmed\` and warns
+for every other provenance value. Observations are usually per-place;
+batching across files at observation time is usually two separate
+findings fused. If the same observation truly applies across multiple
+files (e.g., adding the same \`// XXX\` comment across a cluster of
+modules that share an invariant), warn lets it land — but the rationale
+MUST explicitly name the unifying theme. If the theme cannot be stated
+in one sentence, split.
+
+Rationale: observation is an act of generalization. A future session
+encountering the observation file picks up the lesson without retracing
+the discovery. Mixing observation with proposal / decision erodes the
+file's value as a lesson archive.
+
+${PROVENANCE_FOOTER}
+
+Provenance combinations (edit_observation-specific):
+The typical provenance is \`direct_observation\` (you observed the
+gotcha while doing other work). \`inference\` is accepted but warns:
+declaring "observation + inference" usually means you are running an
+inference about an observation, which is closer to \`edit_proposal\`.
+Re-read the entry; if the body reads as "this is what I think, given
+what I saw", route it through \`edit_proposal\` instead.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_proposal: `Raise a proposal, question, or open issue — content meant to start
+or continue a deliberation about what to do. The most common targets
+are files under \`issues/\`, RFC drafts under \`docs/plan/\`, ADR
+drafts, and code comments that open a question (\`// TODO ...\`,
+\`// FIXME ...\`).
+
+Use this tool when, and ONLY when, the entry is one of the following:
+- "Should we adopt X?" — raising a question the user / project owner
+  has not yet answered
+- Drafting an issue, RFC, or ADR that proposes a change but is not yet
+  approved
+- Adding a code comment that opens an open question (\`// TODO: revisit
+  after Y\`, \`// FIXME: this assumes Z\`)
+- Recording a course of action you are weighing, where the choice is
+  still open
+
+This tool MUST NOT be used for:
+- Recording a decision that has already been made — that is
+  \`edit_decision\`. A proposal becomes a decision only after the user
+  (or the relevant decision authority) confirms it
+- Implementing the proposed change in the same edit — implementation
+  belongs to the kind-specific impl tool, separately, and only after
+  the proposal is accepted
+- Writing a proposal as if it were already approved (\`We will adopt
+  X\`) — proposals describe options under consideration, not
+  commitments
+- Fabricating user consent (\`As the user agreed ...\` without a
+  verbatim user statement to point to) — \`user_confirmed\` provenance
+  requires actual user confirmation, not a guess about what the user
+  would have agreed to
+
+Required tests: NONE. Proposals are not executable; \`test_files\`
+must be empty.
+
+This tool does NOT carry a \`target\` field. The prod/test target flag
+is required only on the 16 impl tools.
+
+\`additional_files\` cardinality:
+This tool accepts \`additional_files\` for \`accepted_artifact\` and
+\`speculation\` (the typical proposal-burst patterns: a feature-kickoff
+exploratory burst of issue stubs, or an artifact-driven sweep of
+follow-up issues from an audit document) and warns for the other three
+provenance values. When \`additional_files\` is used, the rationale
+MUST name the unifying theme. If the theme cannot be stated in one
+sentence, split the declaration.
+
+Rationale: proposals model the open question. Conflating proposal with
+decision erodes the agent's ability to tell, on a re-read, what has
+been accepted vs. what is still being weighed.
+
+${PROVENANCE_FOOTER}
+
+Provenance combinations (edit_proposal-specific):
+The typical provenance is \`speculation\` (the proposal is exploratory
+by nature). All five values are accepted. When provenance is
+\`speculation\`, the prose obligation is especially strict — open with
+strong hedging (\`**Unverified**:\`, \`**Hypothesis**:\`, \`TODO:
+verify — ...\`) so future readers do not pick up the proposal as a
+decision.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_decision: `Record a decision that has already been made. The most common
+targets are accepted ADRs, CHANGELOG entries for releases that this
+commit actually cuts, and IMPLEMENTATION-LOG entries that capture a
+confirmed direction.
+
+Use this tool when, and ONLY when, the entry is one of the following:
+- "Decided to adopt X" — recording a direction after the user (or the
+  relevant decision authority) has confirmed it
+- Promoting an accepted proposal: the proposal lives under
+  \`edit_proposal\`; the confirmation that the proposal is accepted
+  lives under \`edit_decision\`
+- CHANGELOG entries for a release that this commit produces
+- Release commit batches that update CHANGELOG + version + plugin
+  manifests in one place (use \`additional_files\` for the batch)
+
+This tool MUST NOT be used for:
+- Recording a proposal that has not yet been confirmed — that is
+  \`edit_proposal\`. Decision presumes confirmation
+- Writing inferences or hypotheses as decisions — declaring
+  \`inference\` or \`speculation\` here is rejected (\`inference\` /
+  \`speculation\` decisions are a contradiction in terms; re-route to
+  \`edit_proposal\` until confirmation lands)
+- Fabricating user consent — \`user_confirmed\` provenance requires
+  actual user confirmation, with the confirming statement quoted or
+  summarized in the rationale
+- Editing executable code or tests — decisions are recorded; the
+  kind-specific impl tool implements them
+- Editing build / CI / meta-edit configuration that itself encodes a
+  policy decision — that is \`edit_policy_change\`, which keeps the
+  governance surface visible
+
+Required tests: NONE. Decision records are not executable;
+\`test_files\` must be empty.
+
+This tool does NOT carry a \`target\` field. The prod/test target flag
+is required only on the 16 impl tools.
+
+\`additional_files\` cardinality:
+This tool accepts \`additional_files\` for \`user_confirmed\` and
+\`accepted_artifact\` (the typical release-commit and spec-driven
+batch patterns) and warns for \`direct_observation\`. The
+\`inference\` and \`speculation\` cells are unreachable because the
+declaration itself is rejected at the (kind, provenance) level. Where
+the batch is accepted, the rationale SHOULD still name the unifying
+theme; where it is warned, the rationale MUST name the theme.
+
+Rationale: decisions are the records future sessions read as
+\`already settled.\` Conflating decision with inference or
+speculation produces the exact "past-chat looks like a confirmed
+decision" failure this refactor is meant to prevent.
+
+${PROVENANCE_FOOTER}
+
+Provenance combinations (edit_decision-specific):
+This tool rejects \`inference\` and \`speculation\`. The typical
+provenance is \`user_confirmed\` (decisions are made by the user /
+decision authority). \`accepted_artifact\` is accepted when the
+decision is the codification of a previously-accepted artifact (an
+ADR that this entry promotes from draft to accepted). When
+provenance is \`direct_observation\`, that usually means the
+"decision" is closer to an observation — re-classify if the prose
+reads as observation rather than as a commitment.
+
+General principles (apply to every edit):
+- Keep the code simple. Prefer three similar lines over a premature abstraction.
+- When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
+  edit_explanation: `Explain or document known facts for a reader. The most common
+targets are README files (and their translations), docs/, JSDoc /
+docstrings, API documentation, and code comments whose purpose is to
+explain how a thing works (\`/** function does X */\`).
+
+Use this tool when, and ONLY when, the entry is one of the following:
+- Reader-facing explanation of a shipped feature, function, or
+  behavior
+- Filling out a docs/ surface with material from an accepted spec /
+  ADR / API contract
+- Adding or updating a JSDoc / docstring that documents an existing
+  API contract
+- Synchronizing translations of an explanation across multiple
+  README files (use \`additional_files\` for the batch)
+- Reformulating an existing explanation to be clearer — but only
+  when the information content remains the same; if the explanation
+  is revised to say something different, the underlying fact must
+  already be true and accepted
+
+This tool MUST NOT be used for:
+- Describing future or aspirational behavior (\`This will ...\` for a
+  feature that has not shipped) — that is \`edit_proposal\` until the
+  behavior actually ships, then \`edit_explanation\` afterwards
+- Promoting an unverified hypothesis to an explanation — declaring
+  \`speculation\` here is rejected. Explanation is a contract with
+  future readers; speculative explanations mislead more than they
+  clarify
+- Documenting an API contract change as if it were always documented
+  this way — the contract change is \`edit_api_contract\`; the
+  reader-facing doc that catches up is \`edit_explanation\`
+- Editing executable code or tests — explanation tools record what
+  the code already does; the kind-specific impl tool changes
+  behavior
+- Updating a CHANGELOG entry for a release that this commit does not
+  actually cut — CHANGELOG entries for cut releases are
+  \`edit_decision\`; queued / unreleased entries do not belong in
+  CHANGELOG yet
+- Batching unrelated explanations across multiple files in one
+  declaration — each independent doc surface gets its own
+  \`edit_explanation\` call unless the files share a single
+  originating theme (the typical accepted batch is multilingual
+  README sync)
+
+Required tests: NONE. Explanations are not executable; \`test_files\`
+must be empty.
+
+This tool does NOT carry a \`target\` field. The prod/test target flag
+is required only on the 16 impl tools.
+
+\`additional_files\` cardinality:
+This tool accepts \`additional_files\` for \`user_confirmed\`,
+\`accepted_artifact\`, and \`direct_observation\` (the typical
+multilingual-sync and spec-sweep patterns) and warns for
+\`inference\`. The \`speculation\` cell is unreachable because the
+declaration itself is rejected at the (kind, provenance) level. Where
+the batch is accepted, the rationale SHOULD name the unifying theme;
+where it is warned, the rationale MUST name the theme.
 
 Recommended verifications (not enforced):
 - Internal links resolve
-- Code blocks (if any) are syntactically valid in their stated language
+- Code blocks (if any) are syntactically valid in their stated
+  language
 - Terminology is consistent with the rest of the project documentation
 - No accidental references to renamed APIs or removed features
 
-This tool MUST NOT be used when:
-- The patch modifies any executable production code
-- The patch modifies test code (use the appropriate impl tool with
-  \`target: "test"\`, choosing the kind that matches the production
-  code the test exercises)
-- The patch modifies build, CI, or meta-edit configuration
-  (use edit_dependency_config or edit_policy_change)
-- The "documentation" change actually changes API contracts
-  documented in code (use edit_api_contract)
-- The patch updates README / docs to claim functionality that has not
-  yet shipped — describing future or aspirational behavior misleads
-  every future reader (including AI agents). Land the implementation
-  in the same change set or wait
-- The patch updates a CHANGELOG entry for a release that this commit
-  does not actually cut (CHANGELOG must reflect what merged, not what
-  is queued)
-- The patch contains a code example (fenced block, inline snippet)
-  that does not compile or run as written; broken examples mislead
-  readers more than no example
-- The patch updates a Markdown test fixture loaded by tests at runtime
-  (use the appropriate impl tool with \`target: "test"\` since the
-  fixture's content is part of the test contract)
-- The patch batches unrelated documentation changes across multiple
-  files in one declaration; each independent doc surface gets its own
-  edit_docs_only call so the rationale and audit trail stay tied to
-  the actual reason
+Rationale: explanation is a contract with future readers (AI and
+human). A reader-facing explanation that mixes confirmed facts with
+unverified speculation poisons every later citation that depends on
+it.
 
-Rationale: documentation changes have a different risk profile from
-code refactors. They cannot break runtime behavior, but they can
-mislead future readers (including future AI agents). Treat
-documentation as a contract with future readers.
+${PROVENANCE_FOOTER}
+
+Provenance combinations (edit_explanation-specific):
+This tool rejects \`speculation\`. The typical provenance is
+\`accepted_artifact\` (the explanation is derived from an accepted
+spec, ADR, or API contract; quote the artifact in the rationale and,
+where natural, in the prose). \`inference\` is accepted but warns:
+explanations sourced from inference are usually better when re-sourced
+from an accepted artifact, since the explanation outlives the inference
+that produced it.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17510,13 +17878,92 @@ function repoIsValid(dir) {
 // src/tools/common.ts
 var RiskLevelSchema = exports_external.enum(["low", "medium", "high", "critical"]);
 var EditTargetSchema = exports_external.enum(["prod", "test"]);
+var ProvenanceSchema = exports_external.enum([
+  "user_confirmed",
+  "accepted_artifact",
+  "direct_observation",
+  "inference",
+  "speculation"
+]);
 var AdditionalFileSchema = exports_external.object({
   file: exports_external.string().min(1)
 }).strict();
 var MAX_ADDITIONAL_FILES = 32;
-var TOOLS_ACCEPTING_ADDITIONAL_FILES = [
-  "edit_docs_only"
-];
+var TOOLS_ACCEPTING_ADDITIONAL_FILES = WORKFLOW_TOOLS;
+function evaluateKindProvenanceValidity(kind, provenance) {
+  if (kind === "edit_cosmetic") {
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
+  if (kind === "edit_decision") {
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
+  if (kind === "edit_explanation") {
+    if (provenance === "speculation")
+      return "reject";
+    if (provenance === "inference")
+      return "warn";
+    return "accept";
+  }
+  if (kind === "edit_observation") {
+    if (provenance === "inference")
+      return "warn";
+    return "accept";
+  }
+  return "accept";
+}
+function evaluateAdditionalFiles(kind, provenance) {
+  if (kind === "edit_progress")
+    return "reject";
+  if (kind === "edit_observation") {
+    if (provenance === "user_confirmed")
+      return "reject";
+    return "warn";
+  }
+  if (kind === "edit_proposal") {
+    if (provenance === "accepted_artifact")
+      return "accept";
+    if (provenance === "speculation")
+      return "accept";
+    return "warn";
+  }
+  if (kind === "edit_decision") {
+    if (provenance === "user_confirmed")
+      return "accept";
+    if (provenance === "accepted_artifact")
+      return "accept";
+    if (provenance === "direct_observation")
+      return "warn";
+    return "reject";
+  }
+  if (kind === "edit_explanation") {
+    if (provenance === "user_confirmed")
+      return "accept";
+    if (provenance === "accepted_artifact")
+      return "accept";
+    if (provenance === "direct_observation")
+      return "accept";
+    if (provenance === "inference")
+      return "warn";
+    return "reject";
+  }
+  return "reject";
+}
+var ARTIFACT_CITATION_RE = new RegExp([
+  "§",
+  "\\bADR-\\w",
+  "\\bRFC-\\w",
+  "\\bissues/",
+  "https?://"
+].join("|"));
+function rationaleHasArtifactCitation(rationale) {
+  return ARTIFACT_CITATION_RE.test(rationale);
+}
 function coerceJsonStringToArray(fieldName) {
   return (v) => {
     if (typeof v !== "string")
@@ -17539,6 +17986,7 @@ var EditToolRequestSchema = exports_external.object({
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   target: EditTargetSchema.optional(),
+  provenance: ProvenanceSchema,
   test_files: exports_external.preprocess(coerceJsonStringToArray("test_files"), exports_external.array(exports_external.string())),
   additional_files: exports_external.preprocess(coerceJsonStringToArray("additional_files"), exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES)).optional()
 }).strict();
@@ -17548,12 +17996,28 @@ function sha256Hex(content) {
 var SHA256_EMPTY = sha256Hex("");
 function validateRequest(toolName, request, ctx) {
   const warnings = [];
+  const auditWarnings = [];
   const repoCheck = repoIsValid(ctx.repoRoot);
   if (!repoCheck.ok) {
     return { ok: false, warnings: [repoCheck.error] };
   }
   if (request.rationale.trim().length === 0) {
     warnings.push("rationale must be non-empty");
+  }
+  const kpVerdict = evaluateKindProvenanceValidity(toolName, request.provenance);
+  if (kpVerdict === "reject") {
+    warnings.push(`(kind=${toolName}, provenance=${request.provenance}) is rejected per ` + `SPEC §3.3.1 / §3.3.3. Reclassify the edit: pick a kind whose ` + `semantics permit this epistemic source, or pick a provenance ` + `whose certainty matches this kind.`);
+  } else if (kpVerdict === "warn") {
+    auditWarnings.push({
+      code: "kind_provenance_warn",
+      message: `(kind=${toolName}, provenance=${request.provenance}) is atypical ` + `per SPEC §3.3.1. Land but consider whether the intent is closer ` + `to a different workflow kind.`
+    });
+  }
+  if (request.provenance === "accepted_artifact" && !rationaleHasArtifactCitation(request.rationale)) {
+    auditWarnings.push({
+      code: "citation_lint_missing",
+      message: `provenance="accepted_artifact" but the rationale has no ` + `recognizable artifact reference (\`§...\`, \`ADR-...\`, ` + `\`RFC-...\`, \`issues/...\`, or a URL). Add a citation so ` + `future readers can re-source the artifact.`
+    });
   }
   const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
   if (toolRequiresTarget) {
@@ -17562,7 +18026,7 @@ function validateRequest(toolName, request, ctx) {
     }
   } else {
     if (request.target !== undefined) {
-      warnings.push(`${toolName} does not accept a target field (prod/test split does ` + `not apply to this tool)`);
+      warnings.push(`${toolName} does not accept a target field (prod/test split does ` + `not apply to this workflow tool)`);
     }
   }
   if (request.target === "test") {
@@ -17574,8 +18038,20 @@ function validateRequest(toolName, request, ctx) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
   }
-  if (request.additional_files !== undefined && !TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
-    warnings.push(`${toolName} does not accept additional_files; this field is reserved for ` + `the workflow tool (edit_docs_only). Submit each ` + `file as its own typed_edit call.`);
+  if (request.additional_files !== undefined) {
+    if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
+      warnings.push(`${toolName} does not accept additional_files; this field is reserved ` + `for the workflow-axis kinds (edit_observation, edit_proposal, ` + `edit_decision, edit_explanation; edit_progress always rejects). ` + `Submit each file as its own typed_edit call.`);
+    } else {
+      const afVerdict = evaluateAdditionalFiles(toolName, request.provenance);
+      if (afVerdict === "reject") {
+        warnings.push(`(kind=${toolName}, provenance=${request.provenance}) does not ` + `accept additional_files per SPEC §3.3.2. Split the declaration: ` + `submit each file as its own typed_edit call, or pick a ` + `(kind, provenance) cell that accepts batching.`);
+      } else if (afVerdict === "warn") {
+        auditWarnings.push({
+          code: "additional_files_warn",
+          message: `additional_files batch under (kind=${toolName}, ` + `provenance=${request.provenance}) is atypical per SPEC §3.3.2. ` + `Land but consider splitting if the unifying theme is thin. ` + `The rationale MUST name the theme explicitly.`
+        });
+      }
+    }
   }
   for (const tf of request.test_files) {
     const c = checkPathSafety(tf, ctx.repoRoot);
@@ -17629,7 +18105,7 @@ function validateRequest(toolName, request, ctx) {
   if (warnings.length > 0 || primaryBinding === null) {
     return { ok: false, warnings };
   }
-  return { ok: true, primaryBinding, additionalBindings };
+  return { ok: true, primaryBinding, additionalBindings, auditWarnings };
 }
 function checkPathSafety(p, repoRoot) {
   if (path5.isAbsolute(p)) {
@@ -17830,6 +18306,14 @@ var BindingEntrySchema = exports_external.object({
   file: exports_external.string(),
   before_sha256: exports_external.string()
 });
+var AuditWarningEntrySchema = exports_external.object({
+  code: exports_external.enum([
+    "kind_provenance_warn",
+    "additional_files_warn",
+    "citation_lint_missing"
+  ]),
+  message: exports_external.string()
+});
 var IssuedEntrySchema = exports_external.object({
   edit_id: exports_external.string(),
   ts: exports_external.string(),
@@ -17839,6 +18323,8 @@ var IssuedEntrySchema = exports_external.object({
   rationale: exports_external.string(),
   risk_level: RiskLevelSchema,
   target: EditTargetSchema.optional(),
+  provenance: ProvenanceSchema.optional(),
+  audit_warnings: exports_external.array(AuditWarningEntrySchema).optional(),
   test_files: exports_external.array(exports_external.string()),
   binding: exports_external.array(BindingEntrySchema).min(1),
   token: exports_external.string()
@@ -17856,6 +18342,7 @@ var RejectedEntrySchema = exports_external.object({
   kind: exports_external.string(),
   target_file: exports_external.string(),
   target: EditTargetSchema.optional(),
+  provenance: ProvenanceSchema.optional(),
   audit_error: exports_external.string().min(1)
 });
 var EditLogEntrySchema = exports_external.discriminatedUnion("phase", [
@@ -18145,6 +18632,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       kind: toolName,
       target_file: args.target_file,
       ...args.target !== undefined ? { target: args.target } : {},
+      provenance: args.provenance,
       audit_error: auditMessage
     };
     const auditError2 = appendRejectedSafely(log, rejected);
@@ -18179,6 +18667,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       kind: toolName,
       target_file: args.target_file,
       ...args.target !== undefined ? { target: args.target } : {},
+      provenance: args.provenance,
       audit_error: `grants.issue failed: ${reason}`
     };
     const auditError2 = appendRejectedSafely(log, rejected);
@@ -18190,6 +18679,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       ...auditError2 !== undefined ? { audit_error: auditError2 } : { audit_error: `grants.issue failed: ${reason}` }
     };
   }
+  const auditWarningEntries = validation.auditWarnings.map((w) => ({ code: w.code, message: w.message }));
   const issued = {
     edit_id: editId,
     ts: tsIso,
@@ -18199,6 +18689,8 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     rationale: args.rationale,
     risk_level: args.risk_level,
     ...args.target !== undefined ? { target: args.target } : {},
+    provenance: args.provenance,
+    ...auditWarningEntries.length > 0 ? { audit_warnings: auditWarningEntries } : {},
     test_files: args.test_files,
     binding: bindings.map((b) => ({
       file: b.canonical,
@@ -18211,8 +18703,9 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
   const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
   const nFiles = bindings.length;
   const fileNoun = nFiles === 1 ? "file" : "files";
-  const batchNote = toolName === "edit_docs_only" ? ` Because this is edit_docs_only (the batch-friendly workflow ` + `tool), this one declaration covers the whole batch: issue ` + `consecutive native Edit / Write calls against the bound ` + `${fileNoun} in any order — one per bound file, no per-file ` + `re-declaration — until every bound file is consumed or the ` + `TTL expires.` : "";
-  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote;
+  const batchNote = TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName) && nFiles > 1 ? ` Because this is a workflow-axis kind (${toolName}) carrying ` + `additional_files, this one declaration covers the whole batch: ` + `issue consecutive native Edit / Write calls against the bound ` + `${fileNoun} in any order — one per bound file, no per-file ` + `re-declaration — until every bound file is consumed or the ` + `TTL expires.` : "";
+  const provenanceReminder = nextActionProvenanceReminder(args.provenance, validation.auditWarnings);
+  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote + provenanceReminder;
   return {
     token: grant.token_id,
     expires_at: grant.expires_at,
@@ -18221,6 +18714,28 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     next_action: nextAction,
     ...auditError !== undefined ? { audit_error: auditError } : {}
   };
+}
+function nextActionProvenanceReminder(provenance, auditWarnings) {
+  const lines = [];
+  if (provenance === "inference") {
+    lines.push(`
+
+meta-edit reminder: I declared provenance: inference. The reader ` + `will see the prose, not the provenance field — I should frame the ` + `inference explicitly in the body ("Based on observed X, it appears ` + `that ...", "Likely ...", "Probably ...") so the prose itself ` + `carries the uncertainty. Don't write inferences as if confirmed.`);
+  } else if (provenance === "speculation") {
+    lines.push(`
+
+meta-edit reminder: I declared provenance: speculation. The reader ` + `will see the prose, not the provenance field — I should open with ` + `strong hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO: ` + `verify — ...") so a future session does not pick this up as a ` + `decision. Don't write speculation as if confirmed.`);
+  }
+  if (auditWarnings.length > 0) {
+    const summary = auditWarnings.map((w) => `[${w.code}] ${w.message}`).join(`
+  - `);
+    lines.push(`
+
+meta-edit reminder: audit warnings recorded for this declaration:
+  - ${summary}
+` + `Land but consider whether the prose / rationale should be tightened ` + `before the next native Edit.`);
+  }
+  return lines.join("");
 }
 function appendIssuedSafely(log, entry) {
   try {
@@ -18641,7 +19156,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.5.1",
+  version: "0.6.0",
   description: "MCP server with seventeen kind-specific edit tools that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -18757,4 +19272,4 @@ export {
   createServer
 };
 
-//# debugId=3E7ECDF4D4F37EEB64756E2164756E21
+//# debugId=FBBBE707484BDD5764756E2164756E21
