@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -43,6 +44,7 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/hooks/hook-runtime.ts
 async function readStdin() {
@@ -393,7 +395,13 @@ function evaluateSegment(rawSegment, opts = {}) {
   if (redirectsOutsideSafeSinkAllowlist(rawSegment) && firstWarn === null) {
     firstWarn = {
       decision: "warn",
-      reason: "command redirects (`>` / `>>` / `>|`) to a path outside the " + "safe-sink allowlist (/dev/null, /tmp/, /var/tmp/, /run/, " + "/sys/). For in-repo writes prefer an edit_* tool (e.g. " + "edit_state_transition / edit_cosmetic / edit_docs_only " + "for new content; for new files, native Write with content " + '= "" is hook-authorized first, then declare the typed ' + "edit_* for the content); this redirect is permitted but is " + "recorded as a bypass-risk and may be tightened to deny in a " + "future version."
+      reason: `meta-edit reminder:
+
+` + "I was about to write files through Bash redirection " + "(`>` / `>>` / `>|`) to a path outside the safe-sink allowlist " + `(/dev/null, /tmp/, /var/tmp/, /run/, /sys/).
+
+` + "If this command changes repository files, that would bypass meta-edit's typed edit surface. " + "The next move should be to declare the edit kind first " + "(e.g. edit_state_transition / edit_cosmetic / edit_docs_only " + 'for new content; for new files, native Write with content = "" is ' + "hook-authorized first, then declare the typed edit_* for the content) " + `and use the normal edit path.
+
+` + "If the command is only inspecting files or running tests, it should not write to the repository. " + "This redirect is permitted but recorded as a bypass-risk and may be tightened to deny in a future version."
     };
   }
   const heredocScan = stripQuotedContent(unquoteHeredocDelimiters(normalized));
@@ -847,7 +855,13 @@ function denyReason(pattern) {
   return `command matches deny pattern "${pattern}".`;
 }
 function warnVerbReason(verb) {
-  return `command verb "${verb}" can write into the repository (rename/move, ` + `copy, or sync). For in-repo content changes prefer an edit_* tool ` + `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only ` + `for content; for new files, native Write with content = "" is ` + `hook-authorized first, then declare the typed edit_* for the ` + `content). This ${verb} is permitted — legitimate non-edit uses ` + `(rename/move, copy templates/fixtures, backup, deploy/sync) ` + `dominate — but is recorded as a bypass-risk and may be tightened ` + `back to deny in a future version. Writes to .meta-edit/state/** ` + `and .meta-edit/tmp/** remain hard-denied regardless of verb. See ` + `OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
+  return `meta-edit reminder:
+
+` + `I was about to use "${verb}", which can write into the repository ` + `(rename/move, copy, or sync).
+
+` + `If this command changes repository content, the next move should be to declare the edit kind first ` + `(e.g. edit_cosmetic / edit_state_transition / edit_docs_only for content; ` + `for new files, native Write with content = "" is hook-authorized first, then declare the typed edit_* for the content) ` + `and use the normal edit path.
+
+` + `If "${verb}" here is a legitimate non-edit use (rename/move, copy templates/fixtures, backup, deploy/sync), ` + `it is permitted — but recorded as a bypass-risk and may be tightened back to deny in a future version. ` + `Writes to .meta-edit/state/** and .meta-edit/tmp/** remain hard-denied regardless of verb. ` + `See OBSERVED-FAILURES.md for the warn→deny restore trigger.`;
 }
 var FIND_VERBS = new Set([
   "find",
@@ -1763,4 +1777,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=DD165EC5A8E9B4D764756E2164756E21
+//# debugId=296FEF6AE537F02B64756E2164756E21

@@ -2657,3 +2657,94 @@ describe("evaluateBashCommand — v0.4.3 symlink-aliased protected operand (Code
   });
 });
 
+// =====================================================================
+// docs/plan/reminder-style-hooks/rfc.md §6 — reminder-style applies to
+// classification-recovery surfaces only. verb-deny / protected-path /
+// adversarial patterns keep imperative wording. These tests assert both
+// directions: reminder surfaces include the prefix and semantic phrases;
+// imperative surfaces do NOT include the prefix.
+// =====================================================================
+
+describe("evaluateBashCommand — reminder-style scoped to soft warns (RFC §6)", () => {
+  describe("reminder ON: structural redirect warn (v0.1.5 surface)", () => {
+    it("redirect to an in-repo path: reminder prefix + classification language", () => {
+      const r = evaluateBashCommand("printf hello > src/foo.ts");
+      expect(r.decision).toBe("warn");
+      expect(r.reason).toContain("meta-edit reminder:");
+      expect(r.reason).toContain("typed edit surface");
+    });
+
+    it("mv/cp/rsync verb-warn: reminder prefix + classification language", () => {
+      for (const verb of ["mv", "cp", "rsync"]) {
+        const r = evaluateBashCommand(`${verb} a b`);
+        expect(r.decision).toBe("warn");
+        expect(r.reason).toContain("meta-edit reminder:");
+        expect(r.reason).toContain("declare the edit kind first");
+      }
+    });
+  });
+
+  describe("reminder OFF: verb-deny surfaces stay imperative", () => {
+    it("sed -i: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("sed -i 's/x/y/' src/foo.ts");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("sed -i");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("dd of=<in-repo>: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("dd of=src/foo.ts if=/dev/zero");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("tee <in-repo>: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("echo x | tee src/foo.ts");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("decode-and-execute pipe: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("base64 -d <<< Zm9v | bash");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("heredoc with redirect: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("cat <<EOF > src/foo.ts\nx\nEOF");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("inline interpreter write (python -c): deny, no reminder prefix", () => {
+      const r = evaluateBashCommand(
+        "python -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      );
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("DENY_VERBS (patch): deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("patch src/foo.ts < d.patch");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+  });
+
+  describe("reminder OFF: protected-path surfaces stay imperative", () => {
+    it("write to .meta-edit/state via redirect: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("echo x > .meta-edit/state/edits.jsonl");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+
+    it("sed -i targeting .meta-edit/state: deny, no reminder prefix", () => {
+      const r = evaluateBashCommand("sed -i 's/x/y/' .meta-edit/state/x.json");
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain("protected");
+      expect(r.reason).not.toContain("meta-edit reminder:");
+    });
+  });
+});
+

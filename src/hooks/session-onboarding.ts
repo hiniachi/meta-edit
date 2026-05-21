@@ -78,8 +78,25 @@ function claimOnboardingMarker(markerPath: string, sessionId: string): boolean {
   }
 }
 
-function buildOnboardingMessage(): string {
+export function buildOnboardingMessage(): string {
+  // Merged template per docs/plan/reminder-style-hooks/rfc.md §7.1 +
+  // §11 Phase 2: prepend the reminder block, retain the existing
+  // typed-edit-onboarding skill pointer below. Removing the skill
+  // pointer would regress onboarding guidance.
   return [
+    "meta-edit reminder:",
+    "",
+    "I should not edit first and classify later.",
+    "",
+    "Before changing repository files, I should choose the typed edit tool",
+    "that matches the intent of the change. The tool choice is part of the",
+    "reasoning step, not just ceremony.",
+    "",
+    "If a direct edit or shell write would skip that declaration, I should",
+    "stop and make the declaration first.",
+    "",
+    "---",
+    "",
     "meta-edit MCP server is registered for this project. New session detected.",
     "",
     "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
@@ -134,13 +151,19 @@ async function main(): Promise<number> {
   return 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(
-      `session-onboarding hook crashed: ${(err as Error).message}\n`,
-    );
-    // Fail-open: SessionStart hooks must not block session boot. Exit 0.
-    process.exit(0);
-  },
-);
+// Run main() only when invoked as the entry point. This lets unit tests
+// import `buildOnboardingMessage` without triggering the readStdin() call
+// inside main(), which would otherwise hang the test runner waiting on
+// stdin that the test does not pipe.
+if (import.meta.main) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write(
+        `session-onboarding hook crashed: ${(err as Error).message}\n`,
+      );
+      // Fail-open: SessionStart hooks must not block session boot. Exit 0.
+      process.exit(0);
+    },
+  );
+}

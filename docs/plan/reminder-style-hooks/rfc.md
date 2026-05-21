@@ -174,12 +174,15 @@ inappropriate.
 | Denial 種別 | スタイル | 理由 |
 |---|---|---|
 | raw `Edit` / `Write` / `MultiEdit` / `NotebookEdit` の typed-declaration 未取得 deny | **reminder** | 「分類を飛ばした」recovery 系。本 RFC の主戦場 |
+| `apply_patch`（top-level file_path なしのため typed_edit declaration を bind できない）の deny | **reminder** | 同じ classification-recovery 文脈。エージェントには `edit` / `write` / typed edit_* MCP ツールという代替の recovery path がある |
+| 空 Write の warn（empty create authorized + content fill nudge） | **reminder** | 既に soft warn。次のステップは「content の kind を申告する」classification 行為 |
 | `Bash` 構造的 redirect（v0.1.5 warn） | **reminder** | 既に warn なので soft 系。reminder スタイルに自然 |
-| `Bash` verb-deny（`sed -i`, `dd of=`, decode-and-execute, etc.） | **imperative 維持** | 構造的に adversarial、"wrong tool" ではなく "wrong territory"。softening は不適切 |
+| `Bash` verb-warn（mv / cp / rsync、v0.4.3 で warn 化） | **reminder** | 同じく soft warn。verb-warn は「構造的 bypass」ではなく「定型作業 with bypass-risk」なので reminder が自然 |
+| `Bash` verb-deny（`sed -i`, `dd of=`, `tee` in-repo, decode-and-execute, heredoc-with-redirect, `patch`, eval/inline-interpreter writes, etc.） | **imperative 維持** | 構造的に adversarial、"wrong tool" ではなく "wrong territory"。softening は不適切 |
 | protected path（`.meta-edit/state/**`, `.meta-edit/tmp/**`）への書き込み | **imperative 維持** | 監査基盤への破壊、reminder 化は不適切 |
-| その他のエラー系（`canonicalize 失敗` 等の fail-closed） | **無変更** | 既にエラーレポート。reminder ではない |
+| その他のエラー系（`canonicalize 失敗` 等の fail-closed: `[meta-edit:stale]`, `[meta-edit:unreadable]`, `[meta-edit:path-mismatch]`, `[meta-edit:expired]`/`consumed`/`consume-failed`, missing `file_path`） | **無変更** | 既にエラーレポート。reminder ではない |
 
-**原則**：reminder スタイルは **"分類ミスからの recovery"** 文脈に限定。**"構造的バイパス"** や **"監査基盤への侵入"** には imperative を残す。
+**原則**：reminder スタイルは **"soft warn / 分類ミスからの recovery"** 文脈に限定。**"構造的バイパス"** や **"監査基盤への侵入"** や **"fail-closed エラー"** には imperative を残す。
 
 ---
 
