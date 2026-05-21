@@ -187,7 +187,12 @@ inappropriate.
 AI が「これは自分の思考？システムからの指示？」で迷うので、prefix で
 系統を明示する。
 
-### 7.1 SessionStart hook（新規）
+### 7.1 SessionStart hook（既存 `session-onboarding.ts` の書き換え）
+
+注：SessionStart hook は v0.3.1（issue F）で既に導入済み
+（`src/hooks/session-onboarding.ts`、`hooks/hooks.json` に登録、
+per-session marker dedup 付き）。本 RFC で行うのは **メッセージ
+文字列の書き換えのみ**。dedup / 注入機構は維持。
 
 ```
 meta-edit reminder:
@@ -330,12 +335,19 @@ reminder-hook PR が先 land → workflow-kind PR が land 時にこの統合を
 
 ロジック変更なし、文字列のみ。
 
-### Phase 2: SessionStart hook の追加
+### Phase 2: SessionStart メッセージの書き換え
 
-- `src/hooks/session-start-reminder.ts`（新規）
-- `.claude-plugin/plugin.json` に SessionStart hook の登録追加
-- meta-edit プラグインを有効化したセッション起動時に `additionalContext`
-  として §7.1 のテキストを返す
+- `src/hooks/session-onboarding.ts` の `buildOnboardingMessage()`
+  返却文字列を §7.1 のテキストに書き換え
+- hook 登録（`hooks/hooks.json`）、dedup（`.meta-edit/state/sessions/`
+  への marker claim）、`additionalContext` 注入の各機構は **無変更**
+- 新規ファイル不要（既存 `session-onboarding.ts` の文字列のみ）
+
+注：現状の onboarding メッセージは `typed-edit-onboarding` skill への
+pointer も含む（"load the seventeen-tool catalog and selection heuristic"）。
+本 RFC では skill pointer の構造は維持しつつ、wording を reminder
+スタイルに揃える。"seventeen" → "twenty-one" の数値更新は workflow-kind
+RFC のスコープなので本 RFC では触らない（PR landing 順序で順次解決）。
 
 ### Phase 3: snapshot test
 

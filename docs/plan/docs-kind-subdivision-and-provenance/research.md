@@ -133,13 +133,27 @@ description 内 "Comment edits (typo fix, ...)" 条項を：
 
 | File | Action |
 |---|---|
-| `src/hooks/raw-edit-policy.ts:274, 280` | hint 文の `edit_docs_only` 参照を新 5 kind のリストに置換 |
-| `src/hooks/bash-write-policy.ts:491, 1205, 1996` | 同上 |
+| `src/hooks/raw-edit-policy.ts:270-275` | empty-file create warn の `edit_docs_only for Markdown / docs` 言及を新 5 kind の `edit_explanation` / `edit_progress` 等を例示する形に置換 |
+| `src/hooks/raw-edit-policy.ts:280 周辺` | "typically edit_cosmetic or edit_docs_only" の例示を新 kind に置換 |
+| `src/hooks/bash-write-policy.ts:1201-1214` | `warnVerbReason()` ヘルパー内の `edit_cosmetic / edit_state_transition / edit_docs_only` 例示を新 kind に更新 |
+| `src/hooks/bash-write-policy.ts:1992 周辺` | 同様の hint 文の `edit_docs_only` 参照を新 kind に置換 |
 
 実装変更なし、文言のみ。RFC §3.4 で marker 機構を廃止したため、
 hook 側の substring 検証も不要になった。
 
-### 3.6 CLI
+注：reminder-style-hooks RFC が先に land する想定なので、本 RFC 実装
+時点では hook の reason 文は **既に reminder スタイル**。本 RFC は
+その reminder スタイル文中に残る `edit_docs_only` 言及を新 kind に
+書き換える（wording principle 自体は触らない）。
+
+### 3.6 SessionStart hook（既存）と typed-edit-onboarding Skill の更新
+
+| File | Action |
+|---|---|
+| `src/hooks/session-onboarding.ts:86` | `buildOnboardingMessage()` 内の "seventeen-tool catalog" → "twenty-one-tool catalog"。reminder スタイル wording は reminder-style-hooks RFC が先に land 済みの想定 |
+| `skills/typed-edit-onboarding/SKILL.md:3,10,129` | "seventeen" 言及を "twenty-one" に更新。tool 一覧 / 選択ヒューリスティック節も 5 新 kind を反映 |
+
+### 3.7 CLI
 
 | File | Action |
 |---|---|
@@ -148,7 +162,7 @@ hook 側の substring 検証も不要になった。
 | `src/cli/help-cmd.test.ts:65-69` | サンプル tool 名置換 |
 | 新規: `meta-edit drafts`（または `--drafts`） | マーカー付きブロック一覧表示（`provenance ∈ {inference, speculation}` のもの） |
 
-### 3.7 Tests
+### 3.8 Tests
 
 直接 `edit_docs_only` を参照するテスト（v0.5 時点）：
 
@@ -178,7 +192,7 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 - 既存 jsonl の `edit_docs_only` エントリが log/summary CLI で legacy bucket として **読み出し可能** であること
 - impl 15 SQLite ツールでの provenance 受理（reject 組み合わせなし、`inference` / `speculation` も land、prose hedging を `next_action` で要求）
 
-### 3.8 External documentation surfaces
+### 3.9 External documentation surfaces
 
 | File | What |
 |---|---|
@@ -192,7 +206,7 @@ src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 | `.claude-plugin/plugin.json` `description` | "seventeen" 更新 |
 | `.claude-plugin/marketplace.json` | 同上 |
 
-### 3.9 何も変えなくてよい箇所
+### 3.10 何も変えなくてよい箇所
 
 - `src/state/grants.ts`：tool 名に非依存
 - `src/hooks/hook-runtime.ts`：tool 名に非依存
