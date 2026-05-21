@@ -1,395 +1,443 @@
-# RFC — `edit_docs_only` の kind 細分化 + `provenance` 宣言
+# RFC — workflow-axis kinds + epistemic provenance
 
-Status: **DRAFT** — ユーザー承認待ち。本 RFC は仕様提案であり、
-実装はまだ走らせない。同フォルダの `research.md` は影響範囲調査。
+Status: **DRAFT** — ユーザー承認待ち。本 RFC は仕様提案。実装は走らせない。
+影響範囲は同フォルダの `research.md`。
 
 | Field | Value |
 |---|---|
 | Author | meta-edit session |
 | Created | 2026-05-21 |
-| Target | v0.6.0（minor bump） |
-| Touches | SPEC Article 4 / SPEC §4 / SPEC §6 / CLAUDE.md §1,§3,§12 |
-| Constitutional | Yes（Article 7 amendment bar — §4 で論証） |
+| Target | v0.6.0 (minor bump) |
+| Touches | SPEC Article 4 / SPEC §3 / SPEC §4 / SPEC §6 / CLAUDE.md §1, §3, §12 |
+| Constitutional | Yes (Article 7 amendment bar — §4 で論証) |
+| Tool count | 17 → 21（15 SQLite + 1 cosmetic + 5 workflow） |
+| Supersedes | `edit_docs_only`（廃止） |
 
 ---
 
 ## 1. Problem statement
 
 過去チャットで作成した成果物（`IMPLEMENTATION-LOG.md`,
-`OBSERVED-FAILURES.md`, `issues/**`, `README.md` 系、`docs/plan/**`
-など）が、新しいチャットからは「ただ存在するファイル = 決定稿」と
-見えてしまう。実際には次のような epistemic status が混在している：
+`OBSERVED-FAILURES.md`, `issues/**`, `docs/plan/**`, コード内コメント
+等）が、新チャットからは「ただ存在するファイル = 決定稿」と見えて
+しまう。実際には：
 
-- **user_approved** — ユーザーが明示確認した決定
-- **provisional** — 暫定的な作業メモ、後で再確認したい
-- **speculation** — 根拠の薄い推論、思いつき
+- **user_confirmed** — ユーザーが明示確認した
+- **accepted_artifact** — accepted ADR / spec / test / API に基づく
+- **direct_observation** — 実行結果・読んだコード・ログ等から直接観察
+- **inference** — 観察からの推論
+- **speculation** — 仮説・未検証
 
-現状の `edit_docs_only` は doc 全般を 1 ツールでカバーするため、
-description で「決定稿として書くな」「open questions を残せ」
-「公開面に憶測を書くな」のように **対象 doc 種別ごとに鋭く** 行動を
-誘導することが難しい。ツール description は meta-edit の中核 surface
-であり、ここで粒度を落としていると bet（descriptions だけで AI 行動
-が変わる仮説）の効果検証も鈍る。
+の 5 段階の epistemic 出所が混在しているのに、ファイルにも edit log
+にも残らない。
 
-二次的な問題：edit log の集計でも `edit_docs_only` が「混雑バケツ」
-になり、健康指標として読みづらい。
+加えて：
+
+1. `edit_docs_only` が doc 全般を 1 ツールでカバーするため、kind
+   ごとの description チューニングが効きにくい。"観察記録" と
+   "決定記録" と "提案" は別の規律で書くべきだが、現状は同じ
+   description 1 本に押し込まれている。
+2. impl 16 本も同じ epistemic 問題を持つ：仮置きの修正、推論で
+   書いた処理、これらが log に「ただの implementation 変更」として
+   残り、新セッションでは確定済みに見える。
 
 ---
 
 ## 2. Non-goals
 
-- パッチ内容の検査（Article 7 違反）。
-- `provenance` の真偽検証（自己申告のみ）。
-- 実 impl ツール（16 本）への `provenance` 適用（壁打ち段階で議論あり。
-  別 RFC へ分離して順次評価）。
-- 新セッション boot 時の overlay 読み込み機構（CLAUDE.md §11 改訂で
-  独立に達成できる。本 RFC とは独立に意思決定可能）。
-- 国際化（既存 description と同様、英語が source）。
+- パッチ内容の検査（Article 7 違反）
+- `provenance` の真偽検証（自己申告のみ）
+- **パス matcher による kind 自動推定**（汎用化を壊す。各プロジェクトで
+  ファイル配置が違う以上、サーバ側で「`README.md` だから何 kind」を
+  判定しない）
+- `accepted_artifact` の引用先 artifact 内容との整合検証
+- 既存 jsonl への provenance backfill（旧データは null のまま受理）
+- `edit_policy_change` への provenance 適用（governance 軸は別検討）
+- 新セッション boot 時の log overlay（マーカー方式採用により不要）
 
 ---
 
 ## 3. Proposal
 
-### 3.1 Kind 細分化（`edit_docs_only` → 6 ツール）
+### 3.1 Workflow-axis kinds（`edit_docs_only` を廃止して 5 新設）
 
-`edit_docs_only` を以下に分割：
+**axis**: パス（"どのファイルか"）ではなく、**そのセッションで何を
+している瞬間に書いているか**（intent）で切る。同じ `README.md` が
+intent によって違う tool を通る。
 
-| 新 kind | 対象パス（典型） | 性格 |
+| 新 kind | intent | 典型シーン |
 |---|---|---|
-| `edit_work_log` | `IMPLEMENTATION-LOG.md`, `docs/plan/**/research.md` | 作業実況・自己観察 |
-| `edit_failure_note` | `OBSERVED-FAILURES.md` | 観察された失敗パターンの記録 |
-| `edit_issue_filing` | `issues/**`, `docs/plan/**/rfc.md`（本ファイル含む） | 提案・open question・未確定 |
-| `edit_external_doc` | `README*.md`, `docs/SPEC.md`(*), `docs/`, `site/**` | 公開面 |
-| `edit_changelog` | `CHANGELOG.md`, リリースノート | リリース済み事実の記録 |
-| `edit_contributor_doc` | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` | 開発プロセス文書 |
+| `edit_progress` | このセッションでやったことの記録 | "X を実装した、Y を試した、Z は動いた" |
+| `edit_observation` | 観察・気付き・発見の記録 | "A が成立すると B が壊れることに気付いた" |
+| `edit_proposal` | 提案・問題提起・open question | "C を導入すべきでは？" |
+| `edit_decision` | 確定した決定の記録 | "D 方式を採用すると決めた" |
+| `edit_explanation` | 読者向けに既知事実を解説 | "この関数は E のために存在する" |
 
-(*) `docs/SPEC.md` は `edit_policy_change` の管轄でもある（spec /
-governance 面）。境界ルール：**spec ⊃ external_doc**。SPEC の
-constitutional 変更は `edit_policy_change`、SPEC §4 の description
-文言調整など振る舞いを変えない範囲は `edit_external_doc`。RFC 実装
-フェーズでこの境界を description に明文化する。
+5 個すべて：
 
-`CLAUDE.md` は引き続き `edit_policy_change`（AI 指示ファイル）。
+- `target` フィールドは持たない（doc/workflow に prod/test 軸は
+  無関係）
+- `test_files` は空 OK（required ではない）
+- `additional_files` は `edit_explanation` と `edit_decision` のみ受理
+  （多言語 README 同期、リリース一括 commit 等が定型）
 
-#### 3.1.1 `additional_files` の受理
-
-batch-friendly 性質が必要なのは：
-
-- `edit_external_doc`（README 多言語版の同時更新が定型）
-- `edit_changelog`（バージョンタグ + CHANGELOG + プラグイン json の
-  リリース一括が定型）
-
-それ以外（`work_log`, `failure_note`, `issue_filing`,
-`contributor_doc`）は `additional_files` を **持たない**。これは
-SPEC §3 の「1 declaration = 1 file が原則、workflow tool だけ例外」
-の constitutional 設計を保つ。
-
-### 3.2 `provenance` 宣言フィールド
-
-上記 6 kind すべてに **必須** で追加：
+### 3.2 `provenance` 必須フィールド（全 21 ツール対象）
 
 ```ts
-provenance: "user_approved" | "provisional" | "speculation"
+provenance:
+  | "user_confirmed"      // ユーザーが明示した
+  | "accepted_artifact"   // accepted ADR / spec / test / API 等に基づく
+  | "direct_observation"  // 実行結果・読んだコード・ログ等から直接観察
+  | "inference"           // 観察からの推論
+  | "speculation"         // 仮説・未検証
 ```
 
-- `user_approved` — ユーザーが当該チャット内で当該変更を明示承認した
-- `provisional` — 暫定。次セッションで再確認対象
-- `speculation` — AI 単独の推論。根拠の言語化が不十分
+- **必須・default なし**（`target` と同じ運用）
+- 5 新 workflow kind + 1 cosmetic + 15 SQLite impl の **全 21 ツール
+  共通**
+- `provenance: "accepted_artifact"` のとき、`rationale` に少なくとも
+  1 件の artifact 参照（`§...`, `ADR-...`, `issues/...`, `RFC-...`,
+  URL のいずれか）が含まれることを軽い構文 lint で要求。無ければ
+  warn（reject はしない）
 
-`rationale` フィールドに「なぜその provenance か」の一言を載せる
-ことを description で求める（強制はしないが、loosening 系の policy
-で前例あり：`edit_policy_change` の "Convenience is not acceptable"
-パターン）。
+### 3.3 Kind × provenance マトリクス
 
-### 3.3 無効な kind × provenance 組み合わせ
+#### 5 新 workflow kind
 
-サーバー側で **declaration を reject**（applied: false）：
+| kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
+|---|---|---|---|---|---|
+| `edit_progress` | OK | OK | OK ◎ | OK | OK |
+| `edit_observation` | OK | OK | OK ◎ | warn ※1 | OK |
+| `edit_proposal` | OK | OK | OK | OK | OK ◎ |
+| `edit_decision` | OK ◎ | OK | OK | **reject** | **reject** |
+| `edit_explanation` | OK | OK ◎ | OK | warn ※2 | **reject** |
 
-| kind | speculation | provisional | user_approved |
-|---|---|---|---|
-| `edit_work_log` | OK | OK | OK |
-| `edit_failure_note` | OK | OK | **warn** ※1 |
-| `edit_issue_filing` | OK | OK | OK ※2 |
-| `edit_external_doc` | **reject** | warn ※3 | OK |
-| `edit_changelog` | **reject** | **reject** | OK ※4 |
-| `edit_contributor_doc` | **reject** | warn ※3 | OK |
+◎ = 各 kind の典型 provenance（description で誘導）
 
-注：
+- ※1 `observation + inference` は「観察と書きながら推論を混ぜている」
+  → kind を `proposal` に分けるよう warn
+- ※2 `explanation + inference` は公開面に推論が混ざる→典型的には
+  `accepted_artifact` 由来であるべき。warn
 
-- ※1 `failure_note` は AI 自身の観察記録。ユーザー承認は通常無関係。
-  warn のみ（誤運用の可能性をログに残す）。
-- ※2 `issue_filing` での `user_approved` は「ユーザーが起票を指示」
-  ケース。妥当。
-- ※3 公開面・コントリビューター文書を `provisional` で書くのは
-  通常おかしい（公開時点で確定しているべき）。warn だが reject は
-  しない（ドラフトの一時 commit などの正当ケースがあるため）。
-- ※4 CHANGELOG は出荷済み事実のみ。`user_approved` 以外あり得ない。
+#### 16 impl tools (15 SQLite + `edit_cosmetic`)
 
-reject 系は既存 `validateRequest` の warnings 蓄積パターンと同型。
+**reject 組み合わせは設けない**（reject を増やすと AI が誤申告で
+通すリスクの方が高い）。全組み合わせ OK、ただし以下は **warn +
+ファイル内マーカー強化**：
 
-### 3.4 ファイル内マーカー注入（apply 時）
+- `inference` — 観察からの推論で書いた変更（要マーク）
+- `speculation` — 仮置き実装（強い注意喚起）
 
-`provenance !== "user_approved"` の場合、apply フェーズで対象 patch
-の **書き換えブロック先頭** に HTML コメントマーカーを挿入する：
+`direct_observation` / `accepted_artifact` / `user_confirmed` は
+通常運用、マーカーなし or 軽マーカー（§3.4）。
 
-```html
-<!-- meta-edit: provisional (edit_id=20260521-001, kind=edit_work_log) -->
-... 実コンテンツ ...
-<!-- /meta-edit -->
-```
+### 3.4 ファイル内マーカー注入（apply 時、3 段階）
 
-マーカーは：
+provenance に応じて apply フェーズで対象 patch の書き換えブロック
+前後にマーカーを挿入：
 
-- Markdown コメントなのでレンダリングされない
-- `grep` で全件抽出可能（CLI コマンド `meta-edit drafts` を後続で追加）
-- `edit_id` で edit log と紐付け可能
-- 同ファイルを再編集する際は **古いマーカーを尊重**（user が承認
-  したら剥がす運用：`provenance: "user_approved"` で同 edit_id を
-  上書き宣言、apply 時にマーカー除去）
+| provenance | マーカー強度 | 形式 |
+|---|---|---|
+| `user_confirmed` | **none** | マーカーなし |
+| `accepted_artifact` | **none** | マーカーなし |
+| `direct_observation` | **light** | `<!-- meta-edit: observation (edit_id=...) -->` |
+| `inference` | **strong** | `<!-- meta-edit: INFERENCE — 再確認推奨 (edit_id=...) -->` |
+| `speculation` | **strong** | `<!-- meta-edit: SPECULATION — 未検証 (edit_id=...) -->` |
 
-注入位置の具体策：
+`<!-- /meta-edit -->` で閉じる。Markdown では HTML コメントとして
+レンダリングされない。コード内コメントの場合は言語別コメント記法
+（`//`, `#`, `/* */`）で同等表現。
 
-- 単純パッチ（hunk が連続している）：パッチで書き加わるブロックの
-  前後にマーカー
-- 既存ブロックの中間挿入：マーカーは挿入された hunk のみを囲む
+注入位置は「**新規に追加された行 / hunk**」という構文的事実のみで
+決定（パッチ内容の意味解析は行わない、Article 7 違反回避）。
 
-実装は `src/tools/apply.ts` の patch 適用後に文字列処理として行う。
-**パッチ内容の意味解析は行わない**（Article 7 違反になる）。マーカー
-を貼る位置は「新規追加された行 / hunk」という構文的事実のみで決定。
+#### マーカー昇格 / 除去パス
 
-`edit_external_doc` で provenance: provisional の warn が出るときは、
-マーカーに「provisional: 公開前にレビュー必要」の文言を含める。
+- `speculation` → `user_confirmed` 等への昇格：**同じファイル / 同じ
+  行を再宣言**して上書き。apply 時に古いマーカーを除去
+- `direct_observation` 等の追記でマーカーが残っている領域を編集
+  する場合、新しい provenance のマーカーで囲み直す（古いマーカーは
+  消える）
 
-### 3.5 新セッションが認知する経路
+### 3.5 `edit_cosmetic` の更なる narrow
+
+現状の cosmetic スコープから **情報を変えるコメント編集を剥がす**：
+
+| 例 | 旧 | 新 |
+|---|---|---|
+| `/** function does X */` 追加 | cosmetic | `edit_explanation` |
+| `// XXX breaks for N>1000` 追加 | cosmetic | `edit_observation` |
+| `// TODO: refactor` 追加 | cosmetic | `edit_proposal` |
+| typo 修正（情報不変） | cosmetic | cosmetic |
+| コメントブロックのインデント | cosmetic | cosmetic |
+| docstring の API 例追記 | cosmetic | `edit_explanation` |
+| stale コメント削除 | cosmetic | `edit_observation` または stop-and-ask |
+
+新 description（要点）：
+
+> Comment edits that change NO information content (typo fix,
+> line-break reflow, whitespace inside comments). Comments that add
+> or change information go through the workflow kind matching the
+> intent (`edit_observation` / `edit_explanation` / `edit_proposal`).
+
+### 3.6 新セッションが認知する経路
 
 ファイル内マーカーがあれば新チャットは：
 
-1. `IMPLEMENTATION-LOG.md` 等を読んだ瞬間に `<!-- meta-edit:
-   provisional ... -->` を視認
+1. `IMPLEMENTATION-LOG.md` 等を読んだ瞬間に
+   `<!-- meta-edit: INFERENCE — 再確認推奨 -->` を視認
 2. CLAUDE.md §11（「セッションの形」）に「マーカー付きブロックは
-   ユーザーに再確認」を追記（本 RFC の implementation で
-   `edit_policy_change` 経由）
+   ユーザーに再確認」を追記（実装 PR で `edit_policy_change` 経由）
 
-option b（edit log overlay）は **採用しない**：
-
-- ファイル内マーカー方式の方が "surface で行動を変える" meta-edit
-  哲学と整合的
-- マーカーは AI が読まない選択肢を持てない（log は能動的に
-  読まないと見えない）
-- CLAUDE.md 規律に依存するレイヤーを減らせる
+`provenance ∈ {inference, speculation}` のブロックは新セッションで
+**自動的に再確認対象**として浮上する。`accepted_artifact` /
+`user_confirmed` は決定稿として扱われる。
 
 ---
 
 ## 4. Constitutional analysis (Article 7 amendment bar)
 
-`SPEC.md` Article 7 は「constitutional-amendment bar をクリアする
-には実験信号（bet）の保存を論じる必要」と規定。
-
 ### 4.1 これは detection ではない
-
-追加要素はすべて **宣言** と **宣言由来の静的出力**：
 
 | 要素 | Detection? | 既存類似機構 |
 |---|---|---|
-| kind 細分化 | No（type 軸の解像度上昇） | 既存 17 kind の追加と同質 |
-| `provenance` 必須化 | No（宣言フィールド追加） | `target`, `rationale`, `test_files` |
-| 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` の現行 reject と同型 |
-| ファイル内マーカー注入 | No（apply 時の文字列連結） | パッチ内容を読まない |
+| 5 workflow kind 追加 | No（type 軸の解像度上昇） | 既存 17 kind の延長 |
+| `provenance` 必須化 | No（宣言フィールド追加） | `target` / `rationale` / `test_files` |
+| 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` reject と同型 |
+| `accepted_artifact` citation lint | **境界**：文字列パターン照合のみ。artifact 実在 / 内容整合は検証しない。warn のみ | path-safety と同種の構文 lint |
+| マーカー注入 | No（apply 時の文字列連結） | 新規メカニズム |
+| **パス matcher** | **持たない** | — |
 
-diff 内容を見ない、宣言と実態の照合をしない、test の意味解析もしない。
+diff 内容は読まない、宣言と実態の照合はしない、test 意味解析もしない。
 
 ### 4.2 bet の信号は強まる
 
-bet の主張は「**well-designed tool surface > complex verification
-surface**」（CLAUDE.md §13）。本 RFC は verification surface を一切
-増やさず、tool surface の解像度のみを上げる。description の効きが
-弱い領域（doc 系）に対して **description 1 本を 6 本に増やして** 
-鋭く効かせる方向であり、bet の主張をより厳しく試す変更。
+bet の主張：「**well-designed tool surface > complex verification
+surface**」（CLAUDE.md §13）。本 RFC は verification surface を
+増やさず、tool surface の解像度を二軸（kind × provenance）で上げる。
+description 17 → 21 本、各 description が rationale / target /
+provenance の宣言規律を埋め込む。bet をより厳しく試す方向。
 
 ### 4.3 "seventeen tools" の見出し変更
 
-`SPEC.md` Article 4 / CLAUDE.md §1, §12 の "seventeen" は更新が要る。
-本 RFC は workflow tool を `1` → `5〜6` に拡張するため、見出し記述
-（"15 SQLite + edit_cosmetic + 1 workflow"）の "1 workflow" を
-"6 workflow" に書き換える。これは constitutional な記述変更だが、
-**比率の哲学（impl が dominate、workflow は周辺）は維持**。
+17 → 21（15 SQLite + 1 cosmetic + 5 workflow）。SPEC Article 4 /
+CLAUDE.md §1, §12 の書き換え必須。比率の哲学（impl が dominate）は
+維持。
 
 ### 4.4 自己申告 honesty の構造的弱さ
 
-`provenance: "user_approved"` を AI が虚偽申告する誘惑がある。
-検出器は Article 7 で封じられているので、`description` での
-摩擦設計のみで戦う。RFC 実装フェーズで以下を description に
-入れる：
+provenance 5 値はすべて AI 自己申告。検出器は禁止なので description
+で戦う：
 
-- 「**user が明示した文脈の引用なしに `user_approved` を選ぶな**」
-- 「迷ったら `provisional` を選び、user に確認」
-- fallback obligation 節（既存 `edit_policy_change` パターン）
+- `user_confirmed` 虚偽：「ユーザーが言った気がする」→ description
+  で「直前のユーザー発話の引用なしに選ぶな」
+- `accepted_artifact` 虚偽：存在しない artifact 引用 → citation lint
+  で形式存在のみ確認、内容整合は AI 任せ
+- `direct_observation` 虚偽：観察してないことを観察と書く →
+  description で「観察ログ / コマンド出力 / 読んだコード行を
+  rationale に書け」obligation
 
-これは meta-edit 全体の哲学と整合的なリスクであり、新規に raise
-される脅威ではない。
+meta-edit 全体の bet と整合的なリスクで、本 RFC が新規 raise する
+ものではない。
+
+### 4.5 パス matcher を持たない理由
+
+- 各プロジェクトでファイル配置が違う（汎用性を壊す）
+- 実装が重くなる（パターン定義、設定ファイル化、テスト）
+- detection への踏み込みリスク（「`README.md` だから `edit_explanation`
+  以外 reject」のような検証は宣言と実態の照合に近い）
+
+`SPEC.md` 等の特殊ファイルも検証しない。AI が宣言する。
 
 ---
 
-## 5. Tool descriptions ドラフト（要点のみ）
+## 5. Tool descriptions ドラフト（要点）
 
 実装フェーズで verbatim にしてから `descriptions.ts` に流し込む。
-本 RFC では概略のみ示す。
 
-### 5.1 `edit_work_log`
+### 5.1 `edit_progress`
 
-> 作業実況の記録。`IMPLEMENTATION-LOG.md` 等の自己観察ファイルを
-> 修正する。
+> このセッションで実行したこと・試したこと・観測した結果を時系列で
+> 記録する。`IMPLEMENTATION-LOG.md` 等の自己観察ファイルへの追記が
+> 典型。
 >
 > Use this tool when:
-> - セッションの作業結果を時系列で記録
-> - "what worked", "known issues", "open questions" の構造で書く
+> - "X を実装した、Y を試した、Z は動いた" のような自己観察
+> - "what worked / known issues / open questions" 構造の section
 >
 > MUST NOT:
-> - 決定として書く（user 明示確認なしに `provenance: user_approved`
->   を選ばない）
+> - 決定として書く（決定は `edit_decision`）
+> - 観察事実を一般化して書く（一般化は `edit_observation`）
 > - 他人のセッションの動作を断定的に評価する
 >
-> Provenance guidance:
-> - `user_approved`: user が当該結果を確認した
-> - `provisional`: 動作確認はしたが user 未確認
-> - `speculation`: 動かしていない、または推論のみ
->
 > Required tests: NONE.
+>
+> Typical provenance: `direct_observation`
+>
+> Provenance combinations: 全 OK
 
-### 5.2 `edit_failure_note`
+### 5.2 `edit_observation`
 
-> 観察された失敗パターンを `OBSERVED-FAILURES.md` に追記する。
+> 観察・気付き・発見した事実を記録する。`OBSERVED-FAILURES.md`、
+> code 内 `// XXX` ノート、gotcha 集積など。
 >
 > Use this tool when:
-> - AI が typed surface を回避した、誤った kind を選んだ等の
->   観察事実を記録
-> - restore trigger（warn → deny に戻す条件）を必ず併記
+> - "A が成立すると B が壊れることに気付いた"
+> - 失敗パターン、surprise、edge case の記録
+> - 検出器の実装案は書かない（§7.3, Article 7）
 >
 > MUST NOT:
-> - 検出器の実装案を書く（§7.3, Article 7）
-> - 観察したことのない仮想パターンを書く
+> - 修正案を併記する（修正は `edit_proposal` で別宣言）
+> - 観察してないことを観察と書く
+> - 推論を混ぜる（`inference` provenance は warn）
 >
-> Provenance guidance:
-> - 通常は `provisional`（追加観察で改訂される前提）
-> - `user_approved` は warn が出る（user が観察対象ではないため）
+> Required tests: NONE.
+>
+> Typical provenance: `direct_observation`
+>
+> Provenance combinations: `inference` は warn（観察と推論を分けよ）
 
-### 5.3 `edit_issue_filing`
+### 5.3 `edit_proposal`
 
-> 新規 issue / RFC / proposal を起票する。`issues/**`,
-> `docs/plan/**/rfc.md` 等。
+> 提案・問題提起・open question を起こす。`issues/**`,
+> `docs/plan/**/rfc.md`, code 内 `// TODO`, ADR ドラフトなど。
 >
 > Use this tool when:
-> - 提案として書く（決定として書かない）
+> - "C を導入すべきでは？" のような提案
+> - 仮想ユーザーの同意を捏造しない（user_confirmed は本当の同意のみ）
 > - open questions を残す
 >
 > MUST NOT:
 > - "I will implement" と書く（提案段階）
-> - 仮想の user 同意を捏造する
+> - 仮想の user 同意を捏造
+>
+> Required tests: NONE.
+>
+> Typical provenance: `speculation`
+>
+> Provenance combinations: 全 OK
 
-### 5.4 `edit_external_doc`
+### 5.4 `edit_decision`
 
-> 公開面のドキュメント（README, docs/, site/, SPEC のうち振る舞いを
-> 変えない記述調整）。
+> 確定した決定を記録する。ADR、CHANGELOG（リリース済みの記録）、
+> IMPLEMENTATION-LOG への確定事項追記など。
 >
 > Use this tool when:
-> - 出荷済み機能の説明を更新
-> - 多言語 README を `additional_files` で同期
+> - 決定が固まった後で記録
+> - リリース済み変更を CHANGELOG に転記
+>
+> MUST NOT:
+> - 推論や仮説で「決定」と書く（reject）
+> - ユーザー未確認の事項を `user_confirmed` で書く
+>
+> Required tests: NONE.
+>
+> Typical provenance: `user_confirmed`
+>
+> Provenance combinations: `inference` / `speculation` は **reject**
+
+### 5.5 `edit_explanation`
+
+> 既知事実を読者向けに解説する。README、docs/、JSDoc、API doc、
+> code 内の「この関数は何のため」コメントなど。
+>
+> Use this tool when:
+> - 出荷済み機能の説明
+> - 既存仕様の章を読者向けに展開
+> - 多言語 README の同期（`additional_files` 受理）
 >
 > MUST NOT:
 > - 未出荷機能を書く
 > - 単独情報源として API 仕様を書く（コードの真実と乖離する）
-> - `speculation` provenance（reject）
+> - 推論や仮説を解説として書く（`speculation` は reject、`inference`
+>   は warn）
 >
 > Required tests: NONE.
-
-### 5.5 `edit_changelog`
-
-> リリース済み変更を `CHANGELOG.md` / リリースノートに記録。
 >
-> Use this tool when:
-> - merge 済み変更のみ
-> - tag 付与と同時、または直後の commit
+> Typical provenance: `accepted_artifact`（spec / API 由来）
 >
-> MUST NOT:
-> - 未マージの変更を書く
-> - `provisional` / `speculation` provenance（reject）
+> Provenance combinations: `speculation` は **reject**、`inference` は warn
 
-### 5.6 `edit_contributor_doc`
+### 5.6 impl 16 本への provenance guidance（共通追記）
 
-> 開発プロセス文書（`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-> `SECURITY.md`）。
->
-> Use this tool when:
-> - プロセス決定が固まった後
->
-> MUST NOT:
-> - 技術的決定をここで初出にする（他の場所で固まっていることが前提）
-> - `speculation` provenance（reject）
+各 impl tool の description 末尾に共通追記：
+
+> Provenance (required):
+> Declare the epistemic source of this edit:
+> - `user_confirmed` — ユーザーがこの変更を明示した
+> - `accepted_artifact` — accepted spec / ADR / test / API に基づく
+>   （rationale に引用を含めること）
+> - `direct_observation` — 実行結果 / 読んだコード / log から直接観察
+> - `inference` — 観察からの推論（ファイル内マーカー付きで land する）
+> - `speculation` — 未検証の仮説（ファイル内マーカー付きで land する）
+
+reject 組み合わせなし、`inference` / `speculation` はマーカー強化。
 
 ---
 
-## 6. Open questions（user 確認要）
+## 6. Remaining open questions
 
-1. **`provenance` を impl 16 本にも広げるか**
-   - 壁打ち中の私の推し：広げる派（仮置きのコードでも同じ事故が
-     起きる）
-   - user 未回答
-   - 本 RFC では docs 側のみとし、impl 側は v0.7+ 別 RFC に分離する
-     ことを提案
-
-2. **マーカー方式 vs log overlay 方式**
-   - 本 RFC は §3.4 / §3.5 でマーカー方式を採用と書いたが、
-     これは設計判断
-   - user の反対があれば変更可
-
-3. **`edit_external_doc` と `edit_policy_change` の境界**
-   - 本 RFC §3.1 の暫定線で問題ないか
-   - SPEC.md の文言調整を policy_change にすると friction 過剰、
-     external_doc にすると governance loosening を素通しになりうる
-   - 実装フェーズでより明確な境界文を求めるべきか
-
-4. **既存ログの後方互換**
-   - `kind: "edit_docs_only"` の旧エントリを summary の legacy
-     bucket に置く（research.md §5.1）案で OK か
-
-5. **"seventeen" → 新カウント**
-   - workflow tool が 1 → 6 なので合計 17 → 22
-   - README / site / SPEC / CLAUDE / plugin.json の表記変更
-     （research.md §3.5）を本 RFC 採用と同時に行うか、別 PR で先行
-     させるか
+1. **`additional_files` の受理 kind** — `edit_explanation` と
+   `edit_decision` のみ案で OK か？（RFC §3.1）
+2. **`edit_cosmetic` の境界例** — typo 修正と「情報を変える編集」の
+   境界、`stale コメント削除` の扱い（§3.5 のテーブル）に追加例の
+   要望はあるか
+3. **マーカーのコード言語別表現** — `//` / `#` / `/* */` / `<!-- -->`
+   / `;` / `--` のマッピングは実装時に decide で OK か？
+4. **`edit_cosmetic` での provenance マトリクス** — RFC §3.3 は
+   workflow と impl のみ。cosmetic は impl 側のルールに乗せる（warn
+   なし、全 OK）か、それとも cosmetic の性質上 `direct_observation` /
+   `accepted_artifact`（formatter ルール由来）のみ accept にするか
+5. **legacy `edit_docs_only` への自動マイグレーション** — 旧呼び出しは
+   land 時点で reject、それとも一定期間 `edit_progress` にエイリアスして
+   warn を出す移行期間を設けるか
+6. **`edit_observation` での `// XXX` 系コメント追加** — `edit_cosmetic`
+   からの移譲先として typical だが、code 内コメント 1 行の追加で
+   typed_edit 1 件が要るのは friction 過剰では？
 
 ---
 
 ## 7. Rollout plan（承認後）
 
-1. **Phase A: SPEC + descriptions**
-   - `docs/SPEC.md` Article 4 / §4 / §6 を更新
-   - `src/tools/descriptions.ts` に 6 つの新 description を追加、
-     `edit_docs_only` を削除
-   - 既存 `edit_docs_only` 参照（test/CLI/hooks の hint 文）を新名に
-     置換
+1. **Phase A: SPEC + descriptions surface**（最大の PR）
+   - `docs/SPEC.md` Article 4 / §3 / §4 / §6 の書き換え
+   - `src/tools/descriptions.ts` から `edit_docs_only` を削除、新 5
+     kind の description 追加、impl 16 本に provenance guidance 追記
+   - `edit_cosmetic` description の narrow
+   - すべての hint 文 / test 内 tool 名参照を新名に置換
    - 単位：`edit_policy_change` の大型 PR
 
 2. **Phase B: provenance フィールド**
    - `EditToolRequestSchema` / `validateRequest` に追加
-   - 無効組み合わせ table 実装
-   - test 追加（rejection + acceptance 両面）
+   - 5 値 enum、必須化
+   - kind × provenance reject / warn 規則の実装
+   - `accepted_artifact` citation lint
+   - test：rejection / acceptance / warn
 
 3. **Phase C: マーカー注入**
-   - `src/tools/apply.ts` に注入ロジック
-   - `provenance !== "user_approved"` 時のみ動作
-   - test 追加
+   - `src/tools/apply.ts` に 3 段階注入ロジック
+   - 言語別コメント記法のディスパッチ
+   - マーカー昇格 / 除去パス
+   - test：3 段階動作、上書き
 
 4. **Phase D: 集計 + CLI**
-   - `meta-edit summary` で provenance ごとの内訳
-   - `meta-edit drafts`（新規）でマーカー一覧表示
-   - legacy `edit_docs_only` bucket の表示
+   - `meta-edit summary` に provenance 内訳
+   - `meta-edit log --provenance <値>` フィルタ
+   - `meta-edit drafts`（新規）でマーカー付きブロック一覧
+   - legacy `edit_docs_only` bucket 表示
 
 5. **Phase E: CLAUDE.md §11 改訂**
-   - 新セッション boot 時に "drafts を確認" を組み込む
+   - 新セッション boot 時の「マーカー付きブロックを再確認」規律を
+     追記
    - `edit_policy_change` 経由
 
-各 Phase は独立 PR、Phase B → C → D は順序依存。Phase A は最初。
+6. **Phase F: external surfaces 同期**
+   - README ×3、site/index.html、plugin.json、marketplace.json の
+     更新（21 ツール、新 kind、provenance の概念紹介）
+   - `edit_explanation` の `additional_files` を使った多言語同期で
+     1 PR
+
+Phase A は最初、B → C → D は順序依存、E と F は B 以降ならいつでも。
 
 ---
 
@@ -399,7 +447,8 @@ surface**」（CLAUDE.md §13）。本 RFC は verification surface を一切
   `claude/fix-chat-context-issue-oi3dk`）
 - 影響範囲調査：`./research.md`
 - 既存 `edit_docs_only` description: `src/tools/descriptions.ts:745-805`
+- 既存 `edit_cosmetic` description: `src/tools/descriptions.ts:67-` 周辺
 - 既存 `edit_policy_change` description: `src/tools/descriptions.ts:687-743`
-- SPEC Article 4: `docs/SPEC.md:93-160` 周辺
+- SPEC Article 4: `docs/SPEC.md:93-160`
 - SPEC Article 7: `docs/SPEC.md:312-348`
-- CLAUDE.md §1, §3, §7, §12: `CLAUDE.md`
+- CLAUDE.md §1, §3, §7, §12

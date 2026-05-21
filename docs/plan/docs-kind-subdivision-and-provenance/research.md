@@ -1,22 +1,20 @@
-# Research — `edit_docs_only` subdivision + provenance declaration
+# Research — `edit_docs_only` 解体 + workflow-axis kinds + epistemic provenance
 
-Status: **DRAFT** (not approved). This document records the impact-scope
-survey for the RFC at `./rfc.md`. Read the RFC first for motivation;
-this file is the dependency map.
+Status: **DRAFT** (not approved). 同フォルダの `rfc.md` の影響範囲調査。
+壁打ちでの方向転換（パス軸 → workflow 軸、provenance を impl 16本にも展開、
+5 値 epistemic ladder）を反映済み。
 
 ---
 
 ## 1. Motivating problem (one-paragraph recap)
 
-過去チャットが残す `IMPLEMENTATION-LOG.md` / `OBSERVED-FAILURES.md`
-/ `issues/**` / `README.md` などの成果物は、新チャットからは
-「ただ存在するファイル = ユーザー承認済みの決定」に見えてしまう。
-実際には「途中の作業メモ」「仮置き」「根拠なし推論」が混じっている
-のに、その epistemic status がファイルにも edit log にも残らない。
-`edit_docs_only` が docs 全体を1ツールで担っているため、ツール
-description で kind ごとに鋭い注意喚起ができないのも一因。
-
-詳細は `rfc.md` §1 を参照。
+過去チャットが残す `IMPLEMENTATION-LOG.md` / `OBSERVED-FAILURES.md` /
+`issues/**` / コード内コメント等が、新チャットからは「ただ存在する
+ファイル = ユーザー承認済みの決定」に見えてしまう。実際には「途中の
+作業メモ」「仮置きの推論」「未検証の仮説」が混じっているのに、その
+epistemic 出所がファイルにも edit log にも残らない。`edit_docs_only`
+が doc 全般を 1 ツールでカバーしているため kind ごとの description
+チューニングも効きが弱い。詳細は `rfc.md` §1。
 
 ---
 
@@ -24,86 +22,134 @@ description で kind ごとに鋭い注意喚起ができないのも一因。
 
 ### 2.1 Tool inventory (v0.5.0)
 
-合計 **17 ツール**（`src/tools/descriptions.ts:24-48`）：
+合計 **17 ツール**（`src/tools/descriptions.ts:24-48`）。
 
-- 15 SQLite-derived impl tools（`edit_boundary_condition` 〜
-  `edit_policy_change`）
-- 1 cosmetic tool（`edit_cosmetic`）
-- 1 workflow tool（`edit_docs_only`）
+- 15 SQLite-derived impl tools
+- 1 cosmetic（`edit_cosmetic`）
+- 1 workflow（`edit_docs_only`）
 
-impl 16 本（15 + cosmetic）は `target: "prod" | "test"` 必須、
-`edit_docs_only` は `target` 持たず、`additional_files`（複数ファイル
-同時宣言）受理可。
+impl 16 本（15 + cosmetic）は `target: "prod" | "test"` 必須。
+`edit_docs_only` は `target` 持たず、`additional_files` 受理可。
 
-### 2.2 `edit_docs_only` の現在のスコープ
+### 2.2 Provenance 既存類似フィールド
 
-`src/tools/descriptions.ts:745-805` の description より：
+現状の declaration は `rationale` / `target` / `test_files` /
+（workflow のみ）`additional_files`。**epistemic 出所の宣言は存在
+しない**。`rationale` はあるが「なぜその変更か」の自由記述で、
+「その判断の根拠タイプ」を強制する欄ではない。
 
-- Markdown 全般（README, docs/, *.md）
-- インラインコメント、JSDoc / docstring / Rustdoc（既存 API の文書化）
-- CHANGELOG, リリースノート, contribution guides
-- メタドキュメント（ROADMAP, post-mortems, dogfood reports）
-- 新規作成された空 Markdown（`issues/*.md`, ADR, design doc など）
+### 2.3 `edit_docs_only` のスコープ
 
-明示的に **除外**：
-- 実行コード、テストコード、build/CI/meta-edit 設定
-- API contract（コードに紐づくもの）
-- まだ出荷していない機能を README で謳う
-- リリースしていないバージョンの CHANGELOG 追加
-- コンパイル/実行できないコード例
-- 複数の独立な doc surface を1宣言にまとめる
+`src/tools/descriptions.ts:745-805` の description より：Markdown 全般、
+コメント、JSDoc/docstring、CHANGELOG、メタドキュメント、新規 issue
+ファイルの内容 fill。明示的除外：実コード、テスト、build/CI 設定、
+API contract、未出荷機能の README 記述、未リリース CHANGELOG。
 
-### 2.3 `edit_policy_change` のスコープ（既存の "spec change" ツール）
+### 2.4 `edit_cosmetic` のスコープ
 
-`src/tools/descriptions.ts:687-743` より：
+`src/tools/descriptions.ts:67-` の description より：
 
-- `.claude/` 設定
-- `.github/workflows/` のうち meta-edit に影響するもの
-- AI 指示ファイル（`CLAUDE.md`, `AGENTS.md`, `.cursor/rules` 等）
-- `edit_*` ツール description 自体
-- 引数スキーマ、hook 挙動
-- package manifest のうち build/release プロファイルに関わる箇所
+- whitespace 調整
+- コメント編集（typo 修正、言い換え、追加、削除）
+- formatter 出力
 
-これにより、**`SPEC.md` / `CLAUDE.md` の変更は既に
-`edit_policy_change` の管轄**。本 RFC の細分化対象は「spec/policy を
-除く残りの docs 面」に絞られる。
+本 RFC は **コメント編集を `edit_cosmetic` から剥がす**（whitespace
++ formatter only に narrow）。新規・情報変化を伴うコメントは
+workflow 軸（`edit_observation` / `edit_explanation` / `edit_proposal`
+のいずれか）。情報を変えない typo 修正 / 言い換えのみ cosmetic に残す
+（後述、§3.4）。
+
+### 2.5 `edit_policy_change` のスコープ（参考）
+
+`src/tools/descriptions.ts:687-743`。`.claude/`, `.github/workflows/`,
+AI 指示ファイル（CLAUDE.md 等）, `edit_*` の description / schema /
+hook 挙動, build/release プロファイル。本 RFC では **触らない**
+（governance 面は引き続き policy_change の管轄）。
 
 ---
 
 ## 3. Code impact map
 
-### 3.1 Core tool plumbing（必修）
+### 3.1 Core plumbing (必修)
 
-| File | Lines (approx) | What changes |
+| File | What changes |
+|---|---|
+| `src/tools/descriptions.ts` | `TOOL_NAMES` 更新（17 → 21）：`edit_docs_only` 削除、`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` 追加。`TOOLS_REQUIRING_TEST_FILES` の除外集合更新（5 新 kind 全部除外）。`TOOLS_REQUIRING_TARGET` の除外集合更新（5 新 kind を除外）。`TOOL_DESCRIPTIONS` に新 5 件追加、`edit_docs_only` を削除。`edit_cosmetic` の description を narrow（コメント条項を削除）。impl 16 本の description に provenance guidance を追記 |
+| `src/tools/common.ts` | `TOOLS_ACCEPTING_ADDITIONAL_FILES` を見直し（後述 §3.3）。`EditToolRequestSchema` に `provenance` 必須フィールド追加（全 21 ツール対象）。`ProvenanceSchema = z.enum(["user_confirmed", "accepted_artifact", "direct_observation", "inference", "speculation"])`。`validateRequest` に provenance 必須化 + kind×provenance 無効組み合わせ検査 + `accepted_artifact` 選択時の rationale 内 artifact citation チェック（後述）追加 |
+| `src/tools/registry.ts` | JSON Schema に `provenance` を全 tool 追加。workflow-tool 判定（現状 `edit_docs_only` 決め打ち）を `TOOLS_ACCEPTING_ADDITIONAL_FILES` 由来に差し替え |
+| `src/tools/apply.ts` | provenance に応じたファイル内マーカー注入（3 段階：none / light / strong）。`edit_docs_only` 名前決め打ちの分岐を廃止 |
+| `src/state/edit-log.ts` | log エントリに `provenance` 追加（既存読み出しは optional として後方互換） |
+
+**重要：パス matcher は持たない**。AI の宣言のみで kind を確定する。
+プロジェクトごとにファイル配置が変わるためサーバ側で
+「`README.md` だから `edit_explanation`」のような検証はしない。
+
+### 3.2 `accepted_artifact` の citation チェック
+
+`provenance: "accepted_artifact"` を選んだとき、`rationale` 内に少な
+くとも 1 件の参照（例：`SPEC.md §4`, `ADR-007`, `issues/031-...`,
+URL）が含まれることを軽い構文チェックで要求。何が "artifact 参照"
+かはゆるく定義（`§`, `ADR-`, `issues/`, `RFC-`, URL パターン等）。
+不在なら warn（reject ではない、AI 申告の honesty 寄り）。
+
+### 3.3 `additional_files` の受理 kind
+
+現状：`edit_docs_only` のみ。
+
+本 RFC：**5 新 kind のうち実用上 batch が必要なものに絞る**。候補：
+
+- `edit_explanation` — 多言語 README 同期、docs/ 一括更新で batch が
+  自然
+- `edit_decision` — リリース時の CHANGELOG + tag メタ + plugin.json
+  bump が定型
+- `edit_progress` / `edit_observation` / `edit_proposal` — 各セッションの
+  1 ファイル単位が自然、batch 不要
+
+`TOOLS_ACCEPTING_ADDITIONAL_FILES = ["edit_explanation", "edit_decision"]`
+案。RFC 本体で確認要。
+
+### 3.4 `edit_cosmetic` の narrow
+
+description 内 "Comment edits (typo fix, ...)" 条項を：
+
+> Comment edits that change NO information content (typo fix, line-break
+> reflow). Comments that add or change information go through the
+> workflow kind matching the comment's intent (`edit_observation` /
+> `edit_explanation` / `edit_proposal`).
+
+に置換。境界例：
+
+| 例 | 旧 | 新 |
 |---|---|---|
-| `src/tools/descriptions.ts` | 24-48, 52-64, 66+, 745-805 | `TOOL_NAMES` 配列に新 kind を追加；`TOOLS_REQUIRING_TEST_FILES` / `TOOLS_REQUIRING_TARGET` の除外集合を更新；`TOOL_DESCRIPTIONS` に新 kind ごとの description を追加（`edit_docs_only` のものは廃止 or リダイレクト案内に縮退） |
-| `src/tools/common.ts` | 41-65, 102-124, 208-370 | `TOOLS_ACCEPTING_ADDITIONAL_FILES` を新 kind のうち batch 必要なものだけに絞る（後述）；`EditToolRequestSchema` に `provenance` フィールドを追加；`validateRequest` に provenance 必須化と kind×provenance 無効組み合わせの検査を追加 |
-| `src/tools/registry.ts` | 32, 74, 78, 98-108 | JSON Schema に `provenance` を追加；新 kind ごとのスキーマ登録；workflow-tool 判定（現状 `edit_docs_only` 1件決め打ち）を `TOOLS_ACCEPTING_ADDITIONAL_FILES` 由来に変更 |
-| `src/tools/apply.ts` | 147, 173-181 | `edit_docs_only` 名前決め打ちの分岐（"the batch-friendly workflow"）を、batch 受理 kind 集合に置き換え；本 RFC が **ファイル内マーカー注入** を採用するなら、apply フェーズに marker 差し込みロジックを追加 |
-| `src/state/edit-log.ts` | 54 周辺 | log エントリに `provenance` を載せる（任意：`kind` の細分化は kind 文字列だけで足りるので不要） |
+| ` /** function does X */` 追加 | cosmetic | `edit_explanation` |
+| `// XXX breaks for N>1000` 追加 | cosmetic | `edit_observation` |
+| `// TODO: refactor` 追加 | cosmetic | `edit_proposal` |
+| `// docments` → `// documents` typo 修正 | cosmetic | cosmetic（情報不変） |
+| コメントブロック全体のインデント修正 | cosmetic | cosmetic |
+| docstring の API 例追記 | cosmetic | `edit_explanation` |
+| stale コメント削除 | cosmetic | `edit_observation`（"この情報は古いと観察した"） or stop-and-ask |
 
-### 3.2 Hooks（hint メッセージのみ）
+### 3.5 Hooks（hint メッセージ更新）
 
-`grep -n edit_docs_only` で見つかる箇所：
+| File | Action |
+|---|---|
+| `src/hooks/raw-edit-policy.ts:274, 280` | `edit_docs_only` 参照を新 5 kind のリストに置換 |
+| `src/hooks/bash-write-policy.ts:491, 1205, 1996` | 同上、複数箇所 |
 
-| File | Lines | Action |
-|---|---|---|
-| `src/hooks/raw-edit-policy.ts` | 274, 280 | hint 文の `edit_docs_only` を「文書系のいずれか」に書き換え、または新 kind 名を列挙 |
-| `src/hooks/bash-write-policy.ts` | 491, 1205, 1996 | 同上（複数箇所） |
+実装変更なし、文言のみ。
 
-実装変更なし、文言変更のみ。
+### 3.6 CLI
 
-### 3.3 CLI
+| File | Action |
+|---|---|
+| `src/cli/log-cmd.ts:16, 66` | `edit_docs_only` 名前決め打ちで target 抜き扱いしている分岐を、`TOOLS_REQUIRING_TARGET` 補集合に置換。`--provenance` フィルタ追加 |
+| `src/cli/summary-cmd.ts:94, 122` | 新 5 kind 行を追加。`edit_docs_only` を legacy bucket 表示。provenance 別の小計列を追加 |
+| `src/cli/help-cmd.test.ts:65-69` | サンプル tool 名置換 |
+| 新規: `meta-edit drafts`（または `--drafts`） | マーカー付きブロック一覧表示（`provenance ∈ {inference, speculation}` のもの） |
 
-| File | Lines | Action |
-|---|---|---|
-| `src/cli/log-cmd.ts` | 16, 66 | `edit_docs_only` 名前決め打ちで target 抜き扱いしている分岐を、`TOOLS_REQUIRING_TARGET` 補集合に置き換え |
-| `src/cli/summary-cmd.ts` | 94, 122 | 同上；新 kind 行を出力に追加；`edit_policy_change` のような「常時表示」を新 kind にも適用するか要検討 |
-| `src/cli/help-cmd.test.ts` | 65-69 | サンプル tool 名の置き換え |
+### 3.7 Tests
 
-### 3.4 Tests（既存テストの修正範囲）
-
-直接 `edit_docs_only` を参照するテスト：
+直接 `edit_docs_only` を参照するテスト（v0.5 時点）：
 
 ```
 src/tools/registry.test.ts (5 箇所)
@@ -113,114 +159,129 @@ src/tools/descriptions.test.ts (1 箇所)
 src/cli/summary-cmd.test.ts (3 箇所)
 src/cli/log-cmd.test.ts (2 箇所)
 src/cli/help-cmd.test.ts (1 箇所)
-src/test-helpers.ts (1 箇所、fixture 名)
-src/hooks/bash-write-policy.test.ts (1 箇所、無関係の grep 例)
+src/test-helpers.ts (1 箇所, fixture 名)
+src/hooks/bash-write-policy.test.ts (1 箇所, 無関係の grep 例)
 ```
 
-**追加で必要なテスト**：
-- 新 kind の登録／description verbatim 同期
-- `provenance` 必須化／値域
-- 無効組み合わせ（`changelog + speculation` 等）の rejection
-- レガシー `edit_docs_only` エントリが旧ログから読めること（後方互換）
-- 新 kind ごとの fixture（共通の prod/test 切り分けは不要：docs 系は target なし）
+追加テスト：
 
-### 3.5 External documentation surfaces
+- 新 5 kind の登録 / description verbatim 同期
+- `provenance` 必須化 / enum 値域
+- 無効組み合わせ rejection（`edit_decision + inference`, `edit_decision + speculation`, `edit_explanation + speculation`）
+- `accepted_artifact + rationale-no-citation` の warn
+- マーカー注入の 3 段階動作（none / light / strong）
+- `edit_cosmetic` で情報変化を伴うコメント追加が reject されること（既存「stop and ask」の延長）
+- レガシー `edit_docs_only` エントリが log/summary CLI で legacy bucket に集計されること
+- impl 16 本での provenance 受理（reject 組み合わせなし、すべて warn + marker）
+
+### 3.8 External documentation surfaces
 
 | File | What |
 |---|---|
-| `docs/SPEC.md` Article 4 (line 93-) | "seventeen tools" → 新カウント；workflow tool の段落書き直し；新 kind の動機を追加 |
-| `docs/SPEC.md` §4 (line 1329-) | `edit_docs_only` description を新 kind 群に置き換え |
-| `docs/SPEC.md` §6 周辺 (line 1520, 1592) | summary 例の更新、target ルールの記述更新 |
-| `CLAUDE.md` §1 (tool 一覧), §3 (in-scope), §12 (invariants) | "seventeen" / "Eighteen tools + ..." 記述の更新 |
-| `README.md`, `README.ja.md`, `README.zh-CN.md` | tool 一覧と本文中のカウント |
-| `site/index.html` (lines 233, 253, 282, 625, 744, 864) | カウントと tool 一覧；引用文中の "edit_docs_only" は歴史的経緯として残してよいが文脈注記が要る |
-| `.claude-plugin/plugin.json` | `description` 中の "seventeen" |
-| `.claude-plugin/marketplace.json` | 同上（要確認） |
+| `docs/SPEC.md` Article 4 (line 93-160) | "seventeen tools" → "twenty-one"; "1 workflow tool" → "5 workflow tools"; 軸の説明を path 軸 → workflow 軸に書き直し |
+| `docs/SPEC.md` §4 (line 1329-) | `edit_docs_only` description を新 5 件に置換 |
+| `docs/SPEC.md` §3 (schema 周辺, line 407-490 周辺) | `provenance` フィールドの constitutional 記述追加 |
+| `docs/SPEC.md` §6 (log/summary 周辺, line 1520, 1592) | provenance 集計、legacy bucket、summary 例の更新 |
+| `CLAUDE.md` §1, §3, §12 | 17 → 21、新 kind 一覧、provenance への言及追加 |
+| `README.md` / `README.ja.md` / `README.zh-CN.md` | tool 一覧、本文中のカウント、`edit_docs_only` 言及の更新 |
+| `site/index.html` (lines 233, 253, 282, 625, 744, 864) | カウントと tool 一覧。引用文中の歴史的 "edit_docs_only" は文脈注記付きで残す |
+| `.claude-plugin/plugin.json` `description` | "seventeen" 更新 |
+| `.claude-plugin/marketplace.json` | 同上 |
 
-### 3.6 何も変えなくてよい箇所
+### 3.9 何も変えなくてよい箇所
 
-- `src/state/grants.ts` 等のトークン管理：tool 名に依存しない
-- `src/hooks/hook-runtime.ts`：tool 名に依存しない
-- patch 適用ロジックそのもの（jsdiff 周り）
-- 既存 `edits.jsonl` のスキーマ（`provenance` は optional 追加）
+- `src/state/grants.ts`：tool 名に非依存
+- `src/hooks/hook-runtime.ts`：tool 名に非依存
+- patch 適用ロジック本体（jsdiff 周り）
+- 既存 `edits.jsonl` のスキーマ（`provenance` は optional 追加で旧
+  エントリは valid のまま）
+- `edit_policy_change` の description / 挙動
 
 ---
 
 ## 4. Constitutional impact (Article 7 / CLAUDE.md §3, §7)
 
-### 4.1 これは "detection" ではない（と整理可能）
+### 4.1 これは detection ではない
 
-CLAUDE.md §3 と SPEC.md Article 7 が禁じているのは：
+| 要素 | Detection? | 既存類似機構 |
+|---|---|---|
+| 5 workflow kind 追加 | No（type 軸の解像度上昇） | 既存 17 kind の延長 |
+| `provenance` 必須化（21 全部） | No（宣言フィールド追加） | `target`, `rationale`, `test_files` |
+| 無効組み合わせ reject | No（宣言間の組み合わせ規則） | `target="test"` + non-empty `test_files` reject と同型 |
+| `accepted_artifact` citation 軽チェック | **境界**：文字列パターン照合のみ。「artifact が実在するか」「内容が宣言と整合か」は検証しない。warn のみ、reject しない | 既存 path-safety と同種の構文 lint |
+| ファイル内マーカー注入 | No（apply 時の文字列連結） | 既存になし、新規メカニズム |
+| パス matcher | **持たない**（採用しない） | — |
 
-- Diff classification（パッチ内容を見て kind を検証）
-- 宣言と実態のミスマッチ検出
-- test_files の意味解析、coverage gate, mutation testing
-- regression verification
-- PASS/WARN/BLOCK gate
+diff 内容は読まない、宣言と実態の照合はしない。
 
-本 RFC が追加するのは：
+### 4.2 bet の信号は強まる
 
-- **宣言フィールドの追加**（既存 `target`, `rationale`, `test_files`
-  と同種の declarative obligation）
-- **kind の細分化**（既存 17 ツールの "kind" 軸の解像度を上げる）
-- **ファイル内マーカーの注入**（apply 時の文字列連結；パッチ内容
-  検証ではない）
+`description` を 17 → 21 本に増やし、impl 側にも provenance を付けて
+「epistemic source の宣言を強制する surface」を新設する。これは
+verification surface ではなく **description surface の拡張**。bet
+（descriptions だけで AI 行動が変わる）をより厳しい条件で試す。
 
-いずれも diff を読まない・宣言と実態の照合をしない。Article 7 の
-constitutional-amendment bar の論点は「実験信号（descriptions だけで
-AI 行動が変わるか）を保つか」であり、本 RFC は **より細かい
-description 群でその仮説をより鋭く試す** 方向なので、信号を弱めない
-（むしろ強める）と論じられる。
+### 4.3 "seventeen tools" の見出し変更
 
-### 4.2 "seventeen" の崩壊
+21 ツール（15 SQLite + 1 cosmetic + 5 workflow）になる。SPEC.md
+Article 4 / CLAUDE.md §1, §12 の書き換えが要る。比率の哲学（impl が
+dominate、workflow / cosmetic は周辺）は維持。
 
-`SPEC.md` Article 4 は "seventeen tools (15 SQLite + edit_cosmetic +
-1 workflow)" と謳う。本 RFC は workflow tool を 1 → N（5〜6）に拡張
-するため、見出しと記述を書き換える必要がある。これは
-constitutional amendment レベル（=ユーザー明示承認が要る）。
+### 4.4 自己申告 honesty 問題
 
-### 4.3 自己申告の honesty 問題
+provenance 5 値はすべて AI 自己申告。検出器は禁止なので、description
+チューニングのみで戦う。リスク要因：
 
-`provenance: "user_approved"` を AI が虚偽申告する誘惑は構造的に
-存在する。検出器を入れる選択肢は Article 7 で封じられているため、
-**摩擦を上げる description チューニング** で対処する以外の手段は
-持たない。これは meta-edit 全体の "bet" と整合的なリスクであり、
-RFC で新規に生じるリスクではないが、評価対象に追加すべき。
+- `user_confirmed` 虚偽申告：「ユーザーが言ったような気がする」
+  → description で「直前のユーザー発話の引用なしに選ぶな」を強調
+- `accepted_artifact` 虚偽申告：存在しない artifact を引用
+  → citation 軽チェックで形式的存在は確認、内容整合は AI 任せ
+- `direct_observation` 虚偽申告：観察していないことを観察と書く
+  → description で「観察ログ / コマンド出力 / 読んだコード行を
+  rationale に書け」obligation
+
+これは meta-edit 全体の bet と整合的なリスクで、本 RFC が新規 raise
+するわけではない。
 
 ---
 
 ## 5. Migration & rollout considerations
 
-### 5.1 Edit log backward compatibility
+### 5.1 Edit log 後方互換
 
-既存の `kind: "edit_docs_only"` を持つ jsonl 行は新コードでも読める
-必要がある（summary, log コマンド）。`summary-cmd.ts` の現在の
-パターン（v0.5 で `edit_policy_change` の常時表示 + pre-v0.5 legacy
-bucket を持つ）を踏襲し、`edit_docs_only` を legacy bucket として
-残すのが既存実装の素直な拡張。
+既存 `kind: "edit_docs_only"` の jsonl 行は legacy bucket として
+summary / log で見える形に。`provenance` フィールドが無いエントリは
+optional として受理（読み出し時は `provenance: null` として表示、
+集計対象外）。
 
-### 5.2 dist/ の再ビルド
+### 5.2 dist/ 再ビルド
 
-`dist/` は `.gitignore` ではなくコミット対象（リリース成果物が
-plugin として参照される）。RFC 実装フェーズでは `bun run build` 後の
-`dist/` 差分も `edit_policy_change` または別途 `edit_docs_only` 系で
-landing する必要がある。
+`dist/` はコミット対象。RFC 実装フェーズで再ビルド成果物が
+landing 必要。`edit_policy_change` または `edit_decision` 経由
+（"バージョン bump と dist 再生成を決定" として）。
 
 ### 5.3 リリースバージョン
 
-tool surface の追加は minor bump（0.5.x → 0.6.0）が妥当。本 RFC は
-implementation を伴わない（spec proposal のみ）ので、本 RFC のマージ
-ではバージョンは動かさない。
+tool surface 追加 + 既存 surface 廃止（`edit_docs_only`）は major bump
+相当だが、v0.x の運用上は minor bump（0.5.x → 0.6.0）で十分。本 RFC
+マージ自体ではバージョンは動かさない（実装 PR で bump）。
+
+### 5.4 impl 16 本への provenance 展開の影響
+
+既存の test fixture / 呼び出し例で provenance を埋める必要あり。
+default を許さない方針（user 確認済み）なので、test 全件に
+`provenance: <値>` を埋める作業が要る。テスト fixture では
+`direct_observation`（プログラム的に出した値の記録）が typical。
 
 ---
 
 ## 6. Out-of-scope for this RFC
 
-明示的に **本 RFC では扱わない**：
-
-- impl 16 ツールへの provenance 適用（壁打ち中で議論あり；別 RFC へ）
-- ファイル内マーカーの具体的テキスト（kind ごとの文言は別途 RFC
-  本体 §5 のサンプルが起点；実装フェーズで精緻化）
-- 新セッション開始時に edit log を overlay 参照する CLAUDE.md 改訂
-  （RFC 本体 §6 の "option b" — kind 細分化と独立に評価できる）
+- 新セッション boot 時に edit log overlay を読む CLAUDE.md 改訂
+  （マーカー方式採用により不要だが、補助として将来導入する余地は
+  残す。本 RFC では追わない）
+- 既存 jsonl への provenance backfill（後方互換で旧データは null
+  のまま受理）
 - meta-edit 以外の文書サーフェス（外部 wiki, Slack 等）への波及
+- `edit_policy_change` への provenance 適用（governance 面は別軸の
+  検討が必要、別 RFC へ）
