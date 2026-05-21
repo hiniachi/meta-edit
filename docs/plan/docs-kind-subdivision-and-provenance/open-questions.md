@@ -23,70 +23,99 @@ Status: **DRAFT**. RFC §6 の残 4 件を深掘り。`rfc.md` 本体を膨ら�
 ユーザー指摘：**issue を大量に書くシナリオの friction が高そう** →
 `edit_proposal` も batch 受理すべきでは。
 
-### Use case × kind マトリクス（declaration 数）
+### 設計判断マトリクス：kind × provenance で batch 需要を評価
 
-セル = 想定 declaration 数（batch なしの場合）。`✓` は batch なしで
-十分、`!` は batch あれば便利、`!!` は batch がないと friction 顕著。
+セル = その (kind, provenance) 組み合わせで **batch シナリオが定型
+的に発生するか**。
 
-| Use case ↓ \ Kind → | edit_progress | edit_observation | edit_proposal | edit_decision | edit_explanation |
+凡例：
+- **○** = batch が定型的・反復的に発生（friction 大、受理の正当性
+  あり）
+- **△** = batch があれば便利だが頻度低、または theme が弱い
+- **—** = batch シナリオが構造的に無い、または kind×prov 自体が
+  reject される組み合わせ（§3.3 マトリクス参照）
+
+| kind \ prov | user_confirmed | accepted_artifact | direct_observation | inference | speculation |
 |---|:---:|:---:|:---:|:---:|:---:|
-| 1 ファイル単発 | 1 ✓ | 1 ✓ | 1 ✓ | 1 ✓ | 1 ✓ |
-| 2-3 関連ファイル同時 | 2 ✓ | 2-3 ! | 2 !（RFC: research+rfc） | 3-4 **!!**（release commit） | 3-5 **!!**（多言語 README） |
-| 5-10 関連ファイル一括 | rare | rare | 5-10 **!!**（issue burst, audit findings） | rare | 5-10 **!!**（docs sweep） |
-| ≥10（大規模 batch） | rare | あり得る（audit 集約） | あり得る（triage day） | rare | あり得る（大規模 docs リライト） |
+| `edit_progress` | — | — | — | — | — |
+| `edit_observation` | — | △ | △<br>(audit findings) | △<br>(§3.3 warn) | △ |
+| `edit_proposal` | △<br>(user 指示 triage) | **○**<br>(audit から起票 batch) | △ | △ | **○**<br>(feature kickoff issue burst) |
+| `edit_decision` | **○**<br>(release commit) | **○**<br>(spec ベース多面展開) | △ | —<br>(§3.3 reject) | —<br>(§3.3 reject) |
+| `edit_explanation` | **○**<br>(user 指示で多言語同期) | **○**<br>(spec ベース docs sweep) | **○**<br>(実装と doc 同期 batch) | △<br>(§3.3 warn) | —<br>(§3.3 reject) |
 
-### Kind ごとの受理判断（マトリクス）
+### マトリクスからの受理判断
 
-| Kind | 受理 | 確度 | 主な根拠 | 反対論 |
-|---|:---:|:---:|---|---|
-| `edit_progress` | **reject** | 高 | 1 セッション 1 進捗 entry が原則、batch シナリオが構造的に無い | — |
-| `edit_observation` | **reject** | 中 | 観察は個別の cognitive unit、別 declaration が audit 健全。ただし audit findings の集約 batch では friction あり | audit / code review で 10件 観察を一気に記録するシーンの friction（v0.7 で再検討余地） |
-| `edit_proposal` | **accept** | 中 | issue burst（feature 立ち上げ時の 5-10件起票）、triage day の friction が大きい。「Issues とか大量に書くの摩擦大きそう」という user 観察と整合 | 各 issue は通常独立した cognitive unit。bundle すると rationale が薄まる → description で **theme obligation**（"all bound proposals must share a common originating theme or audit"）を明示して対応 |
-| `edit_decision` | **accept** | 高 | release commit（CHANGELOG + version + plugin.json + tag-related）の定型 batch。ADR + 関連 spec 状態更新の連動 | — |
-| `edit_explanation` | **accept** | 高 | 多言語 README 同期、docs/ 配下の関連ページ一括更新が定型。既存 `edit_docs_only` の主要動機 | — |
+**ルール**：kind 行に ○ が 1 つ以上あれば accept、△ のみまたは — のみなら reject。
 
-### 検討した代替案
+| kind | ○ の数 | 受理 | 確度 | 主たる ○ シナリオ |
+|---|:---:|:---:|:---:|---|
+| `edit_progress` | 0 | **reject** | 高 | — |
+| `edit_observation` | 0 | **reject** | 中 | （v0.7 で再評価、audit findings 集約の friction を観察） |
+| `edit_proposal` | 2 | **accept** | 中 | accepted_artifact 列：audit から起点が明確な issue 一括起票<br>speculation 列：feature kickoff の探索的 issue burst |
+| `edit_decision` | 2 | **accept** | 高 | user_confirmed 列：release commit batch<br>accepted_artifact 列：spec で決まった事項を複数 file に転記 |
+| `edit_explanation` | 3 | **accept** | 高 | accepted_artifact 列：spec ベースで docs sweep（既存 `edit_docs_only` の主要動機）<br>user_confirmed 列：多言語 README 同期<br>direct_observation 列：実装と doc の同期 batch |
 
-**(a) 5 kind 全てに付与** — 念のため。`edit_progress` で batch する
-意味が構造的にないので、abuse 温床になる。却下。
+### `edit_proposal` の確度が中である理由
 
-**(b) `edit_explanation` + `edit_decision` のみ**（前推し） — sweep
-性が明確な 2 kind のみ。`edit_proposal` の friction を取りこぼす。
+○ が 2 つあるが、それぞれ theme の強さが違う：
 
-**(c) `edit_explanation` + `edit_decision` + `edit_proposal`**（新推し） —
-ユーザー指摘の friction を取り込む。`edit_proposal` には theme
-obligation を description で課して abuse を抑える。
+- **accepted_artifact + batch**（audit 起票）：audit document
+  自体が theme として強固。rationale で `audit: docs/audit/2026-...md`
+  を引用すれば各 issue が同じ origin から派生していることが明確。
+  abuse しにくい。
+- **speculation + batch**（feature kickoff）：theme は「feature X
+  立ち上げ」と AI 申告に依存。「同じ feature の探索」は明確に
+  読めるが、AI が無関係な思いつきを bundle するリスクは構造的に
+  ある。
 
-**(d) (c) + `edit_observation`** — audit findings batch も拾う。
-ただし観察を batch する shame シナリオは frequency 低く、現時点で
-正当化が弱い。observation 不足 → v0.7 で観察結果を見て再評価
-する余地を残す。
+→ description で **theme obligation** を明示する必要あり（後述）。
+そのため確度は中。
 
 ### 副次論点
 
-- **cardinality cap**: 既存 32 を踏襲。`edit_proposal` の issue burst
-  も 32 で覆える（10件超は稀）。
-- **theme obligation の文言**（`edit_proposal` description 末尾）：
-  「`additional_files` を使う場合、bound files all relate to a
-  single originating theme (e.g., 'audit results from session
-  YYYY-MM-DD', 'feature X kickoff'). Filing unrelated proposals in
-  one batch breaks the per-proposal audit trail; submit each as its
-  own declaration instead.」
-- **edit_decision との provenance 整合性**: release batch では
-  `provenance: user_confirmed`（リリースを user が決定した）が典型。
-  description で誘導。
-- **edit_proposal の typical provenance との関係**: `speculation`
-  が典型なので、batch declaration での全件が speculation でも問題
-  ない。theme は「同じ origin から派生した一連の仮説」として正当化
-  される。
+- **cardinality cap**: 既存 32 を踏襲。最大 use case の `edit_proposal`
+  issue burst も 10-20 件で収まる想定、32 は余裕。
+- **theme obligation の文言**（`edit_proposal` description 末尾候補）：
+  > 「`additional_files` を使う場合、bound files all relate to a
+  > single originating theme. Acceptable themes: a referenced audit
+  > document, a feature kickoff name, a triage session date.
+  > `rationale` MUST name the theme explicitly. Filing unrelated
+  > proposals in one batch breaks the per-proposal audit trail;
+  > submit each as its own declaration instead.」
+- **`edit_observation` 列の △ をどう扱うか**:
+  - 現状 reject だが、audit findings 集約（"`OBSERVED-FAILURES.md`
+    に 5件 一括追記" 等）はあり得る
+  - 実装後 6ヶ月程度の運用で friction が観察されたら v0.7 で accept
+    化
+  - 現時点で accept すると `edit_proposal` と同じく theme obligation
+    が要り、追加判断が増える。先送りが妥当
+- **provenance × additional_files の整合検査**:
+  - batch declaration では全 binding が **同じ provenance** であること
+    が semantics 上自然
+  - 例：`accepted_artifact` で audit 由来 batch なら 5 件全部が同
+    audit 由来であるべき
+  - サーバ側で強制せずとも、宣言が単一 provenance フィールドなので
+    自動的にそうなる（kind 同様、provenance も 1 declaration 1 値）
+
+### 検討した代替案（マトリクス由来）
+
+| 案 | accept する kind | コメント |
+|---|---|---|
+| (a) 全 5 kind | progress, observation, proposal, decision, explanation | progress に ○ が無く正当化弱い、abuse 温床 |
+| (b) ○ が 2 以上の kind のみ | proposal, decision, explanation | **推し**。マトリクスのルールと一致 |
+| (c) ○ が 3 の kind のみ | explanation のみ | decision の release batch friction を取りこぼす |
+| (d) (b) + observation | proposal, decision, explanation, observation | △ を ○ に格上げ。先取り過ぎ、v0.7 余地として残す方が安全 |
 
 ### 推し（再掲）
 
-**(c) `edit_explanation` + `edit_decision` + `edit_proposal`**。
-確度：explanation/decision は **高**、proposal は **中**
-（theme obligation の効きが運用観察で要 verification）。
+**(b) `edit_explanation` + `edit_decision` + `edit_proposal`**。
+マトリクスの ○ 数ルールと一致。
 
-`edit_observation` を入れる v0.7 余地は残す（観察結果次第）。
+確度：
+- explanation, decision = **高**（複数の ○ が異なる provenance で
+  分散しており、batch 需要が一方向に偏らない）
+- proposal = **中**（speculation 列の theme obligation が運用観察で
+  要 verification）
 
 ---
 
