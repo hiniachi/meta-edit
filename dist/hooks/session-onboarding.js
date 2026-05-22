@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -44,7 +43,6 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/hooks/session-onboarding.ts
 import * as fs4 from "node:fs";
@@ -98,6 +96,34 @@ function replyAllowWithWarning(reason) {
   process.stderr.write(`[meta-edit] ${reason}
 `);
   return 0;
+}
+
+// src/hooks/onboarding-message.ts
+function buildOnboardingMessage() {
+  return [
+    "meta-edit reminder:",
+    "",
+    "I should not edit first and classify later.",
+    "",
+    "Before changing repository files, I should choose the typed edit tool",
+    "that matches the intent of the change. The tool choice is part of the",
+    "reasoning step, not just ceremony.",
+    "",
+    "If a direct edit or shell write would skip that declaration, I should",
+    "stop and make the declaration first.",
+    "",
+    "---",
+    "",
+    "meta-edit MCP server is registered for this project. New session detected.",
+    "",
+    "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
+    "Skill tool to load the twenty-one-tool catalog and selection heuristic.",
+    "Empty file creation is free (no MCP declaration); content fills go through",
+    "the appropriate edit_<TYPE> tool against the now-empty file. Use ToolSearch",
+    "with `select:mcp__plugin_meta-edit_meta-edit__edit_<name>` to load any",
+    "tool's schema on demand."
+  ].join(`
+`);
 }
 
 // src/utils/repo-paths.ts
@@ -324,32 +350,6 @@ function claimOnboardingMarker(markerPath, sessionId) {
     return false;
   }
 }
-function buildOnboardingMessage() {
-  return [
-    "meta-edit reminder:",
-    "",
-    "I should not edit first and classify later.",
-    "",
-    "Before changing repository files, I should choose the typed edit tool",
-    "that matches the intent of the change. The tool choice is part of the",
-    "reasoning step, not just ceremony.",
-    "",
-    "If a direct edit or shell write would skip that declaration, I should",
-    "stop and make the declaration first.",
-    "",
-    "---",
-    "",
-    "meta-edit MCP server is registered for this project. New session detected.",
-    "",
-    "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
-    "Skill tool to load the twenty-one-tool catalog and selection heuristic.",
-    "Empty file creation is free (no MCP declaration); content fills go through",
-    "the appropriate edit_<TYPE> tool against the now-empty file. Use ToolSearch",
-    "with `select:mcp__plugin_meta-edit_meta-edit__edit_<name>` to load any",
-    "tool's schema on demand."
-  ].join(`
-`);
-}
 async function main() {
   const event = await readStdin();
   const sessionId = typeof event.session_id === "string" && event.session_id.length > 0 ? event.session_id : null;
@@ -370,15 +370,10 @@ async function main() {
   process.stdout.write(JSON.stringify(payload));
   return 0;
 }
-if (__require.main == __require.module) {
-  main().then((code) => process.exit(code), (err) => {
-    process.stderr.write(`session-onboarding hook crashed: ${err.message}
+main().then((code) => process.exit(code), (err) => {
+  process.stderr.write(`session-onboarding hook crashed: ${err.message}
 `);
-    process.exit(0);
-  });
-}
-export {
-  buildOnboardingMessage
-};
+  process.exit(0);
+});
 
-//# debugId=2CC33355503C433664756E2164756E21
+//# debugId=D8920D1DBE0817A364756E2164756E21

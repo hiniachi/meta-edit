@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -43,7 +42,6 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS((exports) => {
@@ -19169,7 +19167,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.6.0",
+  version: "0.6.1",
   description: "MCP server with twenty-one kind-specific edit tools (15 SQLite-derived + edit_cosmetic + 5 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19285,4 +19283,4 @@ export {
   createServer
 };
 
-//# debugId=756335F3DCC6C90C64756E2164756E21
+//# debugId=F3632B5C68B0A7A864756E2164756E21

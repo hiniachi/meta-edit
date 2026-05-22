@@ -22,6 +22,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readStdin, replyAllow } from "./hook-runtime.js";
+import { buildOnboardingMessage } from "./onboarding-message.js";
 import { resolveRepoRoot } from "../utils/repo-paths.js";
 
 type SessionStartEvent = {
@@ -78,36 +79,6 @@ function claimOnboardingMarker(markerPath: string, sessionId: string): boolean {
   }
 }
 
-export function buildOnboardingMessage(): string {
-  // Merged template per docs/plan/reminder-style-hooks/rfc.md §7.1 +
-  // §11 Phase 2: prepend the reminder block, retain the existing
-  // typed-edit-onboarding skill pointer below. Removing the skill
-  // pointer would regress onboarding guidance.
-  return [
-    "meta-edit reminder:",
-    "",
-    "I should not edit first and classify later.",
-    "",
-    "Before changing repository files, I should choose the typed edit tool",
-    "that matches the intent of the change. The tool choice is part of the",
-    "reasoning step, not just ceremony.",
-    "",
-    "If a direct edit or shell write would skip that declaration, I should",
-    "stop and make the declaration first.",
-    "",
-    "---",
-    "",
-    "meta-edit MCP server is registered for this project. New session detected.",
-    "",
-    "Before your first edit, invoke the `typed-edit-onboarding` skill via the",
-    "Skill tool to load the twenty-one-tool catalog and selection heuristic.",
-    "Empty file creation is free (no MCP declaration); content fills go through",
-    "the appropriate edit_<TYPE> tool against the now-empty file. Use ToolSearch",
-    "with `select:mcp__plugin_meta-edit_meta-edit__edit_<name>` to load any",
-    "tool's schema on demand.",
-  ].join("\n");
-}
-
 async function main(): Promise<number> {
   const event = (await readStdin()) as SessionStartEvent;
 
@@ -151,19 +122,21 @@ async function main(): Promise<number> {
   return 0;
 }
 
-// Run main() only when invoked as the entry point. This lets unit tests
-// import `buildOnboardingMessage` without triggering the readStdin() call
-// inside main(), which would otherwise hang the test runner waiting on
-// stdin that the test does not pipe.
-if (import.meta.main) {
-  main().then(
-    (code) => process.exit(code),
-    (err) => {
-      process.stderr.write(
-        `session-onboarding hook crashed: ${(err as Error).message}\n`,
-      );
-      // Fail-open: SessionStart hooks must not block session boot. Exit 0.
-      process.exit(0);
-    },
-  );
-}
+// This module is a hook script — it is only ever spawned as a process
+// entry point (registered in hooks/hooks.json), never imported. main()
+// therefore runs unconditionally. The pure message builder lives in
+// onboarding-message.ts so unit tests can import it without triggering
+// this side effect. (PR #85 Codex review: an earlier `import.meta.main`
+// guard here did not survive bundling — Bun lowers `import.meta.main`
+// to `__require.main == __require.module`, which under Node ESM is
+// `undefined == undefined` → always true, so the guard was a no-op.)
+main().then(
+  (code) => process.exit(code),
+  (err) => {
+    process.stderr.write(
+      `session-onboarding hook crashed: ${(err as Error).message}\n`,
+    );
+    // Fail-open: SessionStart hooks must not block session boot. Exit 0.
+    process.exit(0);
+  },
+);
