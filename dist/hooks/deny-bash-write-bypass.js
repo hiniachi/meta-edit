@@ -93,6 +93,16 @@ function replyAllowWithWarning(reason) {
 `);
   return 0;
 }
+function replyWithAdditionalContext(additionalContext) {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext
+    }
+  };
+  process.stdout.write(JSON.stringify(payload));
+  return 0;
+}
 
 // src/hooks/bash-write-policy.ts
 import * as path3 from "node:path";
@@ -1775,4 +1785,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=DD2FAB25C3A3D59B64756E2164756E21
+//# debugId=C93BDD9A7E2046BA64756E2164756E21

@@ -476,6 +476,9 @@ type EditToolRequest = {
 };
 
 type EditToolResult = {
+  summary?: string;                // first field in JSON results: compact
+                                  // human-readable status for collapsed
+                                  // / preview-oriented clients.
   token: string;                  // e.g. "met_20260502_a3f9b2..."
   expires_at: string;             // ISO-8601, declaration_time + 5m
   edit_id: string;                // e.g. "edit_20260502_0001"
@@ -549,14 +552,40 @@ The MCP server enforces:
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 - Legacy `edit_docs_only` (v0.5.x and earlier): write path rejects on v0.6.0 as an unknown tool; read path surfaces past entries in a dedicated `legacy:` bucket — see `meta-edit summary` and §6.
 
-Validation failures result in a rejected request with a non-empty `warnings` array and no token issued.
+Validation failures result in a rejected request with a non-empty `warnings` array and no token issued. Every typed-edit result includes a compact `summary` string as the first JSON field (for example, `edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation bindings=1` or `edit_boundary_condition rejected: src/foo.ts ...`) so clients that preview only the beginning of tool output still show the specific edit kind and target path.
+
+The `tools/list` response also supplies each tool's MCP `title` and `annotations.title`. The machine `name` remains the stable API (`edit_boundary_condition`, etc.), but display-capable clients can show a more readable title while still keeping the exact tool name visible.
 
 ### Token issuance
 
 A successful declaration produces a token bound to the set of
 `(file, before_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The server computes each `before_sha256` from disk at declaration time; agents do not supply hashes. The token expires 10 minutes after issuance — operational hygiene only; the single-use binding is the actual integrity guarantee, so the TTL is purely garbage-collection (it keeps the grants/ dir from accumulating abandoned files). The 10-minute window absorbs realistic agent thinking time between the typed_edit call and the native Edit / Write call without weakening the model (v0.3.1: extended from 5 min after dogfood report of mid-edit expiry). Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
-The result also carries a `next_action` field whenever a token is issued — a one-line reminder that the agent's next native `Edit` / `Write` / `MultiEdit` call against the bound file(s) will be authorized automatically by the deny-raw-edit hook; the agent passes no extra parameters. Per Article 4, the agent should only have to declare intent; the server takes care of the bookkeeping (and of telling the agent what comes next). On rejection, `next_action` is omitted.
+The grant file also carries optional declaration metadata (`kind`,
+`target`, `provenance`, `target_file`, `test_files`). This metadata is
+not authority — the binding tuples remain the only authorization
+surface — but it lets the hook emit kind / target / provenance-aware
+success reminders after the native write gate is passed. Older grant
+files without this metadata remain valid and consumable.
+
+The result also carries a `next_action` field whenever a token is
+issued. It first reminds the agent that the next native `Edit` /
+`Write` / `MultiEdit` call against the bound file(s) will be authorized
+automatically by the deny-raw-edit hook; the agent passes no extra
+parameters. It then appends a `meta-edit reminder:` block generated
+from the declaration's `kind`, `target`, `provenance`, and
+forward-declared `test_files`. The block is intentionally written as a
+short action cue rather than a policy lecture: kind-specific lines seed
+the next likely action (`test`, `check`, `run`, `compare`,
+`distinguish`, ...), `target: "test"` reminds the agent that a TDD red
+step should fail against current production code for the intended
+reason, and `target: "prod"` reminds the agent to run the already-
+written red test or declare the matching test edit. This is the
+strongest pre-write reminder surface: the typed edit tool result is
+read before the agent chooses the native write. Per Article 4, the
+agent should only have to declare intent; the server takes care of the
+bookkeeping (and of telling the agent what comes next). On rejection,
+`next_action` is omitted.
 
 > **v0.2.2 fix.** Earlier (v0.2.0 / v0.2.1) revisions of this spec asked the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook ever sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check server-side: the hook scans `.meta-edit/state/grants/` on disk, finds the most-recently-issued unconsumed binding matching the call's canonical `file_path`, and consumes it. The agent never thinks about tokens.
 
@@ -2028,7 +2057,9 @@ on_pre_tool_use(toolName, toolInput):
 
   grants.consume(match.grant.token_id, file_path)   # cross-process locked
   appendConsumed(edit_log, { edit_id, consuming_tool, ts })
-  return allow()
+  return no_permission_decision(
+    additionalContext=success_reminder(match.grant.declaration)
+  )
 ```
 
 `findActiveBindingForFile` scans every grant file in
@@ -2069,7 +2100,24 @@ Article 3.
 
 Read-only tools (Read, Grep, Glob, Bash without writes, ...) do not consume tokens; the agent may freely interleave them between declaration and consumption, bounded only by the token's TTL.
 
-When the hook authorizes the native write (i.e. just before returning `allow`), it appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6). The record captures hook authorization, not write completion — the actual write success is git's job to verify, and under Article 3's friendly-AI threat model, write failures after hook approval are rare and recoverable.
+When the hook authorizes the native write internally (i.e. after the grant preconditions pass), it appends a `consumed` record to `.meta-edit/state/edits.jsonl` (see §6). The record captures meta-edit grant authorization, not native write completion — the actual write success is git's job to verify, and under Article 3's friendly-AI threat model, write failures after hook approval are rare and recoverable.
+
+If the consumed grant carries declaration metadata, the hook also
+returns model-facing `additionalContext` containing a `meta-edit
+reminder:` block, but deliberately omits `permissionDecision`. This
+preserves the user's normal Claude Code permission mode: returning
+`permissionDecision: "allow"` would skip the permission prompt. The
+block is generated from the declaration's `kind`, `target`,
+`provenance`, and forward-declared tests, using the same self-reminder
+wording style as the denial / warn hooks. It also asks the agent to
+check whether the chosen kind and file scope still match the actual
+edit; if the write crossed another kind or file, the next move is a
+fresh typed declaration for that scope. This context is for the
+**next** reasoning step: Claude Code places `additionalContext`
+alongside the tool result, so it should not be treated as a chance for
+the model to reconsider the already-authorized native tool call before
+execution. The pre-write reminder remains the typed edit tool's
+`next_action` field above.
 
 Other-MCP write paths (e.g. `ctx_execute` writing to disk without going through this hook — see issue 1108) are an acknowledged hook-scope gap. Closing that gap is a future hook expansion (PostToolUse monitoring, MCP-write allowlist), not part of this hook.
 
@@ -2286,5 +2334,3 @@ meta-edit/
 Tool handlers share common logic via helpers, but each tool is registered separately under the MCP server with its own description. Per Article 4, tool selection is the cognitive intervention; the surface is not collapsed into a generic `kind`-parameterized handler.
 
 ---
-
-

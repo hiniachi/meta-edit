@@ -52,6 +52,7 @@ import {
   replyAllow,
   replyAllowWithWarning,
   replyDeny,
+  replyWithAdditionalContext,
 } from "./hook-runtime.js";
 import {
   evaluateRawEdit,
@@ -113,6 +114,9 @@ async function main(): Promise<number> {
     return replyAllowWithWarning(
       decision.reason ?? "warned by deny-raw-edit",
     );
+  }
+  if (decision.additionalContext !== undefined) {
+    return replyWithAdditionalContext(decision.additionalContext);
   }
   return replyAllow();
 }

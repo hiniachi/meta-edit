@@ -67,8 +67,13 @@ async function issueGrant(
   grants: GrantsStore,
   editId: string,
   binding: GrantBinding[],
+  declaration?: Parameters<GrantsStore["issue"]>[0]["declaration"],
 ) {
-  return grants.issue({ edit_id: editId, binding });
+  return grants.issue({
+    edit_id: editId,
+    binding,
+    ...(declaration !== undefined ? { declaration } : {}),
+  });
 }
 
 // =====================================================================
@@ -532,6 +537,52 @@ describe("evaluateTokenedEdit — happy path", () => {
       expect(entries[0].edit_id).toBe("edit_20260502_0100");
       expect(entries[0].consuming_tool).toBe("Edit");
     }
+  });
+
+  it("returns additionalContext on allow when the grant carries declaration metadata", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/api.ts", "old\n");
+
+    await issueGrant(
+      grants,
+      "edit_20260502_0111",
+      [
+        {
+          file: "src/api.ts",
+          before_sha256: sha256("old\n"),
+        },
+      ],
+      {
+        kind: "edit_api_contract",
+        target: "prod",
+        provenance: "accepted_artifact",
+        target_file: "src/api.ts",
+        test_files: ["tests/api.test.ts"],
+      },
+    );
+
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/api.ts"),
+        old_string: "old",
+        new_string: "new",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+
+    expect(r.decision).toBe("allow");
+    expect(r.additionalContext).toContain("meta-edit reminder:");
+    expect(r.additionalContext).toContain("This native write matched my edit_api_contract");
+    expect(r.additionalContext).toContain("chosen kind and file scope still match");
+    expect(r.additionalContext).toContain("edit_api_contract");
+    expect(r.additionalContext).toContain(
+      "expose the compatibility, status-code, or missing/extra-field contract",
+    );
+    expect(r.additionalContext).toContain('target="test"');
   });
 
   it("allows + consumes a Write call when before_sha256 matches disk", async () => {

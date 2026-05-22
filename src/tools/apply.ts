@@ -13,16 +13,15 @@
 import {
   TOOLS_ACCEPTING_ADDITIONAL_FILES,
   validateRequest,
-  type AuditWarning,
   type EditToolRequest,
   type EditToolResult,
-  type Provenance,
   type ToolHandler,
   type ValidatedBinding,
   type ValidationContext,
 } from "./common.js";
 import { type ToolName } from "./descriptions.js";
 import type { GrantsStore } from "../state/grants.js";
+import { buildReminderContext } from "../reminders/context.js";
 import type {
   AuditWarningEntry,
   EditLog,
@@ -94,6 +93,7 @@ async function issueOnce(
     };
     const auditError = appendRejectedSafely(log, rejected);
     return {
+      summary: rejectedSummary(toolName, args, validation.warnings.length),
       token: "",
       expires_at: "",
       edit_id: rejectId,
@@ -117,6 +117,13 @@ async function issueOnce(
         file: b.canonical,
         before_sha256: b.before_sha256,
       })),
+      declaration: {
+        kind: toolName,
+        ...(args.target !== undefined ? { target: args.target } : {}),
+        provenance: args.provenance,
+        target_file: args.target_file,
+        test_files: [...args.test_files],
+      },
     });
   } catch (e) {
     // Grant store failure is structurally distinct from validation failure:
@@ -136,6 +143,7 @@ async function issueOnce(
     };
     const auditError = appendRejectedSafely(log, rejected);
     return {
+      summary: rejectedSummary(toolName, args, 1),
       token: "",
       expires_at: "",
       edit_id: editId,
@@ -212,23 +220,24 @@ async function issueOnce(
         `re-declaration — until every bound file is consumed or the ` +
         `TTL expires.`
       : "";
-  // v0.6.0 Phase C: append a provenance-aware prose reminder when the
-  // declared provenance carries epistemic uncertainty. The reminder is
-  // phrased in self-reminder style (consistent with v0.5.1's reminder-
-  // style hooks) so the agent re-enters classification mode before the
-  // native write actually lands.
-  const provenanceReminder = nextActionProvenanceReminder(
-    args.provenance,
-    validation.auditWarnings,
-  );
+  const declarationReminder = buildReminderContext({
+    phase: "declaration_accepted",
+    kind: toolName,
+    ...(args.target !== undefined ? { target: args.target } : {}),
+    provenance: args.provenance,
+    targetFile: args.target_file,
+    declaredTestFiles: args.test_files,
+    auditWarnings: validation.auditWarnings,
+  });
   const nextAction =
     `On your next native Edit / Write / MultiEdit call against ${fileList}, ` +
     `the deny-raw-edit hook will resolve this declaration automatically (no ` +
     `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` +
     `and expires at ${grant.expires_at}.` +
     batchNote +
-    provenanceReminder;
+    `\n\n${declarationReminder}`;
   return {
+    summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,
     expires_at: grant.expires_at,
     edit_id: editId,
@@ -238,51 +247,41 @@ async function issueOnce(
   };
 }
 
-/**
- * Provenance-aware prose obligation reminder appended to next_action.
- * Phase C of the workflow-axis-kinds RFC: the typed_edit response
- * surfaces hedging language obligations for inference / speculation
- * so the agent re-enters classification mode before the native write.
- * Reminder-style wording matches v0.5.1's hook output (RFC §8 of the
- * reminder-style-hooks RFC: `meta-edit reminder:` prefix, first-person
- * framing).
- *
- * `user_confirmed` / `accepted_artifact` / `direct_observation` get no
- * extra reminder — the standard `next_action` is sufficient. Audit
- * warnings (warn cells, citation-lint miss) are summarized so the agent
- * has a chance to fix prose before writing.
- */
-function nextActionProvenanceReminder(
-  provenance: Provenance,
-  auditWarnings: AuditWarning[],
+function declaredSummary(
+  toolName: ToolName,
+  args: EditToolRequest,
+  bindingCount: number,
 ): string {
-  const lines: string[] = [];
-  if (provenance === "inference") {
-    lines.push(
-      `\n\nmeta-edit reminder: I declared provenance: inference. The reader ` +
-        `will see the prose, not the provenance field — I should frame the ` +
-        `inference explicitly in the body ("Based on observed X, it appears ` +
-        `that ...", "Likely ...", "Probably ...") so the prose itself ` +
-        `carries the uncertainty. Don't write inferences as if confirmed.`,
-    );
-  } else if (provenance === "speculation") {
-    lines.push(
-      `\n\nmeta-edit reminder: I declared provenance: speculation. The reader ` +
-        `will see the prose, not the provenance field — I should open with ` +
-        `strong hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO: ` +
-        `verify — ...") so a future session does not pick this up as a ` +
-        `decision. Don't write speculation as if confirmed.`,
-    );
-  }
-  if (auditWarnings.length > 0) {
-    const summary = auditWarnings.map((w) => `[${w.code}] ${w.message}`).join("\n  - ");
-    lines.push(
-      `\n\nmeta-edit reminder: audit warnings recorded for this declaration:\n  - ${summary}\n` +
-        `Land but consider whether the prose / rationale should be tightened ` +
-        `before the next native Edit.`,
-    );
-  }
-  return lines.join("");
+  return [
+    `${toolName} declared: ${sanitizeSummaryFragment(args.target_file)}`,
+    args.target !== undefined ? `target=${args.target}` : undefined,
+    `provenance=${args.provenance}`,
+    `bindings=${bindingCount}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" ");
+}
+
+function rejectedSummary(
+  toolName: ToolName,
+  args: EditToolRequest,
+  warningCount: number,
+): string {
+  return [
+    `${toolName} rejected: ${sanitizeSummaryFragment(args.target_file)}`,
+    args.target !== undefined ? `target=${args.target}` : undefined,
+    `provenance=${args.provenance}`,
+    `warnings=${warningCount}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" ");
+}
+
+// eslint-disable-next-line no-control-regex
+const SUMMARY_CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+
+function sanitizeSummaryFragment(value: string): string {
+  return value.replace(SUMMARY_CONTROL_CHARS_RE, "?");
 }
 
 function appendIssuedSafely(log: EditLog, entry: IssuedEntry): string | undefined {

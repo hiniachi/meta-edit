@@ -16558,6 +16558,10 @@ var TOOL_NAMES = [
   "edit_decision",
   "edit_explanation"
 ];
+var TOOL_TITLES = Object.freeze(Object.fromEntries(TOOL_NAMES.map((name) => [
+  name,
+  `${name}: ${name.replace(/^edit_/, "").replace(/_/g, " ")} declaration`
+])));
 var WORKFLOW_TOOLS = [
   "edit_progress",
   "edit_observation",
@@ -18277,8 +18281,12 @@ function registerTools(server, options) {
     return {
       tools: TOOL_NAMES.map((name) => ({
         name,
+        title: TOOL_TITLES[name],
         description: TOOL_DESCRIPTIONS[name],
-        inputSchema: inputSchemaForTool(name)
+        inputSchema: inputSchemaForTool(name),
+        annotations: {
+          title: TOOL_TITLES[name]
+        }
       }))
     };
   });
@@ -18307,6 +18315,143 @@ function registerTools(server, options) {
       content: [{ type: "text", text: JSON.stringify(result) }]
     };
   });
+}
+
+// src/reminders/context.ts
+function buildReminderContext(input) {
+  const lines = [
+    phaseLine(input),
+    scopeReviewLine(input.phase),
+    kindCueLine(input.kind),
+    provenanceLine(input.provenance, input.phase),
+    targetFollowupLine(input),
+    auditWarningsLine(input.auditWarnings, input.phase)
+  ].filter((line) => line !== undefined && line.length > 0);
+  return `meta-edit reminder:
+
+${lines.join(`
+
+`)}`;
+}
+function phaseLine(input) {
+  const kind = input.kind ?? "a typed meta-edit declaration";
+  const target = targetPhrase(input.target, input.phase);
+  const file = input.targetFile ? ` for ${sanitize(input.targetFile)}` : "";
+  if (input.phase === "write_allowed") {
+    return `This native write matched my ${kind}${target} declaration${file}. The tool result tells me whether the bytes actually landed.`;
+  }
+  return `I declared this as ${kind}${target}${file}. The next native Edit / Write / MultiEdit should stay inside that declaration.`;
+}
+function targetPhrase(target, phase) {
+  if (target === "prod") {
+    return phase === "write_allowed" ? " production-code" : " for production code";
+  }
+  if (target === "test")
+    return ' target="test"';
+  return "";
+}
+function scopeReviewLine(phase) {
+  if (phase !== "write_allowed")
+    return;
+  return "Before moving on, I should check whether the chosen kind and file scope still match the actual edit. " + "If the write crossed another kind or file, the next move is a fresh typed declaration for that scope.";
+}
+function kindCueLine(kind) {
+  switch (kind) {
+    case "edit_boundary_condition":
+      return "The next test should pin just below, at, and just above the boundary.";
+    case "edit_boolean_condition":
+      return "The next test should make the important true/false condition combinations visible.";
+    case "edit_state_transition":
+      return "The next test should show the allowed transition and the forbidden transition.";
+    case "edit_db_schema":
+      return "The next check should cover the schema shape and the migration impact.";
+    case "edit_data_migration":
+      return "The next test should compare existing data before and after, and check idempotency.";
+    case "edit_api_contract":
+      return "The next test should expose the compatibility, status-code, or missing/extra-field contract.";
+    case "edit_serialization":
+      return "The next test should cover round-trip behavior and any legacy format still accepted.";
+    case "edit_error_handling":
+      return "The next test should drive the intended failure path and check the surfaced context.";
+    case "edit_retry_timeout":
+      return "The next test should cover retry count, timeout, and exhaustion behavior.";
+    case "edit_concurrency":
+      return "The next test should exercise the interleaving or duplicate action this change is meant to handle.";
+    case "edit_external_side_effect":
+      return "The next check should protect against duplicate or unintended external action.";
+    case "edit_cache_invalidation":
+      return "The next test should distinguish stale reads from refreshed reads.";
+    case "edit_permission_logic":
+      return "The next test should distinguish allowed and denied actors or states.";
+    case "edit_dependency_config":
+      return "The next check should make the runtime or environment impact explicit.";
+    case "edit_policy_change":
+      return "The next move should confirm the user-facing scope before treating this as settled policy.";
+    case "edit_cosmetic":
+      return "This should remain a semantic no-op: whitespace, comments, or formatter output only.";
+    case "edit_decision":
+      return "An edit_decision will be read as accepted project intent. If that is not true, edit_decision is the wrong tool.";
+    case "edit_explanation":
+      return "An edit_explanation will be read as shipped behavior for future readers. It should stay consistent with the code or observation source.";
+    case "edit_progress":
+      return "This should record session progress, not create new project policy.";
+    case "edit_observation":
+      return "This should keep the observed fact and evidence visible.";
+    case "edit_proposal":
+      return "This should stay proposal-shaped until accepted.";
+    default:
+      return kind === undefined ? undefined : "I should follow the obligations in the selected tool description before moving on.";
+  }
+}
+function provenanceLine(provenance, phase) {
+  switch (provenance) {
+    case "user_confirmed":
+      return "Because the provenance is user-confirmed, the prose should stay inside the confirmed user intent.";
+    case "accepted_artifact":
+      return "Because the provenance is accepted artifact, the prose should keep the accepted artifact or citation visible.";
+    case "direct_observation":
+      return "Because the provenance is direct observation, the prose should keep the observation source visible.";
+    case "inference":
+      if (phase === "write_allowed") {
+        return "Because the provenance is inference, if the landed prose sounds confirmed, I should revise it with a fresh typed declaration so the uncertainty is visible.";
+      }
+      return "Because the provenance is inference, I should land only if the prose carries that uncertainty instead of sounding confirmed.";
+    case "speculation":
+      if (phase === "write_allowed") {
+        return "Because the provenance is speculation, if the landed prose reads as established fact, I should revise it with a fresh typed declaration so it stays marked as an unverified hypothesis.";
+      }
+      return "Because the provenance is speculation, I should land only if the prose is strongly hedged as an unverified hypothesis.";
+    default:
+      return;
+  }
+}
+function targetFollowupLine(input) {
+  if (input.target === "prod" && input.declaredTestFiles && input.declaredTestFiles.length > 0) {
+    return `If the matching test was written first, the next move is to run that red test and confirm this production edit is what makes it pass. ` + `If no matching test exists yet, the next move is a target="test" declaration for ` + `${input.declaredTestFiles.map(sanitize).join(", ")}.`;
+  }
+  if (input.target === "test") {
+    return `This test edit should exercise this same kind of change, not drift into unrelated cleanup. ` + `If this is the TDD red step, it should fail against the current production code for the intended reason. ` + `If it already passes, it may not be proving the intended change.`;
+  }
+  return;
+}
+function auditWarningsLine(auditWarnings, phase) {
+  if (auditWarnings === undefined || auditWarnings.length === 0) {
+    return;
+  }
+  const summary = auditWarnings.map((w) => `[${w.code}] ${w.message}`).join(`
+  - `);
+  if (phase === "write_allowed") {
+    return `audit warnings were recorded for this declaration:
+  - ${summary}
+` + `If the landed edit did not account for them, I should revise with a fresh typed declaration and keep the chosen kind honest.`;
+  }
+  return `audit warnings recorded for this declaration:
+  - ${summary}
+` + `I should land only if the prose carries that uncertainty and the chosen kind is still the right tool.`;
+}
+var CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+function sanitize(value) {
+  return value.replace(CONTROL_CHARS_RE, "?");
 }
 
 // src/state/edit-log.ts
@@ -18648,6 +18793,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     };
     const auditError2 = appendRejectedSafely(log, rejected);
     return {
+      summary: rejectedSummary(toolName, args, validation.warnings.length),
       token: "",
       expires_at: "",
       edit_id: rejectId,
@@ -18667,7 +18813,14 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
       binding: bindings.map((b) => ({
         file: b.canonical,
         before_sha256: b.before_sha256
-      }))
+      })),
+      declaration: {
+        kind: toolName,
+        ...args.target !== undefined ? { target: args.target } : {},
+        provenance: args.provenance,
+        target_file: args.target_file,
+        test_files: [...args.test_files]
+      }
     });
   } catch (e) {
     const reason = e?.message ?? String(e);
@@ -18683,6 +18836,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     };
     const auditError2 = appendRejectedSafely(log, rejected);
     return {
+      summary: rejectedSummary(toolName, args, 1),
       token: "",
       expires_at: "",
       edit_id: editId,
@@ -18710,14 +18864,25 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     token: grant.token_id
   };
   const auditError = appendIssuedSafely(log, issued);
-  const sanitize = (p) => p.replace(/[\x00-\x1f\x7f]/g, "?");
-  const fileList = bindings.map((b) => sanitize(b.canonical)).join(", ");
+  const sanitize2 = (p) => p.replace(/[\x00-\x1f\x7f]/g, "?");
+  const fileList = bindings.map((b) => sanitize2(b.canonical)).join(", ");
   const nFiles = bindings.length;
   const fileNoun = nFiles === 1 ? "file" : "files";
   const batchNote = TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName) && nFiles > 1 ? ` Because this is a workflow-axis kind (${toolName}) carrying ` + `additional_files, this one declaration covers the whole batch: ` + `issue consecutive native Edit / Write calls against the bound ` + `${fileNoun} in any order — one per bound file, no per-file ` + `re-declaration — until every bound file is consumed or the ` + `TTL expires.` : "";
-  const provenanceReminder = nextActionProvenanceReminder(args.provenance, validation.auditWarnings);
-  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote + provenanceReminder;
+  const declarationReminder = buildReminderContext({
+    phase: "declaration_accepted",
+    kind: toolName,
+    ...args.target !== undefined ? { target: args.target } : {},
+    provenance: args.provenance,
+    targetFile: args.target_file,
+    declaredTestFiles: args.test_files,
+    auditWarnings: validation.auditWarnings
+  });
+  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote + `
+
+${declarationReminder}`;
   return {
+    summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,
     expires_at: grant.expires_at,
     edit_id: editId,
@@ -18726,27 +18891,25 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     ...auditError !== undefined ? { audit_error: auditError } : {}
   };
 }
-function nextActionProvenanceReminder(provenance, auditWarnings) {
-  const lines = [];
-  if (provenance === "inference") {
-    lines.push(`
-
-meta-edit reminder: I declared provenance: inference. The reader ` + `will see the prose, not the provenance field — I should frame the ` + `inference explicitly in the body ("Based on observed X, it appears ` + `that ...", "Likely ...", "Probably ...") so the prose itself ` + `carries the uncertainty. Don't write inferences as if confirmed.`);
-  } else if (provenance === "speculation") {
-    lines.push(`
-
-meta-edit reminder: I declared provenance: speculation. The reader ` + `will see the prose, not the provenance field — I should open with ` + `strong hedging ("**Unverified**: ...", "**Hypothesis**: ...", "TODO: ` + `verify — ...") so a future session does not pick this up as a ` + `decision. Don't write speculation as if confirmed.`);
-  }
-  if (auditWarnings.length > 0) {
-    const summary = auditWarnings.map((w) => `[${w.code}] ${w.message}`).join(`
-  - `);
-    lines.push(`
-
-meta-edit reminder: audit warnings recorded for this declaration:
-  - ${summary}
-` + `Land but consider whether the prose / rationale should be tightened ` + `before the next native Edit.`);
-  }
-  return lines.join("");
+function declaredSummary(toolName, args, bindingCount) {
+  return [
+    `${toolName} declared: ${sanitizeSummaryFragment(args.target_file)}`,
+    args.target !== undefined ? `target=${args.target}` : undefined,
+    `provenance=${args.provenance}`,
+    `bindings=${bindingCount}`
+  ].filter((part) => part !== undefined).join(" ");
+}
+function rejectedSummary(toolName, args, warningCount) {
+  return [
+    `${toolName} rejected: ${sanitizeSummaryFragment(args.target_file)}`,
+    args.target !== undefined ? `target=${args.target}` : undefined,
+    `provenance=${args.provenance}`,
+    `warnings=${warningCount}`
+  ].filter((part) => part !== undefined).join(" ");
+}
+var SUMMARY_CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+function sanitizeSummaryFragment(value) {
+  return value.replace(SUMMARY_CONTROL_CHARS_RE, "?");
 }
 function appendIssuedSafely(log, entry) {
   try {
@@ -18813,10 +18976,37 @@ function isGrant(value) {
       return false;
     }
   }
+  if ("declaration" in v && v.declaration !== undefined) {
+    if (!isGrantDeclaration(v.declaration))
+      return false;
+  }
   if (!Array.isArray(v.consumed_files))
     return false;
   for (const c of v.consumed_files) {
     if (typeof c !== "string")
+      return false;
+  }
+  return true;
+}
+function isGrantDeclaration(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const v = value;
+  if (typeof v.kind !== "string" || v.kind.length === 0)
+    return false;
+  if (v.target !== undefined && v.target !== "prod" && v.target !== "test") {
+    return false;
+  }
+  if (typeof v.provenance !== "string" || v.provenance.length === 0) {
+    return false;
+  }
+  if (typeof v.target_file !== "string" || v.target_file.length === 0) {
+    return false;
+  }
+  if (!Array.isArray(v.test_files))
+    return false;
+  for (const file of v.test_files) {
+    if (typeof file !== "string")
       return false;
   }
   return true;
@@ -18920,6 +19110,9 @@ class GrantsStoreImpl {
         throw new Error(`grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`);
       }
     }
+    if (args.declaration !== undefined && !isGrantDeclaration(args.declaration)) {
+      throw new Error("grants.issue: declaration metadata is malformed");
+    }
     await this.ensureDir();
     try {
       await this.reapExpired();
@@ -18937,6 +19130,12 @@ class GrantsStoreImpl {
         issued_at: issuedAt,
         expires_at: expiresAt,
         binding: args.binding,
+        ...args.declaration !== undefined ? {
+          declaration: {
+            ...args.declaration,
+            test_files: [...args.declaration.test_files]
+          }
+        } : {},
         consumed_files: []
       };
       const filePath = this.grantPath(token_id);
@@ -19167,7 +19366,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.6.1",
+  version: "0.6.2",
   description: "MCP server with twenty-one kind-specific edit tools (15 SQLite-derived + edit_cosmetic + 5 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19283,4 +19482,4 @@ export {
   createServer
 };
 
-//# debugId=F3632B5C68B0A7A864756E2164756E21
+//# debugId=F45ECDC5E9F9992B64756E2164756E21

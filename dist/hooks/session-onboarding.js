@@ -97,6 +97,16 @@ function replyAllowWithWarning(reason) {
 `);
   return 0;
 }
+function replyWithAdditionalContext(additionalContext) {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext
+    }
+  };
+  process.stdout.write(JSON.stringify(payload));
+  return 0;
+}
 
 // src/hooks/onboarding-message.ts
 function buildOnboardingMessage() {
@@ -376,4 +386,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=D8920D1DBE0817A364756E2164756E21
+//# debugId=392757785E28120464756E2164756E21

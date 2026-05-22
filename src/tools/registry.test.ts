@@ -5,6 +5,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   TOOL_NAMES,
   TOOL_DESCRIPTIONS,
+  TOOL_TITLES,
   TOOLS_REQUIRING_TEST_FILES,
 } from "./descriptions.js";
 import { registerTools, type RegisterToolsOptions } from "./registry.js";
@@ -34,6 +35,13 @@ describe("twenty-one tools", () => {
       const desc = TOOL_DESCRIPTIONS[name];
       expect(typeof desc).toBe("string");
       expect(desc.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("has a human-readable title for each tool that keeps the exact tool name visible", () => {
+    for (const name of TOOL_NAMES) {
+      expect(TOOL_TITLES[name]).toContain(name);
+      expect(TOOL_TITLES[name].length).toBeGreaterThan(name.length);
     }
   });
 
@@ -169,6 +177,44 @@ describe("twenty-one tools", () => {
     for (const name of TOOL_NAMES) {
       const desc = TOOL_DESCRIPTIONS[name];
       expect(desc).toContain(principlesBlock);
+    }
+  });
+});
+
+// =====================================================================
+// registerTools — ListToolsRequest handler paths
+// =====================================================================
+
+describe("registerTools — ListToolsRequest handler", () => {
+  it("returns titles so clients can display the specific edit kind in collapsed tool rows", async () => {
+    const server = new Server(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerTools(server, {
+      context: { repoRoot: process.cwd() },
+      handler: async (): Promise<EditToolResult> => ({
+        token: "",
+        expires_at: "",
+        edit_id: "edit_20260522_0001",
+        warnings: [],
+      }),
+    });
+
+    const handler = (server as unknown as { _requestHandlers: Map<string, (req: unknown) => Promise<unknown>> })._requestHandlers.get("tools/list");
+    if (!handler) throw new Error("ListToolsRequest handler not registered");
+    const result = await handler({ method: "tools/list", params: {} }) as {
+      tools: Array<{
+        name: ToolName;
+        title?: string;
+        annotations?: { title?: string };
+      }>;
+    };
+
+    expect(result.tools.length).toBe(TOOL_NAMES.length);
+    for (const tool of result.tools) {
+      expect(tool.title).toBe(TOOL_TITLES[tool.name]);
+      expect(tool.annotations?.title).toBe(TOOL_TITLES[tool.name]);
     }
   });
 });

@@ -5,6 +5,7 @@ import {
   replyAllow,
   replyAllowWithWarning,
   replyDeny,
+  replyWithAdditionalContext,
 } from "./hook-runtime.js";
 import {
   captureStdout,
@@ -140,5 +141,33 @@ describe("replyAllowWithWarning — stdout + stderr shape", () => {
     expect(parsed.hookSpecificOutput.additionalContext).toBe("redirect warn");
     // stderr mirror for hosts that surface it.
     expect(stderrCaptured).toContain("redirect warn");
+  });
+});
+
+describe("replyWithAdditionalContext — stdout shape", () => {
+  it("emits model-visible additionalContext without auto-approving the tool call", () => {
+    let stderrCaptured = "";
+    const out = captureStdout(() => {
+      stderrCaptured = captureStderr(() =>
+        replyWithAdditionalContext(
+          "meta-edit reminder:\n\nThis native write matched my declaration.",
+        ),
+      );
+    });
+    const parsed = JSON.parse(out) as {
+      hookSpecificOutput: {
+        hookEventName: string;
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+        additionalContext: string;
+      };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(parsed.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toBeUndefined();
+    expect(parsed.hookSpecificOutput.additionalContext).toContain(
+      "This native write matched my declaration",
+    );
+    expect(stderrCaptured).toBe("");
   });
 });

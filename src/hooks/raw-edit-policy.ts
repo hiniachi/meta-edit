@@ -58,6 +58,7 @@ import * as path from "node:path";
 import type { HookDecision } from "./hook-runtime.js";
 import type { GrantsStore } from "../state/grants.js";
 import type { ConsumedEntry, EditLog } from "../state/edit-log.js";
+import { buildReminderContext } from "../reminders/context.js";
 import { isoTimestamp } from "../state/edit-log.js";
 import { canonicalizeRepoRelative } from "../utils/repo-paths.js";
 
@@ -401,7 +402,24 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
     );
   }
 
-  return { decision: "allow" };
+  const additionalContext =
+    grant.declaration !== undefined
+      ? buildReminderContext({
+          phase: "write_allowed",
+          kind: grant.declaration.kind,
+          ...(grant.declaration.target !== undefined
+            ? { target: grant.declaration.target }
+            : {}),
+          provenance: grant.declaration.provenance,
+          targetFile: canonical,
+          declaredTestFiles: grant.declaration.test_files,
+        })
+      : undefined;
+
+  return {
+    decision: "allow",
+    ...(additionalContext !== undefined ? { additionalContext } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------
