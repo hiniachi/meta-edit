@@ -68,6 +68,13 @@ export interface OpencodePluginContext {
 export interface OpencodeToolBeforeInput {
   /** Lowercase opencode tool name (`edit`, `write`, `apply_patch`, `bash`, ...). */
   tool: string;
+  /**
+   * Stable per-tool-call id. Present on real opencode events; optional
+   * here so older hosts and hand-built test inputs still typecheck.
+   * Correlates this `before` event with its matching `tool.execute.after`
+   * so a write-allowed reminder lands on the right tool result.
+   */
+  callID?: string;
 }
 
 /** Subset of the `tool.execute.before` mutable result object. */
@@ -105,8 +112,32 @@ export type OpencodeChatSystemTransformHook = (
   output: OpencodeChatSystemTransformOutput,
 ) => void | Promise<void>;
 
+/** Subset of the `tool.execute.after` event payload. */
+export interface OpencodeToolAfterInput {
+  /** Lowercase opencode tool name. */
+  tool: string;
+  /** Stable per-tool-call id — correlates with the `before` event. */
+  callID?: string;
+}
+
+/** Subset of the `tool.execute.after` mutable result object. */
+export interface OpencodeToolAfterOutput {
+  /**
+   * The tool result text the agent sees. The plugin appends the
+   * meta-edit write-allowed reminder here — the opencode analogue of
+   * Claude Code's deny-raw-edit hook `additionalContext`.
+   */
+  output: string;
+}
+
+export type OpencodeToolAfterHook = (
+  input: OpencodeToolAfterInput,
+  output: OpencodeToolAfterOutput,
+) => void | Promise<void>;
+
 export interface OpencodePluginHooks {
   "tool.execute.before"?: OpencodeToolBeforeHook;
+  "tool.execute.after"?: OpencodeToolAfterHook;
   "experimental.chat.system.transform"?: OpencodeChatSystemTransformHook;
 }
 
@@ -152,6 +183,16 @@ export function createMetaEditPlugin(
     const repoRoot = ctx.project.worktree;
     const log = newEditLog(repoRoot);
     const grants = newGrantsStore(repoRoot);
+
+    // Correlates a `tool.execute.before` allow that carried a model-
+    // visible write-allowed reminder with its matching
+    // `tool.execute.after`, keyed by opencode's stable per-call `callID`.
+    // opencode's `tool.execute.before` has no allow-with-context return
+    // channel (the way Claude Code's PreToolUse hook returns
+    // `additionalContext`), so the reminder is stashed here and appended
+    // to the tool result in `onToolAfter` — the channel an opencode agent
+    // actually reads.
+    const pendingReminders = new Map<string, string>();
 
     const onToolBefore: OpencodeToolBeforeHook = async (input, output) => {
       const lower = typeof input.tool === "string" ? input.tool.toLowerCase() : "";
@@ -210,6 +251,28 @@ export function createMetaEditPlugin(
             `[meta-edit] WARN (${canonical}): ${decision.reason ?? "warned by meta-edit"}\n`,
           );
         }
+        // Allow + additionalContext: evaluateTokenedEdit attached a
+        // model-visible write-allowed reminder (the consumed grant
+        // carried declaration metadata). opencode cannot return context
+        // on a `tool.execute.before` allow, so stash it under this
+        // call's `callID`; `onToolAfter` appends it to the tool result.
+        if (
+          decision.decision === "allow" &&
+          decision.additionalContext !== undefined
+        ) {
+          if (typeof input.callID === "string" && input.callID.length > 0) {
+            pendingReminders.set(input.callID, decision.additionalContext);
+          } else {
+            // No `callID` to correlate a `tool.execute.after` against
+            // (a host diverging from opencode's documented event shape,
+            // which always carries one). Surface the reminder to stderr
+            // rather than drop it silently — the same degraded-channel
+            // fallback the `warn` branch above uses.
+            process.stderr.write(
+              `[meta-edit] CONTEXT (${canonical}): ${decision.additionalContext}\n`,
+            );
+          }
+        }
         return;
       }
 
@@ -249,8 +312,38 @@ export function createMetaEditPlugin(
       output.system.push(skillContent);
     };
 
+    // -------------------------------------------------------------------
+    // tool.execute.after — deliver the write-allowed reminder.
+    //
+    // When `onToolBefore` allowed a native edit/write whose consumed
+    // grant carried declaration metadata, evaluateTokenedEdit produced a
+    // model-visible reminder and `onToolBefore` stashed it under the
+    // call's `callID`. opencode's only agent-visible post-tool channel is
+    // the tool result text, so we append the reminder to `output.output`
+    // here — the opencode analogue of the Claude Code hook's
+    // `additionalContext`. The `after` event fires for every tool, so the
+    // common path is the early no-pending-reminder return.
+    const onToolAfter: OpencodeToolAfterHook = (input, output) => {
+      const callID = typeof input.callID === "string" ? input.callID : "";
+      if (callID.length === 0) return;
+      const reminder = pendingReminders.get(callID);
+      if (reminder === undefined) return;
+      // One reminder per call — drop it once delivered. A cancelled
+      // tool call (no matching `after` event) leaves its entry behind,
+      // but `pendingReminders` is scoped to this plugin instance — one
+      // per session — so any such residue is bounded by session length,
+      // acceptable under the non-adversarial threat model.
+      pendingReminders.delete(callID);
+      if (typeof output.output !== "string") return;
+      output.output =
+        output.output.length > 0
+          ? `${output.output}\n\n${reminder}`
+          : reminder;
+    };
+
     return {
       "tool.execute.before": onToolBefore,
+      "tool.execute.after": onToolAfter,
       "experimental.chat.system.transform": onSystemTransform,
     };
   };
