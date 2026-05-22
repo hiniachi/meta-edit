@@ -1486,3 +1486,90 @@ mis-marshals non-empty string arrays.
   fix is purely the module split + guard removal.
 - Version bump: `package.json` and `.claude-plugin/plugin.json` from
   0.6.0 → 0.6.1 (patch — bundled-artifact correctness fix).
+
+## v0.6.2: success reminders for declaration + native-write allow
+
+- Completed: 2026-05-22
+- What works:
+  - Added a shared `buildReminderContext()` module for model-visible
+    reminder text. The wording follows the reminder-style-hooks RFC:
+    first-person recovery cues, semantic consequences, and "wrong
+    tool" framing rather than imperative scolding.
+  - Successful typed-edit declarations now append a `meta-edit
+    reminder:` block to `next_action`, generated from `kind`, `target`,
+    `provenance`, forward-declared `test_files`, and audit warnings.
+    This is the pre-native-write reminder surface.
+  - The reminder wording now uses action-cue phrasing tuned for the
+    next likely model tokens: `run`, `confirm`, `declare`, `test`,
+    `check`, `compare`, `distinguish`. Every live `edit_*` kind has a
+    specific one-sentence cue.
+  - `target="test"` declarations carry a TDD red-step cue: if this is
+    the red step, the test should fail against current production code
+    for the intended reason; if it already passes, it may not prove the
+    intended change. `target="prod"` declarations cue either running
+    the already-written red test or declaring the matching test edit.
+  - Grant files now persist optional declaration metadata
+    (`kind`, `target`, `provenance`, `target_file`, `test_files`) so
+    the raw-edit hook can recover the declared context after lookup /
+    consume. The field is optional on read, so older grants still
+    validate and consume.
+  - Successful raw Edit / Write / MultiEdit / NotebookEdit grant checks
+    now return model-facing `additionalContext` when declaration
+    metadata is present, but deliberately omit `permissionDecision` so
+    Claude Code's normal permission prompt / user mode is preserved.
+    This reminder is explicitly post-gate / next-reasoning-step context:
+    Claude Code delivers PreToolUse `additionalContext` alongside the
+    tool result, not as a chance to reconsider the already-authorized
+    native call before execution.
+  - Allow-time reminders now include a scope/classification check:
+    before moving on, the agent should verify that the chosen kind and
+    file scope still match the actual edit, and issue a fresh typed
+    declaration if the write crossed another kind or file.
+  - Low-cost display improvements: plugin manifest now has
+    `displayName: "Meta Edit"`, every MCP tool in `tools/list` returns
+    `title` / `annotations.title` containing the exact `edit_*` name,
+    and typed-edit JSON results start with a compact `summary` field so
+    preview-oriented clients expose the specific kind and target path
+    without requiring full expansion.
+  - `docs/SPEC.md` records the distinction between declaration-result
+    `next_action` and allow-time `additionalContext`.
+- Tests added:
+  - `src/reminders/context.test.ts`: declaration and write-allow
+    reminder wording for boundary/API/decision/explanation cases,
+    TDD red-step cues, every live kind's one-line action cue,
+    provenance phrasing, audit-warning surfacing, and post-write repair
+    wording for inference / speculation.
+  - `src/state/grants.test.ts`: optional declaration metadata
+    round-trips through grant issue / lookup.
+  - `src/tools/handler.test.ts`: declaration success result carries
+    reminder text, the persisted grant metadata, and first-field result
+    summary; rejection results also carry summaries.
+  - `src/tools/registry.test.ts`: `tools/list` returns display titles
+    for every live tool.
+  - `src/hooks/raw-edit-policy.test.ts`: allow decision returns
+    `additionalContext` when the matched grant has declaration metadata.
+  - `src/hooks/hook-runtime.test.ts`: `replyWithAdditionalContext()`
+    emits the Claude Code hook JSON shape without stderr noise or
+    auto-approving the native tool call.
+- Verification:
+  - Targeted suite: `bun test src/reminders/context.test.ts
+    src/hooks/hook-runtime.test.ts src/state/grants.test.ts
+    src/tools/handler.test.ts src/tools/registry.test.ts
+    src/hooks/raw-edit-policy.test.ts` — 137 pass.
+  - `bun run typecheck` clean.
+  - `bun run build` clean — `dist/` regenerated.
+  - Manual stdio smoke:
+    `printf '<initialize-json>' | META_EDIT_REPO_ROOT=<repo> bun run
+    src/cli.ts serve` returns MCP initialize response with version
+    `0.6.2`.
+  - Full `bun test` was not green in this sandbox for reasons outside
+    this change: `/tmp/.git` makes repo-discovery tests treat `/tmp` as
+    a repository ancestor, and two existing subprocess entrypoint tests
+    still fail under the local Bun test harness even after moving
+    `TMPDIR` outside `/tmp`. The changed areas are covered by the
+    targeted suite above.
+- Spec deviations: none. This adds reminder context only; it does not
+  inspect diffs, classify content, verify tests, or add a new gate.
+- Version bump: `package.json` and `.claude-plugin/plugin.json` from
+  0.6.1 → 0.6.2 (patch — reminder-context behavior and bundled
+  artifacts).

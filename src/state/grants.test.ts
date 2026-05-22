@@ -45,6 +45,30 @@ describe("grants.issue", () => {
     expect(expires - issued).toBe(GRANT_TTL_MS);
   });
 
+  it("persists optional declaration metadata for hook reminders", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260502_0001",
+      binding: [binding("src/foo.ts")],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "direct_observation",
+        target_file: "src/foo.ts",
+        test_files: ["tests/foo.test.ts"],
+      },
+    });
+
+    const looked = await store.lookup(g.token_id);
+    expect(looked?.declaration).toEqual({
+      kind: "edit_boundary_condition",
+      target: "prod",
+      provenance: "direct_observation",
+      target_file: "src/foo.ts",
+      test_files: ["tests/foo.test.ts"],
+    });
+  });
+
   it("writes the grant file under .meta-edit/state/grants/<token_id>.json", async () => {
     const store = createGrantsStore(tmpRoot);
     const g = await store.issue({

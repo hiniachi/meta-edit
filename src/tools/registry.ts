@@ -3,7 +3,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from "./descriptions.js";
+import {
+  TOOL_DESCRIPTIONS,
+  TOOL_NAMES,
+  TOOL_TITLES,
+  type ToolName,
+} from "./descriptions.js";
 import {
   EditToolRequestSchema,
   MAX_ADDITIONAL_FILES,
@@ -156,8 +161,12 @@ export function registerTools(server: Server, options: RegisterToolsOptions): vo
     return {
       tools: TOOL_NAMES.map((name) => ({
         name,
+        title: TOOL_TITLES[name],
         description: TOOL_DESCRIPTIONS[name],
         inputSchema: inputSchemaForTool(name),
+        annotations: {
+          title: TOOL_TITLES[name],
+        },
       })),
     };
   });

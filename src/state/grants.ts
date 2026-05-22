@@ -50,6 +50,14 @@ export type GrantBinding = {
   before_sha256: string;
 };
 
+export type GrantDeclaration = {
+  kind: string;
+  target?: "prod" | "test";
+  provenance: string;
+  target_file: string;
+  test_files: string[];
+};
+
 export type Grant = {
   /** Unique token id. Format: `met_<YYYYMMDD>_<10-hex>`. */
   token_id: string;
@@ -61,6 +69,13 @@ export type Grant = {
   expires_at: string;
   /** 1+ binding tuples. SQLite-derived tools issue 1; workflow tools issue N. */
   binding: GrantBinding[];
+  /**
+   * Optional v0.6.2+ declaration metadata. The hook uses this to emit
+   * model-visible success reminders after a native write is authorized.
+   * Optional so grants already on disk before the field existed still
+   * validate and consume normally.
+   */
+  declaration?: GrantDeclaration;
   /**
    * Files (binding[].file) that have already been consumed by the
    * deny-raw-edit hook. The grant is "fully consumed" — and the file
@@ -87,6 +102,7 @@ export interface GrantsStore {
   issue(args: {
     edit_id: string;
     binding: GrantBinding[];
+    declaration?: GrantDeclaration;
   }): Promise<Grant>;
 
   lookup(token_id: string): Promise<Grant | null>;
@@ -160,9 +176,32 @@ function isGrant(value: unknown): value is Grant {
       return false;
     }
   }
+  if ("declaration" in v && v.declaration !== undefined) {
+    if (!isGrantDeclaration(v.declaration)) return false;
+  }
   if (!Array.isArray(v.consumed_files)) return false;
   for (const c of v.consumed_files as unknown[]) {
     if (typeof c !== "string") return false;
+  }
+  return true;
+}
+
+function isGrantDeclaration(value: unknown): value is GrantDeclaration {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.kind !== "string" || v.kind.length === 0) return false;
+  if (v.target !== undefined && v.target !== "prod" && v.target !== "test") {
+    return false;
+  }
+  if (typeof v.provenance !== "string" || v.provenance.length === 0) {
+    return false;
+  }
+  if (typeof v.target_file !== "string" || v.target_file.length === 0) {
+    return false;
+  }
+  if (!Array.isArray(v.test_files)) return false;
+  for (const file of v.test_files) {
+    if (typeof file !== "string") return false;
   }
   return true;
 }
@@ -324,6 +363,7 @@ class GrantsStoreImpl implements GrantsStore {
   async issue(args: {
     edit_id: string;
     binding: GrantBinding[];
+    declaration?: GrantDeclaration;
   }): Promise<Grant> {
     if (args.binding.length === 0) {
       throw new Error("grants.issue: binding must contain at least one entry");
@@ -352,6 +392,9 @@ class GrantsStoreImpl implements GrantsStore {
           `grants.issue: binding[].before_sha256 must be 64 lowercase hex chars (file=${b.file})`,
         );
       }
+    }
+    if (args.declaration !== undefined && !isGrantDeclaration(args.declaration)) {
+      throw new Error("grants.issue: declaration metadata is malformed");
     }
     await this.ensureDir();
 
@@ -384,6 +427,14 @@ class GrantsStoreImpl implements GrantsStore {
         issued_at: issuedAt,
         expires_at: expiresAt,
         binding: args.binding,
+        ...(args.declaration !== undefined
+          ? {
+              declaration: {
+                ...args.declaration,
+                test_files: [...args.declaration.test_files],
+              },
+            }
+          : {}),
         consumed_files: [],
       };
       const filePath = this.grantPath(token_id);

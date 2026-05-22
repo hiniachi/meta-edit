@@ -67,6 +67,15 @@ export const TOOL_NAMES = [
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
+export const TOOL_TITLES = Object.freeze(
+  Object.fromEntries(
+    TOOL_NAMES.map((name) => [
+      name,
+      `${name}: ${name.replace(/^edit_/, "").replace(/_/g, " ")} declaration`,
+    ]),
+  ),
+) as Readonly<Record<ToolName, string>>;
+
 // Workflow kinds — the five v0.6.0 kinds that replace edit_docs_only.
 // Workflow kinds carry no `target` field (the prod/test axis does not
 // apply to documentation / workflow artifacts) and require no

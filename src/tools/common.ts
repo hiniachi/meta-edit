@@ -302,6 +302,12 @@ export type AuditWarning = {
 
 export type EditToolResult = {
   /**
+   * Short human-readable status line placed first in the JSON result so
+   * collapsed / preview-oriented clients can show the specific edit kind
+   * without requiring the user to expand the whole MCP call.
+   */
+  summary?: string;
+  /**
    * Token id when the declaration succeeded. Empty string on rejection — the
    * caller MUST inspect `warnings` (and `audit_error`) to determine outcome.
    * The MCP-layer wrapper in registry.ts elides empty tokens before

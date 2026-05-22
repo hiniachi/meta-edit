@@ -79,6 +79,10 @@ describe("makeIssuingHandler — successful declaration", () => {
       modifyRequest(),
     );
 
+    expect(result.summary).toBe(
+      "edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation bindings=1",
+    );
+    expect(Object.keys(result)[0]).toBe("summary");
     expect(result.warnings).toEqual([]);
     expect(result.audit_error).toBeUndefined();
     expect(result.token).toMatch(/^met_\d{8}_[0-9a-f]{10}$/);
@@ -96,12 +100,25 @@ describe("makeIssuingHandler — successful declaration", () => {
     expect(result.next_action!.length).toBeGreaterThan(0);
     expect(result.next_action).not.toContain("_meta_edit_token");
     expect(result.next_action).toContain(result.expires_at);
+    expect(result.next_action).toContain("meta-edit reminder:");
+    expect(result.next_action).toContain(
+      "I declared this as edit_boundary_condition",
+    );
+    expect(result.next_action).toContain("pin just below, at, and just above");
+    expect(result.next_action).toContain('target="test"');
 
     // Grant is queryable.
     const grant = await grants.lookup(result.token);
     expect(grant).not.toBeNull();
     expect(grant?.binding.length).toBe(1);
     expect(grant?.binding[0]?.file).toBe("src/foo.ts");
+    expect(grant?.declaration).toEqual({
+      kind: "edit_boundary_condition",
+      target: "prod",
+      provenance: "direct_observation",
+      target_file: "src/foo.ts",
+      test_files: ["tests/foo.test.ts"],
+    });
     // Server computed before_sha256 from disk.
     expect(grant?.binding[0]?.before_sha256).toBe(sha256Hex("hello\n"));
 
@@ -206,6 +223,7 @@ describe("makeIssuingHandler — validation rejection", () => {
   ): Promise<void> {
     const { handler, log } = makeHandler();
     const result = await handler(tool, request);
+    expect(result.summary).toContain(`${tool} rejected: ${request.target_file}`);
     expect(result.token).toBe("");
     expect(result.expires_at).toBe("");
     expect(result.warnings.length).toBeGreaterThan(0);

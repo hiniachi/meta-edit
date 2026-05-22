@@ -28,6 +28,12 @@ export type HookEvent = Record<string, unknown>;
 export type HookDecision = {
   decision: "allow" | "deny" | "warn";
   reason?: string;
+  /**
+   * Model-visible context to inject after policy permits the call. Used for
+   * successful meta-edit grant consumption: unlike `reason`, this is not a
+   * warning or denial, so it should not be mirrored to stderr.
+   */
+  additionalContext?: string;
 };
 
 export async function readStdin(): Promise<HookEvent> {
@@ -112,5 +118,16 @@ export function replyAllowWithWarning(reason: string): number {
   };
   process.stdout.write(JSON.stringify(payload));
   process.stderr.write(`[meta-edit] ${reason}\n`);
+  return 0;
+}
+
+export function replyWithAdditionalContext(additionalContext: string): number {
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext,
+    },
+  };
+  process.stdout.write(JSON.stringify(payload));
   return 0;
 }
