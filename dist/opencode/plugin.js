@@ -8301,6 +8301,7 @@ function createMetaEditPlugin(deps = {}) {
     const repoRoot = ctx.project.worktree;
     const log = newEditLog(repoRoot);
     const grants = newGrantsStore(repoRoot);
+    const pendingReminders = new Map;
     const onToolBefore = async (input, output) => {
       const lower = typeof input.tool === "string" ? input.tool.toLowerCase() : "";
       if (isOpencodeRawEditTool(lower)) {
@@ -8329,6 +8330,14 @@ function createMetaEditPlugin(deps = {}) {
           process.stderr.write(`[meta-edit] WARN (${canonical}): ${decision.reason ?? "warned by meta-edit"}
 `);
         }
+        if (decision.decision === "allow" && decision.additionalContext !== undefined) {
+          if (typeof input.callID === "string" && input.callID.length > 0) {
+            pendingReminders.set(input.callID, decision.additionalContext);
+          } else {
+            process.stderr.write(`[meta-edit] CONTEXT (${canonical}): ${decision.additionalContext}
+`);
+          }
+        }
         return;
       }
       if (lower === "bash") {
@@ -8343,8 +8352,23 @@ function createMetaEditPlugin(deps = {}) {
     const onSystemTransform = (_input, output) => {
       output.system.push(skillContent);
     };
+    const onToolAfter = (input, output) => {
+      const callID = typeof input.callID === "string" ? input.callID : "";
+      if (callID.length === 0)
+        return;
+      const reminder = pendingReminders.get(callID);
+      if (reminder === undefined)
+        return;
+      pendingReminders.delete(callID);
+      if (typeof output.output !== "string")
+        return;
+      output.output = output.output.length > 0 ? `${output.output}
+
+${reminder}` : reminder;
+    };
     return {
       "tool.execute.before": onToolBefore,
+      "tool.execute.after": onToolAfter,
       "experimental.chat.system.transform": onSystemTransform
     };
   };
@@ -8436,4 +8460,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=3D6692DBC0992EA064756E2164756E21
+//# debugId=973BDBDAE3629A3764756E2164756E21

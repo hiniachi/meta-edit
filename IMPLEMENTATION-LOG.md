@@ -1573,3 +1573,63 @@ mis-marshals non-empty string arrays.
 - Version bump: `package.json` and `.claude-plugin/plugin.json` from
   0.6.1 → 0.6.2 (patch — reminder-context behavior and bundled
   artifacts).
+
+## E2E verification — v0.6.2 success reminders
+
+- Verified: 2026-05-22 (branch `codex-reminder-context`).
+- Dogfood E2E: this entry was appended through meta-edit's own
+  typed-edit surface — an `edit_progress` declaration followed by a
+  native Edit — driving the live MCP server and the deny-raw-edit hook
+  end to end. Observed directly in this session: the declaration result
+  carried the `declaration_accepted` reminder in `next_action`, and the
+  hook's allow for the native Edit carried the `write_allowed` reminder
+  in `additionalContext`.
+- Repo health at verification time: `bun test` 896 pass / 0 fail
+  (26 files), `tsc --noEmit` clean, committed `dist/` byte-identical to
+  a fresh `bun run build`. (The 0.6.2 entry above noted the full suite
+  was not green in its sandbox due to a `/tmp/.git` repo-discovery
+  collision; that collision does not reproduce in this checkout.)
+
+## opencode port — v0.6.3 write_allowed reminder via tool.execute.after
+
+- Completed: 2026-05-22 (branch `codex-reminder-context`).
+- What works:
+  - The v0.6.2 `write_allowed` reminder now reaches opencode agents.
+    Claude Code surfaces it through the deny-raw-edit hook's
+    `additionalContext`; opencode's `tool.execute.before` has no
+    allow-with-context return channel, so the port adds a
+    `tool.execute.after` hook that appends the reminder to the
+    agent-visible tool result (`output.output`).
+  - `onToolBefore` stashes the reminder — when `evaluateTokenedEdit`
+    returns allow + `additionalContext` — in a per-plugin-instance
+    `pendingReminders` Map keyed by opencode's per-call `callID`;
+    `onToolAfter` looks it up, appends, and deletes (one-shot).
+  - Degraded-host fallback: a before-event with no `callID` (real
+    opencode always sends one) mirrors the reminder to stderr instead
+    of dropping it silently — parity with the existing `warn` path.
+  - The `declaration_accepted` reminder needed no port: it rides the
+    MCP tool result `next_action`, which is harness-agnostic.
+- Tests added (`src/opencode/plugin.test.ts`, 5 new):
+  - append-on-allow with declaration metadata; no-op for an unknown
+    `callID`; no append when the grant carries no declaration
+    metadata; stderr fallback when `callID` is absent; `callID`
+    isolation across two concurrent pending reminders delivered in
+    reverse order.
+- Reviews: Claude code-reviewer + Codex. After fixes, both report no
+  CRITICAL / HIGH / MEDIUM findings. One accepted LOW — a cancelled
+  tool call leaves a session-bounded `pendingReminders` entry; no cap
+  added (YAGNI under the non-adversarial threat model), documented
+  in-code.
+- Verification: full `bun test` 901 pass / 0 fail; `tsc --noEmit`
+  clean; `bun run build` clean — only `dist/opencode/plugin.js`
+  changed.
+- Dogfood: the entire port landed through meta-edit's own typed-edit
+  tools (`edit_api_contract`, `edit_error_handling`,
+  `edit_explanation`, `edit_decision`, `edit_progress`); no raw Edit
+  reached the harness. `edit_cosmetic`'s description correctly
+  redirected a comment edit that added information to
+  `edit_explanation`.
+- Spec deviations: none. Adds a harness-adapter hook only; no diff
+  classification, no new gate.
+- Version bump: `package.json` and `.claude-plugin/plugin.json`
+  0.6.2 → 0.6.3 (patch — opencode write_allowed reminder parity).

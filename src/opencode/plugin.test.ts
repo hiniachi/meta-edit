@@ -522,3 +522,224 @@ describe("summarizeReasonForOpencode", () => {
     expect(out.length).toBeLessThanOrEqual(160);
   });
 });
+
+// =====================================================================
+// tool.execute.after — write-allowed success reminder delivery
+//
+// Claude Code's deny-raw-edit hook returns the v0.6.2 write-allowed
+// reminder as `additionalContext` on the allow. opencode's
+// `tool.execute.before` has no allow-with-context channel, so the port
+// stashes the reminder under the call's `callID` and appends it to the
+// agent-visible tool result in `tool.execute.after`.
+// =====================================================================
+
+describe("tool.execute.after write-allowed reminder", () => {
+  async function makeHooks() {
+    return createMetaEditPlugin()(ctx);
+  }
+
+  it("appends the write-allowed reminder to the tool result when the consumed grant carries declaration metadata", async () => {
+    writeFile("src/foo.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260522_0100",
+      binding: [{ file: "src/foo.ts", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "accepted_artifact",
+        target_file: "src/foo.ts",
+        test_files: ["src/foo.test.ts"],
+      },
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-A" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/foo.ts"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-A" },
+      afterOutput,
+    );
+
+    // The original tool result is preserved...
+    expect(afterOutput.output).toContain("File edited successfully");
+    // ...and the write-allowed reminder is appended for the agent to read.
+    expect(afterOutput.output).toContain("meta-edit reminder:");
+    // The appended text is the real buildReminderContext output — the
+    // boundary-kind cue proves the grant's declaration metadata flowed
+    // through evaluateTokenedEdit into the after-hook.
+    expect(afterOutput.output).toContain(
+      "pin just below, at, and just above the boundary",
+    );
+  });
+
+  it("is a no-op when the after event's callID has no pending reminder", async () => {
+    // tool.execute.after fires for every tool (read, grep, bash, ...);
+    // the overwhelmingly common path is "no reminder stashed for this
+    // call" and must leave the tool result untouched.
+    const hooks = await makeHooks();
+    const afterOutput = { output: "some unrelated tool result" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "read", callID: "never-seen" },
+      afterOutput,
+    );
+    expect(afterOutput.output).toBe("some unrelated tool result");
+  });
+
+  it("does not append a reminder when the consumed grant has no declaration metadata", async () => {
+    // Back-compat: a pre-v0.6.2 grant has no declaration block, so
+    // evaluateTokenedEdit returns allow WITHOUT additionalContext and
+    // nothing should be stashed or appended.
+    writeFile("src/foo.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260522_0101",
+      binding: [{ file: "src/foo.ts", before_sha256: sha256("before\n") }],
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-B" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/foo.ts"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-B" },
+      afterOutput,
+    );
+    expect(afterOutput.output).toBe("File edited successfully");
+  });
+
+  it("mirrors the reminder to stderr when the before-event carries no callID to correlate", async () => {
+    // Real opencode always sends `callID`; this guards the degraded-host
+    // path. With no callID there is no `tool.execute.after` to target,
+    // so the reminder is surfaced to stderr (operator-visible) instead
+    // of being silently dropped — parity with the `warn` branch.
+    writeFile("src/foo.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260522_0102",
+      binding: [{ file: "src/foo.ts", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "accepted_artifact",
+        target_file: "src/foo.ts",
+        test_files: ["src/foo.test.ts"],
+      },
+    });
+
+    const hooks = await makeHooks();
+    const stderr = await captureStderr(async () => {
+      await hooks["tool.execute.before"]?.(
+        { tool: "edit" },
+        {
+          args: {
+            filePath: path.join(tmpRoot, "src/foo.ts"),
+            oldString: "before",
+            newString: "after",
+          },
+        },
+      );
+    });
+    expect(stderr).toContain("meta-edit");
+    expect(stderr).toContain(
+      "pin just below, at, and just above the boundary",
+    );
+  });
+
+  it("delivers each call's reminder to its own callID — no cross-talk between concurrent pending reminders", async () => {
+    // Two edits are gated before either after-event fires. A degenerate
+    // single-slot implementation would mis-deliver; this proves the
+    // callID-keyed Map isolates them. The two grants use different
+    // kinds so the reminders are unambiguously distinguishable.
+    writeFile("src/foo.ts", "foo-before\n");
+    writeFile("src/bar.ts", "bar-before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260522_0200",
+      binding: [{ file: "src/foo.ts", before_sha256: sha256("foo-before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "accepted_artifact",
+        target_file: "src/foo.ts",
+        test_files: ["src/foo.test.ts"],
+      },
+    });
+    await grants.issue({
+      edit_id: "edit_20260522_0201",
+      binding: [{ file: "src/bar.ts", before_sha256: sha256("bar-before\n") }],
+      declaration: {
+        kind: "edit_error_handling",
+        target: "prod",
+        provenance: "accepted_artifact",
+        target_file: "src/bar.ts",
+        test_files: ["src/bar.test.ts"],
+      },
+    });
+
+    const hooks = await makeHooks();
+    // Two before-events stash two distinct reminders.
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-foo" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/foo.ts"),
+          oldString: "foo-before",
+          newString: "foo-after",
+        },
+      },
+    );
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-bar" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/bar.ts"),
+          oldString: "bar-before",
+          newString: "bar-after",
+        },
+      },
+    );
+
+    // Deliver in REVERSE order — call-bar's after first.
+    const barOut = { output: "bar result" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-bar" },
+      barOut,
+    );
+    const fooOut = { output: "foo result" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-foo" },
+      fooOut,
+    );
+
+    // call-bar received the error-handling reminder — not boundary's.
+    expect(barOut.output).toContain("drive the intended failure path");
+    expect(barOut.output).not.toContain(
+      "pin just below, at, and just above the boundary",
+    );
+    // call-foo received the boundary reminder — not error-handling's.
+    expect(fooOut.output).toContain(
+      "pin just below, at, and just above the boundary",
+    );
+    expect(fooOut.output).not.toContain("drive the intended failure path");
+  });
+});
