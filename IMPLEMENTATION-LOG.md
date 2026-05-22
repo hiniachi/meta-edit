@@ -1436,3 +1436,53 @@ mis-marshals non-empty string arrays.
   Q2 (`edit_cosmetic` boundary examples) remains PAUSED for v0.6.1.
 - Version bump: `package.json` and `.claude-plugin/plugin.json` from
   0.5.1 → 0.6.0 (minor — tool surface expansion + provenance field).
+
+## v0.6.1: fix session-onboarding entry-point guard (PR #85 Codex review)
+
+- Completed: 2026-05-21
+- What works:
+  - PR #85 (v0.5.1) introduced an `if (import.meta.main)` guard around
+    `main()` in `src/hooks/session-onboarding.ts` so unit tests could
+    import `buildOnboardingMessage` without `main()`'s `readStdin()`
+    hanging the runner. Codex's automated review of PR #85 flagged
+    that the guard does not survive bundling: Bun lowers
+    `import.meta.main` to `__require.main == __require.module`, and
+    under Node ESM both operands are `undefined`, so the comparison is
+    always `true`. The bundled `dist/hooks/session-onboarding.js`
+    would therefore run `main()` even on a deep import — defeating the
+    guard's purpose.
+  - Fix: remove the guard entirely and split the pure message builder
+    into its own side-effect-free module.
+    - New file `src/hooks/onboarding-message.ts` exports
+      `buildOnboardingMessage()` and nothing else — no `main()`, no
+      module-load side effect. Safe to import from anywhere.
+    - `src/hooks/session-onboarding.ts` imports `buildOnboardingMessage`
+      from the new module and calls `main()` unconditionally again.
+      This is correct: the hook script is only ever spawned as a
+      process entry point (registered in `hooks/hooks.json`), never
+      imported, so an entry-point guard was never actually needed for
+      production — it existed solely to make the unit test importable.
+    - `src/hooks/session-onboarding.test.ts` imports
+      `buildOnboardingMessage` from `onboarding-message.ts`. Because
+      that module has no `main()`, the import is structurally
+      side-effect-free — no guard, no hang.
+  - Bundling consequence: with `import.meta.main` gone from every
+    source file, Bun no longer injects the `createRequire(import.meta.url)`
+    interop preamble into any of the six bundles. `dist/cli.js`,
+    `dist/server.js`, and `dist/hooks/deny-raw-edit.js` therefore lose
+    the now-unused `var __require = createRequire(...)` line. The diff
+    is mechanical and expected.
+- Tests:
+  - `src/hooks/session-onboarding.test.ts` re-pointed to the new
+    module; the four merged-template assertions are unchanged and the
+    import is now provably side-effect-free.
+  - Full suite: 857 tests pass (unchanged count — the test was
+    re-pointed, not added to). `tsc --noEmit` clean. `bun run build`
+    clean — `dist/` regenerated.
+  - Manual: `echo '{"session_id":"s","cwd":"/tmp"}' | node
+    dist/hooks/session-onboarding.js` still emits the SessionStart
+    payload and exits 0 (the hook script path is unaffected).
+- Spec deviations: none. No behavior change to the hook itself; the
+  fix is purely the module split + guard removal.
+- Version bump: `package.json` and `.claude-plugin/plugin.json` from
+  0.6.0 → 0.6.1 (patch — bundled-artifact correctness fix).

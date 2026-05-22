@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -43,7 +42,6 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/opencode/plugin.ts
 import * as fs9 from "node:fs";
@@ -8250,4 +8248,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=C99A094A70D0500A64756E2164756E21
+//# debugId=4CC930DFA8D6632164756E2164756E21

@@ -3,9 +3,13 @@
 // prepends the reminder block to the existing typed-edit-onboarding
 // skill pointer; this file asserts both halves are present so a future
 // edit cannot silently drop either one.
+//
+// Imports from onboarding-message.ts (the side-effect-free module), not
+// session-onboarding.ts (the hook script whose module load runs
+// main()). See PR #85 Codex review.
 
 import { describe, expect, it } from "bun:test";
-import { buildOnboardingMessage } from "./session-onboarding.js";
+import { buildOnboardingMessage } from "./onboarding-message.js";
 
 describe("buildOnboardingMessage — merged reminder + skill pointer template", () => {
   it("returns a non-empty additionalContext payload", () => {
