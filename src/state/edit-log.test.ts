@@ -461,16 +461,18 @@ describe("EditLog phases (issued / consumed / rejected)", () => {
   it("round-trips execution_state on an issued entry", () => {
     const log = new EditLog(tmpRoot);
     log.appendIssued(issued({ execution_state: "recovery" }));
-    const all = log.readAll();
-    const first = all[0];
-    expect(first?.phase === "issued" && first.execution_state).toBe("recovery");
+    const first = log.readAll()[0];
+    if (first?.phase !== "issued") throw new Error("expected issued phase");
+    expect(first.execution_state).toBe("recovery");
   });
+
   it("still validates a pre-0.7.0 issued entry that omits execution_state", () => {
     const log = new EditLog(tmpRoot);
-    log.appendIssued(issued()); // issued() default carries no execution_state
+    log.appendIssued(issued());
     expect(log.readAll().length).toBe(1);
   });
-  it("accepts an audit_warnings entry with the execution_state_repeating_failure code", () => {
+
+  it("round-trips an audit_warnings entry carrying execution_state_repeating_failure", () => {
     const log = new EditLog(tmpRoot);
     log.appendIssued(
       issued({
@@ -480,7 +482,8 @@ describe("EditLog phases (issued / consumed / rejected)", () => {
       }),
     );
     const first = log.readAll()[0];
-    expect(first?.phase === "issued" && first.audit_warnings?.[0]?.code).toBe(
+    if (first?.phase !== "issued") throw new Error("expected issued phase");
+    expect(first.audit_warnings?.[0]?.code).toBe(
       "execution_state_repeating_failure",
     );
   });
