@@ -16623,6 +16623,10 @@ var TOOL_DESCRIPTIONS = {
 whitespace, formatter output, or comment edits that do not change the
 information content of the comment.
 
+Cosmetic edits are exempt from spec-derivation discipline —
+whitespace, formatter output, and information-invariant comment
+edits do not pin behavior.
+
 Use this tool when, and ONLY when, the patch is one of the following:
 - Whitespace adjustment (indentation, blank lines, trailing whitespace,
   line breaks)
@@ -16668,15 +16672,6 @@ Declare \`target: "prod"\` for cosmetic edits to production files, or
 do not require behavioral tests in either case; \`test_files\` may be
 empty.
 
-Rationale for the narrow scope:
-edit_cosmetic intentionally has a narrow vocabulary — whitespace,
-comments, formatter output — to avoid being a hiding place for behavior
-changes rationalized as "just a refactor". If your change does not fit
-this narrow definition, the typed surface does not have a tool for what
-you want. Stop and ask the user. That friction is the design: the absence
-of a generic refactor tool forces the question "what kind of change is
-this, really?"
-
 Fallback obligation:
 If, after applying this tool, you discover that your patch did anything
 beyond whitespace / comment / formatter output (a rename slipped in, a
@@ -16705,6 +16700,10 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_boundary_condition: `Modify a comparison, threshold, limit, or boundary in production code.
 
+The boundary value being changed is defined by the spec / accepted
+artifact / user statement, not by what the implementation currently
+happens to compute.
+
 Use this tool when:
 - Changing comparison operators (<, <=, >, >=, ==, !=)
 - Changing numeric limits or thresholds (max, min, cap, floor, ceiling)
@@ -16712,33 +16711,26 @@ Use this tool when:
 - Changing pagination, rate limit, timeout duration, retry count
 - Changing buffer or window sizes
 
-Required tests (you MUST cover all three of these per boundary):
-1. Value just below the boundary (boundary - 1, or just-outside)
-2. Value exactly at the boundary
-3. Value just above the boundary (boundary + 1, or just-inside)
+Per-target obligations (what \`target: "prod"\` commits to, what
+\`target: "test"\` must contain) are delivered in the declaration
+result. If you cannot enumerate all three boundary values
+(just-below, at, just-above) for this change at declaration time,
+the boundary semantics are unclear; stop and ask the user to clarify
+which value should be inclusive and which should be exclusive before
+declaring.
 
-These three cases are non-negotiable. Off-by-one errors are the most common
-bug class in this category, and SQLite testing methodology treats boundary
-tests as a hard requirement. If your change has multiple boundaries
-(e.g., both a min and a max), all three cases must be tested for each
-boundary.
-
-If you cannot enumerate all three boundary values for this change, the
-boundary semantics are unclear. Stop and ask the user to clarify which
-value should be inclusive and which should be exclusive, before applying
-the edit.
-
-test_files must list at least one file where these three cases will be
-added. Existing test files are acceptable.
+When \`target: "prod"\`, \`test_files\` must list at least one file
+where the boundary tests will be added. Existing test files are
+acceptable.
 
 Target (required):
-Declare \`target: "prod"\` when editing the production boundary itself,
-or \`target: "test"\` when editing the boundary tests (the file pointed
-at by your earlier target: prod declaration's \`test_files\`). One
-declaration covers one target — pair a target: prod call with a
-target: test call to land both within the same commit. When target is
-"test", \`target_file\` IS the test file and \`test_files\` must be
-empty.
+Declare \`target: "prod"\` for the production-side edit and
+\`target: "test"\` for the test-side edit. The two declarations may
+land in either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16750,6 +16742,10 @@ General principles (apply to every edit):
   edit_boolean_condition: `Modify a boolean expression, conditional logic, or guard clause in
 production code.
 
+The boolean rule being changed is defined by the spec / accepted
+artifact / user statement (the business rule, policy, or invariant),
+not by what the implementation currently happens to evaluate.
+
 Use this tool when:
 - Changing boolean operators (&&, ||, !)
 - Adding or removing conditions in an if / else / switch
@@ -16757,22 +16753,9 @@ Use this tool when:
 - Changing the structure of conditional branching
 - Changing null / nil / undefined checks
 
-Required tests (you MUST cover):
-1. Each path through the new conditional must have at least one test
-   that takes that path
-2. For each atomic condition that was changed (e.g., changing \`a && b\` to
-   \`a && b && c\`), there must be a test where that atomic condition
-   independently determines the outcome
-3. Boolean inversion: at least one test where the change in logic produces
-   a different observable result than the old logic would have
-
-The third requirement is the test that proves your edit was meaningful.
-If no test exists that distinguishes the new behavior from the old, the
-edit is either a no-op or insufficiently tested. Either is a problem.
-
-This is a lightweight version of MC/DC (Modified Condition / Decision
-Coverage). Full MC/DC is not required, but the spirit of "each condition
-independently affects outcome" is.
+Per-target obligations (path coverage, independent influence of each
+atomic condition, and a test that distinguishes the new logic from
+the old) are delivered in the declaration result.
 
 If the boolean change is purely a transformation that preserves truth
 values (e.g., De Morgan's law applied), it still goes through this tool —
@@ -16782,11 +16765,13 @@ whitespace / comments / formatter output only and does NOT cover boolean
 restructuring.
 
 Target (required):
-Declare \`target: "prod"\` when editing the conditional logic in
-production code, or \`target: "test"\` when editing the boolean tests
-that exercise it. Pair the two declarations in the same commit. When
-target is "test", \`target_file\` IS the test file and \`test_files\`
-must be empty.
+Declare \`target: "prod"\` for the production-side edit and
+\`target: "test"\` for the test-side edit. The two declarations may
+land in either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16797,34 +16782,33 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_state_transition: `Modify a state machine, workflow, or status transition in production code.
 
+The state machine being changed (which transitions are legal, which
+are forbidden, what invariant holds across each edge) is defined by
+the state diagram / transition table / accepted artifact, not by
+what the current code happens to allow.
+
 Use this tool when:
 - Adding, removing, or modifying allowed transitions between states
 - Changing what triggers a state transition
 - Adding or removing valid states
 - Changing the side effects that occur on transition
 
-Required tests (you MUST cover):
-1. Allowed transitions: each new or modified allowed transition must have
-   a test that performs it and verifies the resulting state
-2. Forbidden transitions: each transition that should NOT be allowed must
-   have a test that attempts it and verifies it is rejected (and that no
-   partial state change occurred)
-3. Invalid input no-op: triggering a transition from an invalid state must
-   not produce a partial state change
-
-State transition bugs are particularly insidious because they often
-manifest only under specific orderings of events. The forbidden-transition
-tests are as important as the allowed-transition tests.
+Per-target obligations (allowed-transition coverage, forbidden-
+transition rejection with no partial state change, invalid-input
+no-op) are delivered in the declaration result.
 
 If your change adds new states, you must also test transitions from
 existing states into the new states, and from the new states to existing
 states (where allowed).
 
 Target (required):
-Declare \`target: "prod"\` when editing the state machine in production
-code, or \`target: "test"\` when editing its transition tests. Pair the
-two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (state
+machine) and \`target: "test"\` for its transition tests. The two
+declarations may land in either order — red-first (\`target: "test"\`
+first, then \`target: "prod"\`) or green-first (\`target: "prod"\`
+first, then \`target: "test"\`) — and both may land in the same
+commit. When \`target: "test"\`, \`target_file\` IS the test file
+and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16835,37 +16819,31 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_db_schema: `Modify database schema: tables, columns, indexes, constraints, migrations.
 
+The schema invariants being changed (uniqueness, foreign-key closure,
+nullability, index reachability) are defined by the data model / ERD /
+accepted ADR, not by what the current CREATE TABLE statement happens
+to produce.
+
 Use this tool when:
 - Adding, removing, or modifying columns, tables, indexes
 - Changing constraints (NOT NULL, UNIQUE, FOREIGN KEY, CHECK)
 - Creating or modifying migration files (DDL)
 - Changing collation, charset, or storage parameters
 
-Required tests (you MUST cover):
-1. Migration application: the migration must apply cleanly to a schema in
-   the previous state
-2. Existing data compatibility: the migration must not corrupt or lose
-   existing data. Provide test fixtures that exist before the migration
-   and verify they are accessible after
-3. Rollback OR forward-only justification: either provide a tested
-   down-migration, or document explicitly in rationale why this migration
-   is forward-only and how recovery would work
-4. Index / constraint behavior: any new index must have a test
-   demonstrating it is used; any new constraint must have a test showing
-   both accepted and rejected inputs
+Per-target obligations (migration applies cleanly, existing data
+compatibility, rollback OR forward-only justification, index /
+constraint behavior) are delivered in the declaration result.
 
-Schema changes are infrastructural and rarely revertible in production.
-The rollback question is not optional — answer it explicitly even if the
-answer is "no rollback, here's why."
-
-If your change modifies existing data (UPDATE statements, data backfills),
-you MUST also use edit_data_migration alongside this tool.
+If your change modifies existing data (UPDATE statements, data
+backfills), you MUST also use edit_data_migration alongside this tool.
 
 Target (required):
-Declare \`target: "prod"\` when editing the migration / DDL itself, or
-\`target: "test"\` when editing the migration tests (apply / data /
-rollback / constraint tests). Pair the two declarations in the same
-commit. When target is "test", \`target_file\` IS the test file and
+Declare \`target: "prod"\` for the production-side edit (migration /
+DDL) and \`target: "test"\` for the migration tests. The two
+declarations may land in either order — red-first (\`target: "test"\`
+first, then \`target: "prod"\`) or green-first (\`target: "prod"\`
+first, then \`target: "test"\`) — and both may land in the same
+commit. When \`target: "test"\`, \`target_file\` IS the test file and
 \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
@@ -16878,35 +16856,29 @@ General principles (apply to every edit):
   edit_data_migration: `Modify production data through migration scripts, backfills, or
 data-transformation code.
 
+The before/after invariants being established are defined by the
+migration spec / accepted artifact, not by what the current data
+happens to look like in production.
+
 Use this tool when:
 - Backfilling data into new columns
 - Transforming or normalizing existing data
 - Correcting bad data through scripted updates
 - Splitting or merging records
 
-Required tests (you MUST cover):
-1. Idempotency: running the migration twice must produce the same result
-   as running it once
-2. Partial failure recovery: if the migration fails partway through, the
-   remaining work must be safely re-runnable
-3. Existing fixture transformation: provide concrete examples of
-   pre-migration data and verify they are correctly transformed
-4. Edge cases: NULL values, empty strings, maximum-length values,
-   already-migrated rows
-
-Data migrations are one-way operations on production data. Test them as
-thoroughly as production code, ideally more so. The idempotency test is
-the single most important one — write it first.
-
-For long-running migrations, also consider testing chunked execution and
-verifying that an interrupted-then-resumed migration completes correctly.
+Per-target obligations (idempotency, partial-failure recovery, fixture
+transformation, edge cases) are delivered in the declaration result.
+**The idempotency test is the single most important one — write it
+first.** That ordering is load-bearing.
 
 Target (required):
-Declare \`target: "prod"\` when editing the migration / backfill script
-itself, or \`target: "test"\` when editing the migration tests
-(idempotency, partial failure, fixture transformation, edge cases). Pair
-the two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (migration /
+backfill script) and \`target: "test"\` for the migration tests. The
+two declarations may land in either order — red-first
+(\`target: "test"\` first, then \`target: "prod"\`) or green-first
+(\`target: "prod"\` first, then \`target: "test"\`) — and both may
+land in the same commit. When \`target: "test"\`, \`target_file\`
+IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16918,6 +16890,10 @@ General principles (apply to every edit):
   edit_api_contract: `Modify the request or response shape of an API: endpoints, fields, status
 codes, schemas.
 
+The contract being changed is defined by the spec / accepted
+artifact (OpenAPI, IDL, RFC, ADR), not by what the current handler
+implementation happens to return.
+
 Use this tool when:
 - Adding, removing, or renaming fields in API request or response
 - Changing field types or formats
@@ -16925,31 +16901,23 @@ Use this tool when:
 - Adding or removing endpoints
 - Modifying OpenAPI / GraphQL / gRPC schema files
 
-Required tests (you MUST cover):
-1. Backward compatibility: existing clients (including older versions)
-   must continue to work, or the breaking change must be explicitly
-   acknowledged in rationale
-2. Missing field: request with the new field absent must behave correctly
-   (default value, error, or fallback as documented)
-3. Extra field: request with unknown extra fields must behave correctly
-   (typically ignored, but verify)
-4. Status code: each status code path that this change affects must have
-   a test verifying the correct code is returned
-
-API contract changes affect every consumer. The backward compatibility
-test is the most important — name it explicitly and write it first.
+Per-target obligations (what \`target: "prod"\` commits to —
+backward compatibility, missing/extra field handling, status-code
+coverage — and what the matching \`target: "test"\` file must
+contain) are delivered in the declaration result.
 
 If the change is a breaking change, the rationale field must say so
 explicitly, e.g., "Breaking change: removing the deprecated \`legacyId\`
 field. Migration plan: ..."
 
 Target (required):
-Declare \`target: "prod"\` when editing the API surface in production
-code (handlers, schemas, OpenAPI / GraphQL / gRPC definitions), or
-\`target: "test"\` when editing the contract tests (backward
-compatibility, missing/extra field, status code). Pair the two
-declarations in the same commit. When target is "test", \`target_file\`
-IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (handlers,
+schemas, OpenAPI / GraphQL / gRPC definitions) and \`target: "test"\`
+for the contract tests. The two declarations may land in either order
+— red-first (\`target: "test"\` first, then \`target: "prod"\`) or
+green-first (\`target: "prod"\` first, then \`target: "test"\`) — and
+both may land in the same commit. When \`target: "test"\`,
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16960,34 +16928,32 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_serialization: `Modify a serializer, parser, codec, or data format handler.
 
+The format contract being changed (byte-level layout, supported
+versions, what counts as malformed) is defined by the format spec /
+RFC / data dictionary, not by what the current encoder happens to
+emit.
+
 Use this tool when:
 - Changing JSON / YAML / XML / Protobuf / MessagePack handling
 - Modifying custom binary or text formats
 - Changing how data is encoded for storage or transport
 - Modifying compatibility layers between format versions
 
-Required tests (you MUST cover):
-1. Round-trip: serialize then deserialize, verify equivalence
-2. Read old format: the new code must be able to read data produced by
-   the previous version
-3. Write new format: produced output must be readable by the new parser,
-   and ideally by tools that consume this format
-4. Invalid input: malformed input must be rejected with a clear error,
-   not silently corrupted
-
-Format compatibility bugs are particularly painful because they tend to
-be discovered only when production data is already in the new format and
-cannot be read by anything. The "read old format" test is the safety net.
+Per-target obligations (round-trip equivalence, read-old-format,
+write-new-format, malformed-input rejection) are delivered in the
+declaration result.
 
 If the format change is intentionally non-backward-compatible, the
 rationale must say so and describe the migration path for existing data.
 
 Target (required):
-Declare \`target: "prod"\` when editing the serializer / parser / codec
-itself, or \`target: "test"\` when editing its round-trip / old-format /
-invalid-input tests. Pair the two declarations in the same commit. When
-target is "test", \`target_file\` IS the test file and \`test_files\`
-must be empty.
+Declare \`target: "prod"\` for the production-side edit (serializer /
+parser / codec) and \`target: "test"\` for its round-trip / old-format
+/ invalid-input tests. The two declarations may land in either order
+— red-first (\`target: "test"\` first, then \`target: "prod"\`) or
+green-first (\`target: "prod"\` first, then \`target: "test"\`) — and
+both may land in the same commit. When \`target: "test"\`,
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -16998,6 +16964,10 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_error_handling: `Modify how errors, exceptions, or failure paths are handled.
 
+The failure surface being changed (which errors propagate, in what
+form, with what observable signal) is defined by the contract /
+accepted artifact, not by whatever the current code happens to throw.
+
 Use this tool when:
 - Adding, removing, or modifying try / catch blocks
 - Changing what exceptions are thrown or how they propagate
@@ -17005,29 +16975,22 @@ Use this tool when:
 - Changing rollback behavior on partial success
 - Changing what is logged or reported on error
 
-Required tests (you MUST cover):
-1. Failure path executes: trigger the error condition and verify the new
-   handling code runs
-2. Observable error: the caller (or user, or log) must see an appropriate
-   error indicator. Silent failures are forbidden
-3. State after failure: any partial state changes must be either rolled
-   back or explicitly documented as accepted partial state
-4. Error type / code: if specific error types or codes are part of the
-   contract, verify the correct one is produced
-
-Silent failure — a catch block that doesn't re-throw, log, or otherwise
-expose the error — is almost certainly a bug. Add at least one test that
-verifies the error is observable.
+Per-target obligations (failure-path execution, observable error,
+post-failure state, error type / code) are delivered in the
+declaration result.
 
 Swallowing exceptions is forbidden unless the rationale explicitly states
 why and what the recovery path is.
 
 Target (required):
-Declare \`target: "prod"\` when editing error-handling code in
-production, or \`target: "test"\` when editing the tests that exercise
-failure paths and observable-error contracts. Pair the two declarations
-in the same commit. When target is "test", \`target_file\` IS the test
-file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (error-handling
+code) and \`target: "test"\` for the tests that exercise failure paths
+and observable-error contracts. The two declarations may land in
+either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17038,34 +17001,29 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_retry_timeout: `Modify retry, timeout, or backoff behavior.
 
+The retry budget being changed (retry count, backoff schedule,
+timeout, giveup signal) is defined by the SLA / accepted artifact,
+not by whatever value is currently configured in production.
+
 Use this tool when:
 - Changing retry counts, retry intervals, or backoff strategies
 - Modifying timeout durations
 - Adding or removing retry logic
 - Changing idempotency keys or duplicate-detection logic
 
-Required tests (you MUST cover):
-1. Timeout exhaustion: when the timeout is exceeded, the operation fails
-   with the expected error and does not hang
-2. Retry exhaustion: when all retries are consumed, the operation fails
-   with the expected error and reports the underlying cause
-3. No duplicate side effects: retries must not produce duplicate external
-   side effects (emails, charges, database writes), unless idempotency is
-   documented as not required for this operation
-4. Success on retry: if the underlying operation succeeds on a retry
-   attempt, the overall call must report success
-
-The duplicate-side-effect test is the one that catches the worst bugs.
-If your code retries an HTTP POST that creates a record, verify that two
-records are not created when the first attempt times out but actually
-succeeded server-side.
+Per-target obligations (timeout exhaustion, retry exhaustion, no
+duplicate side effects under retry, success-on-retry) are delivered
+in the declaration result.
 
 Target (required):
-Declare \`target: "prod"\` when editing the retry / timeout / backoff
-logic in production code, or \`target: "test"\` when editing its
-exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
-two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (retry /
+timeout / backoff logic) and \`target: "test"\` for its exhaustion /
+duplicate-side-effect / success-on-retry tests. The two declarations
+may land in either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17077,6 +17035,11 @@ General principles (apply to every edit):
   edit_concurrency: `Modify concurrency primitives: locks, transactions, mutexes, parallelism,
 race conditions.
 
+The concurrency invariant being changed (atomicity boundary, lock
+order, happens-before relation) is defined by the spec / accepted
+artifact / concurrency model, not by what the current code happens
+to interleave.
+
 Use this tool when:
 - Adding, removing, or modifying locks (mutex, RWLock, semaphore)
 - Changing transaction boundaries or isolation levels
@@ -17084,29 +17047,22 @@ Use this tool when:
 - Changing lock ordering or scope
 - Adding or removing critical sections
 
-Required tests (you MUST cover):
-1. Concurrent execution: multiple invocations in parallel must produce a
-   consistent final state
-2. Race prevention: a sequence that would race without the new primitives
-   must produce a correct result with them
-3. Transaction or lock scope: assertions about what is or is not atomic
-   must be tested
-
-Concurrency tests are notoriously hard to write reliably. If your test
-framework supports controlled scheduling (e.g., loom in Rust, or property-
-based testing with race scheduling), use it. Otherwise, loop the test
-many times under stress and treat any failure as a bug.
+Per-target obligations (consistent-final-state under concurrent
+execution, race-prevention coverage, atomic-scope assertions) are
+delivered in the declaration result.
 
 If you cannot reproduce the race or contention this change addresses,
 the change is speculative. Prefer to demonstrate the bug with a failing
 test before applying the fix.
 
 Target (required):
-Declare \`target: "prod"\` when editing the concurrency primitives in
-production code, or \`target: "test"\` when editing the concurrency
-tests. Pair the two declarations in the same commit. When target is
-"test", \`target_file\` IS the test file and \`test_files\` must be
-empty.
+Declare \`target: "prod"\` for the production-side edit (concurrency
+primitives) and \`target: "test"\` for the concurrency tests. The
+two declarations may land in either order — red-first
+(\`target: "test"\` first, then \`target: "prod"\`) or green-first
+(\`target: "prod"\` first, then \`target: "test"\`) — and both may
+land in the same commit. When \`target: "test"\`, \`target_file\`
+IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17118,6 +17074,11 @@ General principles (apply to every edit):
   edit_external_side_effect: `Modify code that produces external side effects: emails, events, queue
 messages, webhooks, billing operations, audit logs.
 
+The side-effect contract being changed (when it fires, against whom,
+with what payload, at-least-once / at-most-once / exactly-once
+posture) is defined by the integration spec / accepted artifact, not
+by the production frequency the current code happens to produce.
+
 Use this tool when:
 - Adding, removing, or modifying calls that affect external systems
 - Changing what events are emitted or to whom
@@ -17125,30 +17086,23 @@ Use this tool when:
 - Changing notification logic
 - Adding or removing audit or compliance logging
 
-Required tests (you MUST cover):
-1. Side effect fires on success: when the conditions for the side effect
-   are met, the side effect occurs (with correct payload)
-2. Side effect does NOT fire on failure: when the operation fails, no
-   spurious external effect is produced
-3. Idempotency: if the operation is retried (network failure, duplicate
-   request), the side effect occurs at most once
-4. Correct recipient / payload: the side effect targets the right
-   external system with the right data
-
-The "no spurious side effect on failure" test is the most important one
-for billing, email, and audit code. Send-money-but-fail-to-record is the
-textbook AI-generated billing bug.
+Per-target obligations (fires-on-success, no-fire-on-failure,
+idempotency under retry, correct recipient / payload) are delivered
+in the declaration result.
 
 For test environments, side effects MUST be mocked or routed to a test
 sink. Verify that the test does not actually charge a card or send a
-real email. If your test makes a real external call, your test is wrong.
+real email. **If your test makes a real external call, your test is
+wrong.** This prohibition is load-bearing.
 
 Target (required):
-Declare \`target: "prod"\` when editing the side-effect-producing code
-in production, or \`target: "test"\` when editing its tests (fires-on-
-success, no-fire-on-failure, idempotency, correct recipient). Pair the
-two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (side-effect-
+producing code) and \`target: "test"\` for its tests. The two
+declarations may land in either order — red-first (\`target: "test"\`
+first, then \`target: "prod"\`) or green-first (\`target: "prod"\`
+first, then \`target: "test"\`) — and both may land in the same
+commit. When \`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17159,32 +17113,28 @@ General principles (apply to every edit):
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
   edit_cache_invalidation: `Modify cache keys, TTLs, invalidation logic, or staleness handling.
 
+The freshness contract being changed (staleness budget, invalidation
+events, TTL) is defined by the spec / accepted artifact, not by what
+the current cache code happens to return.
+
 Use this tool when:
 - Changing cache key generation
 - Modifying TTL or expiration logic
 - Adding or removing invalidation triggers
 - Changing what is cached or where
 
-Required tests (you MUST cover):
-1. Stale data prevention: after an invalidation event, the next read must
-   return fresh data, not the cached stale value
-2. Invalidation triggers: the events that should invalidate the cache
-   must be tested explicitly
-3. TTL boundary: behavior just before, at, and after expiration (this is
-   also a boundary_condition pattern — be explicit)
-4. Cache key collision: keys for different data must not collide
-
-Cache bugs typically manifest as "wrong data shown to user" or "stale
-data persisted to a downstream system". Both are silent until reported
-by users, which is too late. Test invalidation explicitly.
+Per-target obligations (stale-data prevention, invalidation-trigger
+coverage, TTL boundary, key collision) are delivered in the
+declaration result.
 
 Target (required):
-Declare \`target: "prod"\` when editing cache key / TTL / invalidation
-code in production, or \`target: "test"\` when editing its tests
-(stale-data prevention, invalidation triggers, TTL boundary, key
-collision). Pair the two declarations in the same commit. When target
-is "test", \`target_file\` IS the test file and \`test_files\` must be
-empty.
+Declare \`target: "prod"\` for the production-side edit (cache key /
+TTL / invalidation logic) and \`target: "test"\` for its tests. The
+two declarations may land in either order — red-first
+(\`target: "test"\` first, then \`target: "prod"\`) or green-first
+(\`target: "prod"\` first, then \`target: "test"\`) — and both may
+land in the same commit. When \`target: "test"\`, \`target_file\`
+IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17196,6 +17146,10 @@ General principles (apply to every edit):
   edit_permission_logic: `Modify authorization, access control, role checks, ownership checks,
 tenancy, or feature flag gating.
 
+The authorization matrix being changed (which subjects may take which
+actions on which resources) is defined by the policy / RBAC table /
+ADR, not by what the current authz code happens to allow.
+
 Use this tool when:
 - Changing role / permission / owner / tenant / feature flag checks
 - Modifying access control predicates
@@ -17203,36 +17157,24 @@ Use this tool when:
 - Modifying authentication state checks
 - Changing API key, token, or session validation
 
-Required tests (you MUST cover):
-1. Allow matrix: enumerate the (subject, resource) pairs that should be
-   allowed, and test each one
-2. Deny matrix: enumerate the (subject, resource) pairs that should be
-   denied, and test each one
-3. Negative side-effect: when access is denied, no database write, no
-   event emission, no external call, no state mutation must occur. Test
-   this explicitly with a deny case
-4. Edge cases: suspended user, expired token, missing role, deleted
-   resource — each must have a test
-
-Permission bugs are silent failures that compromise data integrity, user
-trust, and regulatory compliance. They cannot be caught by ordinary smoke
-tests, because the system continues to function — it just authorizes the
-wrong people.
+Per-target obligations (allow matrix coverage, deny matrix coverage,
+negative-side-effect-on-deny, edge cases: suspended user / expired
+token / missing role / deleted resource) are delivered in the
+declaration result.
 
 If you cannot enumerate the allow matrix and the deny matrix for this
 change, the change is too risky to apply without further specification.
 Stop and ask for the matrix to be confirmed before proceeding.
 
-The negative side-effect test (test 3) is the one that catches the worst
-bugs. A permission check that returns false but still writes to the
-database is a permission bypass. Test it.
-
 Target (required):
-Declare \`target: "prod"\` when editing permission / authz code in
-production, or \`target: "test"\` when editing the allow / deny matrix
-tests and negative-side-effect tests. Pair the two declarations in the
-same commit. When target is "test", \`target_file\` IS the test file
-and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (permission /
+authz code) and \`target: "test"\` for the allow / deny matrix tests
+and negative-side-effect tests. The two declarations may land in
+either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -17244,25 +17186,20 @@ General principles (apply to every edit):
   edit_dependency_config: `Modify package dependencies, runtime configuration, or feature
 configuration files.
 
+The dependency / config contract being changed (supported versions,
+runtime defaults, environment expectations) is defined by the
+supported-versions table / MSRV / build-matrix CI config / accepted
+artifact, not by what is on the developer's machine right now.
+
 Use this tool when:
 - Adding, removing, or upgrading package dependencies
 - Modifying runtime config (env vars, config files)
 - Changing feature flag default values
 - Modifying build or deploy configuration that affects runtime behavior
 
-Required tests (you MUST cover):
-1. Build / install reproducibility: the new configuration must produce a
-   working build from a clean state
-2. Behavior under new config: at least one test exercises code paths
-   affected by the configuration change
-3. Default value: if a default is changed, both the old and new default
-   behaviors must be tested (the new default for the new code, the old
-   default for backward compatibility verification)
-
-Dependency upgrades are a common source of subtle regressions. If a
-dependency is upgraded, run the existing test suite and verify no
-behavior change in covered paths. If you observe a behavior change,
-document it explicitly — do not silently absorb it.
+Per-target obligations (build / install reproducibility, behavior
+under new config, default-value backward compatibility) are
+delivered in the declaration result.
 
 For security-related dependency upgrades, the rationale must say so
 explicitly.
@@ -17287,10 +17224,12 @@ updates are how contributors lose a day to a broken local
 environment; the user has standing to intercept before it lands.
 
 Target (required):
-Declare \`target: "prod"\` when editing the manifest / config in
-production, or \`target: "test"\` when editing tests that exercise the
-new configuration (reproducibility, default value, new-config behavior).
-Pair the two declarations in the same commit. When target is "test",
+Declare \`target: "prod"\` for the production-side edit (manifest /
+config) and \`target: "test"\` for tests that exercise the new
+configuration. The two declarations may land in either order —
+red-first (\`target: "test"\` first, then \`target: "prod"\`) or
+green-first (\`target: "prod"\` first, then \`target: "test"\`) — and
+both may land in the same commit. When \`target: "test"\`,
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
@@ -17304,6 +17243,10 @@ General principles (apply to every edit):
 CI configuration, this server's behavior, or the tool descriptions of
 edit_* tools.
 
+The policy line being moved is defined by the policy text / ADR /
+compliance requirement, not by what the current configuration
+happens to allow.
+
 Use this tool when:
 - Modifying .claude/ configuration
 - Modifying .github/workflows/ files that affect meta-edit
@@ -17316,17 +17259,9 @@ Use this tool when:
   that change how the project builds or releases) — see the boundary
   note in edit_dependency_config
 
-Required tests (you MUST cover):
-1. Configuration validity: the new configuration must parse and load
-   without error
-2. Existing edit log entries must remain readable under the new
-   configuration
-3. The new configuration must be applicable from a clean checkout (no
-   hidden dependencies on local state)
-
-Policy changes are at a higher trust boundary than ordinary code. This
-tool exists to mark them clearly in the edit log so they can be reviewed
-separately.
+Per-target obligations (configuration validity, existing edit log
+backward compatibility, clean-checkout applicability) are delivered
+in the declaration result.
 
 Policy changes that LOOSEN restrictions (allowing previously-denied
 operations, reducing test obligations, removing obligations from edit_*
@@ -17347,12 +17282,14 @@ behavior, and editing tool descriptions all carry implications
 the user has the standing to weigh; do not assume.
 
 Target (required):
-Declare \`target: "prod"\` when editing the policy / configuration /
-description files themselves, or \`target: "test"\` when editing tests
-that exercise the new policy (validity, readability of existing log
-entries, clean-checkout applicability). Pair the two declarations in
-the same commit. When target is "test", \`target_file\` IS the test
-file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (policy /
+configuration / description files) and \`target: "test"\` for tests
+that exercise the new policy. The two declarations may land in
+either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -18043,6 +17980,18 @@ function evaluateKindExecutionStateValidity(kind, executionState) {
   }
   return "accept";
 }
+function evaluateTargetSpecDerivation(kind, target, provenance) {
+  if (target === "prod")
+    return "accept";
+  if (kind === "edit_cosmetic")
+    return "accept";
+  if (provenance === "inference" || provenance === "speculation") {
+    return "reject";
+  }
+  if (provenance === "direct_observation")
+    return "warn";
+  return "accept";
+}
 var ARTIFACT_CITATION_RE = new RegExp([
   "§",
   "\\bADR-\\w",
@@ -18114,6 +18063,17 @@ function validateRequest(toolName, request, ctx) {
       code: "execution_state_repeating_failure",
       message: `execution_state="repeating_failure" was declared on ${toolName}, ` + `an implementation fix attempt. This is a self-flagged loop signal, ` + `not a mismatch — group it by code, separate from §3.3 warnings. ` + `The escape move is edit_observation or edit_proposal: record the ` + `failure (reproduction conditions, recent changes, hypotheses) ` + `before stacking another fix.`
     });
+  }
+  if (TOOLS_REQUIRING_TARGET.includes(toolName) && request.target !== undefined) {
+    const tsVerdict = evaluateTargetSpecDerivation(toolName, request.target, request.provenance);
+    if (tsVerdict === "reject") {
+      warnings.push(`(kind=${toolName}, target="${request.target}", provenance=` + `${request.provenance}) is rejected per SPEC §3.3.5. A test ` + `declared with inferred or speculative provenance cannot pin ` + `spec-defined behavior. If the spec is unclear, stop and ask ` + `which document defines the behavior the test should pin.`);
+    } else if (tsVerdict === "warn") {
+      auditWarnings.push({
+        code: "target_spec_derivation_warn",
+        message: `target="${request.target}" with provenance=` + `"${request.provenance}" usually means the test pins ` + `implementation-observed behavior, not spec-defined behavior ` + `(SPEC §3.3.5 impl-mirror smell). If the observation source ` + `is an external system (e.g. third-party API contract under ` + `test as regression), make the externality visible in the ` + `rationale. Otherwise re-classify provenance to ` + `accepted_artifact or user_confirmed citing the spec the ` + `test pins.`
+      });
+    }
   }
   const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
   if (toolRequiresTarget) {
@@ -18424,6 +18384,7 @@ function buildReminderContext(input) {
     phaseLine(input),
     scopeReviewLine(input.phase),
     kindCueLine(input.kind),
+    kindObligationsLine(input),
     provenanceLine(input.provenance, input.phase),
     executionStateLine(input),
     targetFollowupLine(input),
@@ -18434,6 +18395,79 @@ function buildReminderContext(input) {
 ${lines.join(`
 
 `)}`;
+}
+var KIND_TARGET_OBLIGATIONS = {
+  edit_boundary_condition: {
+    test: "This test pins the defined limits of the boundary — both sides of the threshold and the case just beyond it where the spec says an error is the correct answer. The impl-mirror smell is a single off-by-one fixed-point lifted from the production code; real boundary tests push the system right to the edge of its defined limits. Cite an accepted_artifact that names the limit; if the only provenance is direct_observation against prod, the boundary the test pins is whatever the implementation happens to do, not what was promised.",
+    prod: "You forward-declared boundary-value tests; this production edit must keep the defined limits stable on both sides. Movement of the threshold itself is a different kind — re-classify, do not absorb."
+  },
+  edit_boolean_condition: {
+    test: 'This test pins the decision — every atomic condition independently flips the outcome, not merely drives the predicate to true once and false once. The impl-mirror smell is one happy-path case and one failure case, which achieves statement coverage but cannot show that each sub-condition matters. Cite an accepted_artifact stating the rule the predicate encodes; direct_observation provenance usually means "I read && and || and wrote a case per branch", which mirrors the implementation.',
+    prod: "You committed to predicate-level tests; this production edit must keep each clause's independent effect on the outcome observable. Collapsing two conditions or short-circuiting one away breaks the matrix — re-derive it from the spec, do not let the new code shape it."
+  },
+  edit_state_transition: {
+    test: "This test pins the legal transition graph — which states reach which, which transitions are forbidden, and what invariant holds across each edge. The impl-mirror smell is a test that walks the exact sequence the code happens to implement and only asserts the final state. Cite an accepted_artifact drawing the state diagram; cover at least one forbidden transition explicitly.",
+    prod: "You forward-declared state-transition tests; this production edit must preserve which legal transitions reach which states, which transitions are forbidden, and the across-edge invariants. Adding or removing a state, or changing reachability, is a spec-level change — surface it."
+  },
+  edit_db_schema: {
+    test: "This test pins the schema invariants — uniqueness, foreign-key closure, nullability, index reachability. Inspecting the produced schema shape is fine; sourcing the expected shape from the current CREATE TABLE is the impl-mirror smell. Cite an accepted_artifact (ERD, data dictionary, ADR) naming each invariant; direct_observation against the migration is a happy-path round-trip, not an invariant test.",
+    prod: "You committed to schema-invariant tests; this production edit must keep the invariants enforceable by the DB itself (constraints, indexes, FKs). Moving a constraint from the DB to application code is a separate decision — surface it, do not weaken the schema and lean on tests to catch it."
+  },
+  edit_data_migration: {
+    test: `This test pins the anomaly behavior of the migration — what holds if the process dies mid-way, what holds on re-run, what holds under compound failure. Inspecting produced data is fine; the expected before/after invariants come from the migration's stated invariants, not from sampling current prod rows. The impl-mirror smell is a "ran in a clean DB, counted rows, looks fine" test, which is the happy path. The idempotency test runs first.`,
+    prod: "You forward-declared anomaly-style migration tests; this production migration must remain safe under interruption and re-run. A new atomic step the old migration did not require changes the anomaly surface — re-derive the test list, do not reuse the old one."
+  },
+  edit_api_contract: {
+    test: "This test pins the published interface — request shape, response shape, status codes, error semantics — using only what callers can observe. The impl-mirror smell is a test asserting on internal serialization order, internal field names not in the contract, or response timing the spec does not promise. Cite an accepted_artifact (OpenAPI / IDL / RFC / contract doc); direct_observation lets the test accidentally pin implementation leaks.",
+    prod: "You committed to contract-level tests; this production edit must keep the published interface stable. Adding a field, narrowing input, or widening output is a contract change — re-classify, do not absorb."
+  },
+  edit_serialization: {
+    test: "This test pins two things: round-trip equivalence (serialize → deserialize → same value) and malformed-input robustness (parser must reject bytes changed by some means other than the canonical serializer, without unwholesome actions). The impl-mirror smell is a test that round-trips through the same library version's own encoder and decoder — that proves a fixed point of the current implementation, not format compatibility. Include at least one cross-version or hand-crafted byte fixture.",
+    prod: "You forward-declared round-trip and malformed-input tests; this production edit must keep the serialized form readable by older consumers (or explicitly bump a version) and keep the parser robust against bytes it did not produce. Regenerating fixtures from the new encoder destroys the equivalence signal — re-derive fixtures from the spec."
+  },
+  edit_error_handling: {
+    test: "This test pins behavior under injected failure, not behavior on the happy path — rig a dependency to fail after a certain number of operations and assert both that the error is reported correctly and no invariant is violated. The impl-mirror smell is a test asserting try/catch fires on a real (uninjected) error during setup: that mirrors the catch block the code happens to have, not the spec's promise about errors. Cite an accepted_artifact listing which failure modes the contract acknowledges; run both single-failure and continuous-failure modes where the surface allows.",
+    prod: "You committed to fault-injection tests; this production edit must keep every error path observable from the outside (correct code returned, no resource leaked, no invariant violated). A catch that drops the error silently is the failure case those tests exist to detect."
+  },
+  edit_retry_timeout: {
+    test: 'This test pins the exhaustion semantics — how many retries, what backoff, what the caller sees after the final attempt — and the compound case where the retry itself encounters a new failure. The impl-mirror smell is asserting "after retry succeeds, value matches": that proves the retry loop exits, not that the policy is correct. Cover the "Nth attempt succeeds" case (recovery point advances) and the "every attempt fails" case (continuous-failure mode) plus the compound case "retry path itself hits a different failure". Cite an accepted_artifact naming the retry budget.',
+    prod: "You forward-declared retry/timeout exhaustion tests; this production edit must keep the budget, backoff schedule, and giveup signal compatible with what those tests assert. Silent budget extension masks an underlying error — surface it."
+  },
+  edit_concurrency: {
+    test: "This test pins the across-interleaving invariant — what must always hold regardless of which thread interleaves where — not a particular observed interleaving. Assert mutexes are held at all the right moments; assert that nothing is written to X which has not first been written and synced to Y. The impl-mirror smell is running two threads, hitting a race a few times by luck, and asserting no exception fires — that pins the OS schedule, not the invariant. Cite an accepted_artifact naming the invariant (lock order, happens-before relation, atomicity boundary); prefer a precondition/postcondition assertion to a probabilistic schedule.",
+    prod: "You committed to interleaving-invariant tests; this production edit must keep the lock order / happens-before / atomicity boundary intact. Widening or narrowing a critical section is a relevant change — re-derive the invariant list, do not lean on existing tests to catch a regression they were not designed for."
+  },
+  edit_external_side_effect: {
+    test: "This test pins what is sent to the outside world — count, ordering, idempotency under replay — track outbound effects (emails, webhooks, payments, log lines) and report leaks on every test run. The impl-mirror smell is asserting the side-effect function was called once on the happy path, with no retry-replay assertion, no partial-failure assertion, no ordering assertion: that pins the call site, not the contract. Cite an accepted_artifact describing the at-least-once / at-most-once / exactly-once contract; direct_observation gives you the production frequency, which is a fact about traffic, not about the contract.",
+    prod: "You forward-declared side-effect accounting tests; this production edit must keep the at-least-once / at-most-once / exactly-once posture stated in the test, and keep emissions idempotent under retry. Adding a side effect to a previously side-effect-free path is a re-classification. If your test makes a real external call, your test is wrong — that prohibition stays in force."
+  },
+  edit_cache_invalidation: {
+    test: "This test pins the freshness invariant: cached answer must equal authoritative answer for every input. The impl-mirror smell is a write-through read-back test (the easiest case, read-your-own-writes) that entirely skips the cross-actor invalidation case where someone else changed the underlying data. Run the scenario with the cache enabled and again with it busted, assert identical results. Cite an accepted_artifact naming the staleness budget; direct_observation gives you the TTL window, not the contract.",
+    prod: "You committed to freshness-invariant tests; this production edit must keep the equivalence cached answer == authoritative answer intact for every documented invalidation trigger. A new write path that does not invalidate the cache silently widens the staleness window — the canonical failure this kind exists to catch."
+  },
+  edit_permission_logic: {
+    test: "This test pins the authorization matrix — every (principal, resource, action) cell exercised in both allow and deny direction, where each axis independently flips the decision. The impl-mirror smell is a test that walks the if/else ladder in the authz function and writes one case per leaf: that proves the code is consistent with itself, not that the matrix matches the policy. Cite an accepted_artifact (RBAC table, policy doc, ADR); direct_observation is a strong smell because in prod you only see allowed requests at scale — denied requests are the negative space and must be tested explicitly.",
+    prod: "You forward-declared an authz matrix; this production edit must keep every cell's allow/deny decision matching the cited policy. Loosening a deny or tightening an allow is edit_policy_change, not this kind — re-classify, do not let the matrix drift."
+  },
+  edit_dependency_config: {
+    test: "This test pins behavior across the dependency / build matrix — the same answer must come out regardless of optimization level, signed-char default, endianness, or word size. The impl-mirror smell is a test that succeeds on the developer's exact toolchain version and silently depends on it: that pins the dev environment, not the supported environment. Cite an accepted_artifact (supported-versions table, MSRV / engines policy, build-matrix CI config); for a pinned dependency version, include at least the boundary versions of the supported range.",
+    prod: 'You committed to build-matrix tests; this production edit must keep the equivalence "same answer across all supported build variants" intact. Tightening a version range is edit_policy_change; widening it requires fresh evidence from each new supported point — do not extrapolate.'
+  },
+  edit_policy_change: {
+    test: "This test pins both sides of the policy line — the case just inside the new policy (must be allowed) and the case just outside (must be refused with the documented signal). This is the boundary-value pattern applied to a rule rather than a numeric limit. The impl-mirror smell is exercising only the side of the line that changed (loosening: only the newly-allowed case; tightening: only the newly-forbidden case): that demonstrates the code did the thing, not that the line is in the right place. Cite an accepted_artifact stating the new line.",
+    prod: "You forward-declared both-sides-of-the-line tests; this production edit must keep the documented refusal on the forbidden side and the documented acceptance on the allowed side. The LOOSEN-restriction obligation stays in this tool's description — a loosening without a strong rationale citation means this is the wrong tool. Quiet threshold drift without updating the cited artifact is the canonical failure this kind exists to prevent."
+  }
+};
+function kindObligationsLine(input) {
+  const { kind, target } = input;
+  if (kind === undefined || target === undefined)
+    return;
+  if (kind === "edit_cosmetic")
+    return;
+  const entry = KIND_TARGET_OBLIGATIONS[kind];
+  if (entry === undefined)
+    return;
+  return target === "prod" ? entry.prod : entry.test;
 }
 function phaseLine(input) {
   const kind = input.kind ?? "a typed meta-edit declaration";
@@ -18603,7 +18637,8 @@ var AuditWarningEntrySchema = exports_external.object({
     "kind_provenance_warn",
     "additional_files_warn",
     "citation_lint_missing",
-    "execution_state_repeating_failure"
+    "execution_state_repeating_failure",
+    "target_spec_derivation_warn"
   ]),
   message: exports_external.string()
 });
@@ -19022,9 +19057,9 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
     declaredTestFiles: args.test_files,
     auditWarnings: validation.auditWarnings
   });
-  const nextAction = `On your next native Edit / Write / MultiEdit call against ${fileList}, ` + `the deny-raw-edit hook will resolve this declaration automatically (no ` + `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` + `and expires at ${grant.expires_at}.` + batchNote + `
+  const nextAction = `${declarationReminder}` + batchNote + `
 
-${declarationReminder}`;
+(On your next native Edit / Write / MultiEdit against ${fileList}, ` + `the deny-raw-edit hook resolves this declaration automatically; ` + `expires ${grant.expires_at}.)`;
   return {
     summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,
@@ -19515,7 +19550,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.7.0",
+  version: "0.8.0",
   description: "MCP server with twenty-one kind-specific edit tools (15 SQLite-derived + edit_cosmetic + 5 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -20696,4 +20731,4 @@ export {
   main
 };
 
-//# debugId=ECA1E46CA5671CA264756E2164756E21
+//# debugId=E098A9C2CCF22AEC64756E2164756E21

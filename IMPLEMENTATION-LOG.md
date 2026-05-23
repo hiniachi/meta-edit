@@ -1691,3 +1691,79 @@ mis-marshals non-empty string arrays.
   classification, no new gate.
 - Version bump: `package.json` and `.claude-plugin/plugin.json`
   0.6.2 → 0.6.3 (patch — opencode write_allowed reminder parity).
+
+## v0.8.0: spec-derivation matrix + description slim + next_action reorder
+
+- Completed: 2026-05-24
+- What works:
+  - SPEC §3.3.5 added: (kind, target, provenance) test-obligation
+    matrix. target="test" × {inference, speculation} reject;
+    × direct_observation warn (target_spec_derivation_warn, the
+    impl-mirror smell); × {user_confirmed, accepted_artifact}
+    accept. edit_cosmetic exempt. target="prod" cells unchanged
+    (§3.3.1 softness retained for prod).
+  - Workflow-target guard (Codex F2): the validator gates the
+    §3.3.5 evaluation on TOOLS_REQUIRING_TARGET.includes(toolName)
+    rather than only on request.target !== undefined, so a schema
+    regression cannot silently extend the matrix's scope.
+  - AuditWarning code addition target_spec_derivation_warn in
+    common.ts union + edit-log.ts zod enum. Reader-version
+    compatibility is forward-only (pre-v0.8.0 readers using the
+    older strict enum will reject log lines carrying the new code).
+  - SPEC §3 narrative + registry.ts JSON-schema description for
+    target rewritten order-independent — red-first TDD and
+    green-first are both first-class declared orderings.
+  - 16 impl tool descriptions slimmed (4 batches of 4 tools each,
+    Codex F8 sub-batching): genealogical/motivational prose
+    removed; "Required tests" enumerations moved to the
+    declaration-result reminder via kindObligationsLine. Verbatim
+    invariant between descriptions.ts and SPEC.md §4 (CLAUDE.md §4)
+    preserved across every batch.
+  - kindObligationsLine added to src/reminders/context.ts with 15
+    SQLite-derived impl kinds × {prod, test} = 30 reminder
+    paragraphs. Vocabulary anchored in
+    https://sqlite.org/testing.html section by section; runtime
+    text strips SQLite §x.y meta-citations per D15 (the agent
+    receives general-purpose obligation prose, not academic
+    citation). A grep gate inside context.test.ts asserts the
+    runtime emission stays citation-free.
+  - apply.ts next_action reordered: meta-edit reminder block leads;
+    housekeeping prose follows as a parenthesized single sentence.
+  - Three load-bearing sentences preserved verbatim per Codex F3 /
+    design §5.1.1: edit_data_migration "The idempotency test is the
+    single most important one — write it first."; edit_external_
+    side_effect "If your test makes a real external call, your
+    test is wrong."; edit_policy_change LOOSEN-restrictions /
+    "Convenience is not an acceptable rationale" block.
+- Known issues: none observed in this session. The reader-version
+  compat asymmetry (forward-only) is documented in SPEC §3.3.5 and
+  in the risk register.
+- Tests added:
+  - common.test.ts: 7 cell-coverage tests + 5 validateRequest
+    integration tests for evaluateTargetSpecDerivation (160+ cells
+    asserted).
+  - edit-log.test.ts: 1 round-trip test for the new audit code.
+  - context.test.ts: 7 reminder tests (per-kind × per-target
+    coverage, edit_cosmetic carve-out absence, workflow kinds
+    absence, auditWarnings rendering, D15 citation-leak grep gate).
+  - Total new: 20. Suite: 953/953 green.
+- Spec deviations: none. The matrix consults already-declared
+  values (kind, target, provenance) and never inspects diff
+  content (Article 7 invariant intact).
+- Reviews: 3 impact-survey subagents (matrix/validator,
+  description noise, reminder coverage), then Codex adversarial
+  pass on the plan (4 HIGH, 3 MEDIUM, 2 LOW; all addressed before
+  implementation), then SQLite testing.html mapping subagent for
+  per-kind reminder vocabulary.
+- Dogfood: the entire v0.8.0 reshape landed through meta-edit's
+  own typed-edit tools (mostly edit_policy_change for the
+  description/spec rewrites, edit_boolean_condition for the
+  validator and reminder logic, edit_api_contract for the
+  AuditWarning union extension, edit_progress for this entry, and
+  edit_proposal for the plan docs in docs/plan/spec-derivation-
+  matrix/). No raw Edit reached the harness.
+- Version bump: `package.json` and `.claude-plugin/plugin.json`
+  0.7.0 → 0.8.0 (minor — SPEC dimension extension; AuditWarning
+  code addition; description and reminder reshape).
+- PR: feature/spec-derivation-matrix → main, single bundled PR
+  per user fiat D14.
