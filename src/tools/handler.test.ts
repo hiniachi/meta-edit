@@ -400,16 +400,23 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
 });
 
 describe("makeIssuingHandler — execution_state threading", () => {
-  it("threads execution_state into the summary and the issued log entry", async () => {
+  it("threads execution_state into the summary, the issued log entry, and the grant declaration", async () => {
     writeFile("src/foo.ts", "hello\n");
-    const { handler, log } = makeHandler();
+    const { handler, log, grants } = makeHandler();
     const result = await handler(
       "edit_boundary_condition",
       modifyRequest({ execution_state: "recovery" }),
     );
+    // Summary first-field carries the new token.
     expect(result.summary).toContain("execution_state=recovery");
+    // The issued log entry carries it.
     const entry = log.readAll().find((e) => e.phase === "issued");
-    expect(entry?.phase === "issued" && entry.execution_state).toBe("recovery");
+    expect(entry).toBeDefined();
+    if (entry?.phase !== "issued") throw new Error("expected issued phase");
+    expect(entry.execution_state).toBe("recovery");
+    // The grant declaration carries it (load-bearing for the hook).
+    const grant = await grants.lookup(result.token);
+    expect(grant?.declaration?.execution_state).toBe("recovery");
   });
 });
 
