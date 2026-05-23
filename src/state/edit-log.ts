@@ -56,6 +56,7 @@ const AuditWarningEntrySchema = z.object({
     "kind_provenance_warn",
     "additional_files_warn",
     "citation_lint_missing",
+    "execution_state_repeating_failure",
   ]),
   message: z.string(),
 });

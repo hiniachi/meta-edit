@@ -13,9 +13,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   EditToolRequestSchema,
+  ExecutionStateSchema,
   MAX_ADDITIONAL_FILES,
   SHA256_EMPTY,
   evaluateAdditionalFiles,
+  evaluateKindExecutionStateValidity,
   evaluateKindProvenanceValidity,
   rationaleHasArtifactCitation,
   sha256Hex,
@@ -25,6 +27,10 @@ import {
   type ValidationContext,
 } from "./common.js";
 import type { ToolName } from "./descriptions.js";
+import {
+  TOOLS_REQUIRING_TARGET,
+  WORKFLOW_TOOLS,
+} from "./descriptions.js";
 import {
   makeTmpRoot,
   cleanTmpRoot,
@@ -690,6 +696,40 @@ describe("evaluateAdditionalFiles (RFC §3.3.2)", () => {
     ];
     for (const kind of impls) {
       expect(evaluateAdditionalFiles(kind, "direct_observation")).toBe("reject");
+    }
+  });
+});
+
+// =====================================================================
+// Task 1.1: execution_state enum + matrix (design §4.1, SPEC §3.4)
+// =====================================================================
+
+describe("ExecutionStateSchema (design §4.1)", () => {
+  it("accepts the three states", () => {
+    for (const s of ["normal", "repeating_failure", "recovery"]) {
+      expect(ExecutionStateSchema.safeParse(s).success).toBe(true);
+    }
+  });
+  it("rejects any other value", () => {
+    expect(ExecutionStateSchema.safeParse("uncertain").success).toBe(false);
+  });
+});
+
+describe("evaluateKindExecutionStateValidity (SPEC §3.4)", () => {
+  it("warns for every impl tool in repeating_failure", () => {
+    for (const k of TOOLS_REQUIRING_TARGET) {
+      expect(evaluateKindExecutionStateValidity(k, "repeating_failure")).toBe("warn");
+    }
+  });
+  it("accepts every workflow tool in repeating_failure", () => {
+    for (const k of WORKFLOW_TOOLS) {
+      expect(evaluateKindExecutionStateValidity(k, "repeating_failure")).toBe("accept");
+    }
+  });
+  it("accepts every tool in normal and recovery", () => {
+    for (const k of [...TOOLS_REQUIRING_TARGET, ...WORKFLOW_TOOLS]) {
+      expect(evaluateKindExecutionStateValidity(k, "normal")).toBe("accept");
+      expect(evaluateKindExecutionStateValidity(k, "recovery")).toBe("accept");
     }
   });
 });

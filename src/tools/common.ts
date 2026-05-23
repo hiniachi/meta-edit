@@ -55,6 +55,15 @@ export const ProvenanceSchema = z.enum([
 ]);
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 
+// design §4.1: every typed_edit declaration carries a required
+// execution_state field naming the state of the agent's work loop.
+export const ExecutionStateSchema = z.enum([
+  "normal",
+  "repeating_failure",
+  "recovery",
+]);
+export type ExecutionState = z.infer<typeof ExecutionStateSchema>;
+
 const AdditionalFileSchema = z
   .object({
     file: z.string().min(1),
@@ -188,6 +197,22 @@ export function evaluateAdditionalFiles(
   return "reject";
 }
 
+// SPEC §3.4: (kind × execution_state) audit matrix. The only non-accept
+// cell is an impl tool (a fix attempt) declared in repeating_failure.
+// No "reject" cell — soft per design Q3.
+export function evaluateKindExecutionStateValidity(
+  kind: ToolName,
+  executionState: ExecutionState,
+): MatrixVerdict {
+  if (
+    executionState === "repeating_failure" &&
+    TOOLS_REQUIRING_TARGET.includes(kind)
+  ) {
+    return "warn";
+  }
+  return "accept";
+}
+
 /**
  * Citation lint for `provenance: "accepted_artifact"`. RFC §3.2:
  * "the rationale MUST include at least one artifact reference (`§...`,
@@ -296,7 +321,8 @@ export type AuditWarning = {
   code:
     | "kind_provenance_warn"
     | "additional_files_warn"
-    | "citation_lint_missing";
+    | "citation_lint_missing"
+    | "execution_state_repeating_failure";
   message: string;
 };
 
