@@ -81,7 +81,7 @@ describe("makeIssuingHandler — successful declaration", () => {
     );
 
     expect(result.summary).toBe(
-      "edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation bindings=1",
+      "edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation execution_state=normal bindings=1",
     );
     expect(Object.keys(result)[0]).toBe("summary");
     expect(result.warnings).toEqual([]);
@@ -117,6 +117,7 @@ describe("makeIssuingHandler — successful declaration", () => {
       kind: "edit_boundary_condition",
       target: "prod",
       provenance: "direct_observation",
+      execution_state: "normal",
       target_file: "src/foo.ts",
       test_files: ["tests/foo.test.ts"],
     });
@@ -395,6 +396,20 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(byFile.get("docs/extra0.md")).toBe(SHA256_EMPTY);
     expect(byFile.get("docs/extra31.md")).toBe(SHA256_EMPTY);
     expect(grant?.binding.length).toBe(33);
+  });
+});
+
+describe("makeIssuingHandler — execution_state threading", () => {
+  it("threads execution_state into the summary and the issued log entry", async () => {
+    writeFile("src/foo.ts", "hello\n");
+    const { handler, log } = makeHandler();
+    const result = await handler(
+      "edit_boundary_condition",
+      modifyRequest({ execution_state: "recovery" }),
+    );
+    expect(result.summary).toContain("execution_state=recovery");
+    const entry = log.readAll().find((e) => e.phase === "issued");
+    expect(entry?.phase === "issued" && entry.execution_state).toBe("recovery");
   });
 });
 
