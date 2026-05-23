@@ -142,6 +142,65 @@ describe("buildReminderContext", () => {
     expect(text).not.toContain("I should land only if");
   });
 
+  it("repeating_failure on an impl tool gives the corrective ordered procedure", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_boundary_condition",
+      target: "prod",
+      executionState: "repeating_failure",
+    });
+    expect(out).toContain("escape procedure");
+    expect(out).toContain("(1)");
+    expect(out).toContain("(4)");
+    expect(out).toContain("primary sources");
+  });
+  it("repeating_failure on edit_observation gives supportive escape text", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_observation",
+      executionState: "repeating_failure",
+    });
+    expect(out).toContain("this is the right move");
+    expect(out).not.toContain("(1)");
+  });
+  it("repeating_failure on edit_progress adds no execution_state text", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_progress",
+      executionState: "repeating_failure",
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("this is the right move");
+  });
+  it("recovery gives supportive recovery text", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_boundary_condition",
+      target: "prod",
+      executionState: "recovery",
+    });
+    expect(out).toContain("recovery");
+  });
+  it("normal adds no execution_state text", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_boundary_condition",
+      target: "prod",
+      executionState: "normal",
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("recovery");
+  });
+  it("write_allowed gives the post-hoc variant for repeating_failure x impl", () => {
+    const out = buildReminderContext({
+      phase: "write_allowed",
+      kind: "edit_boundary_condition",
+      target: "prod",
+      executionState: "repeating_failure",
+    });
+    expect(out).toContain("landed while");
+  });
+
   it("has a specific next-action cue for every live edit kind", () => {
     const cases: Array<[string, string]> = [
       ["edit_boundary_condition", "pin just below, at, and just above"],
