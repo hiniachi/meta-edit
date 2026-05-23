@@ -342,34 +342,33 @@ General principles (apply to every edit):
 
   edit_state_transition: `Modify a state machine, workflow, or status transition in production code.
 
+The state machine being changed (which transitions are legal, which
+are forbidden, what invariant holds across each edge) is defined by
+the state diagram / transition table / accepted artifact, not by
+what the current code happens to allow.
+
 Use this tool when:
 - Adding, removing, or modifying allowed transitions between states
 - Changing what triggers a state transition
 - Adding or removing valid states
 - Changing the side effects that occur on transition
 
-Required tests (you MUST cover):
-1. Allowed transitions: each new or modified allowed transition must have
-   a test that performs it and verifies the resulting state
-2. Forbidden transitions: each transition that should NOT be allowed must
-   have a test that attempts it and verifies it is rejected (and that no
-   partial state change occurred)
-3. Invalid input no-op: triggering a transition from an invalid state must
-   not produce a partial state change
-
-State transition bugs are particularly insidious because they often
-manifest only under specific orderings of events. The forbidden-transition
-tests are as important as the allowed-transition tests.
+Per-target obligations (allowed-transition coverage, forbidden-
+transition rejection with no partial state change, invalid-input
+no-op) are delivered in the declaration result.
 
 If your change adds new states, you must also test transitions from
 existing states into the new states, and from the new states to existing
 states (where allowed).
 
 Target (required):
-Declare \`target: "prod"\` when editing the state machine in production
-code, or \`target: "test"\` when editing its transition tests. Pair the
-two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (state
+machine) and \`target: "test"\` for its transition tests. The two
+declarations may land in either order — red-first (\`target: "test"\`
+first, then \`target: "prod"\`) or green-first (\`target: "prod"\`
+first, then \`target: "test"\`) — and both may land in the same
+commit. When \`target: "test"\`, \`target_file\` IS the test file
+and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -493,34 +492,32 @@ General principles (apply to every edit):
 
   edit_serialization: `Modify a serializer, parser, codec, or data format handler.
 
+The format contract being changed (byte-level layout, supported
+versions, what counts as malformed) is defined by the format spec /
+RFC / data dictionary, not by what the current encoder happens to
+emit.
+
 Use this tool when:
 - Changing JSON / YAML / XML / Protobuf / MessagePack handling
 - Modifying custom binary or text formats
 - Changing how data is encoded for storage or transport
 - Modifying compatibility layers between format versions
 
-Required tests (you MUST cover):
-1. Round-trip: serialize then deserialize, verify equivalence
-2. Read old format: the new code must be able to read data produced by
-   the previous version
-3. Write new format: produced output must be readable by the new parser,
-   and ideally by tools that consume this format
-4. Invalid input: malformed input must be rejected with a clear error,
-   not silently corrupted
-
-Format compatibility bugs are particularly painful because they tend to
-be discovered only when production data is already in the new format and
-cannot be read by anything. The "read old format" test is the safety net.
+Per-target obligations (round-trip equivalence, read-old-format,
+write-new-format, malformed-input rejection) are delivered in the
+declaration result.
 
 If the format change is intentionally non-backward-compatible, the
 rationale must say so and describe the migration path for existing data.
 
 Target (required):
-Declare \`target: "prod"\` when editing the serializer / parser / codec
-itself, or \`target: "test"\` when editing its round-trip / old-format /
-invalid-input tests. Pair the two declarations in the same commit. When
-target is "test", \`target_file\` IS the test file and \`test_files\`
-must be empty.
+Declare \`target: "prod"\` for the production-side edit (serializer /
+parser / codec) and \`target: "test"\` for its round-trip / old-format
+/ invalid-input tests. The two declarations may land in either order
+— red-first (\`target: "test"\` first, then \`target: "prod"\`) or
+green-first (\`target: "prod"\` first, then \`target: "test"\`) — and
+both may land in the same commit. When \`target: "test"\`,
+\`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -570,34 +567,29 @@ General principles (apply to every edit):
 
   edit_retry_timeout: `Modify retry, timeout, or backoff behavior.
 
+The retry budget being changed (retry count, backoff schedule,
+timeout, giveup signal) is defined by the SLA / accepted artifact,
+not by whatever value is currently configured in production.
+
 Use this tool when:
 - Changing retry counts, retry intervals, or backoff strategies
 - Modifying timeout durations
 - Adding or removing retry logic
 - Changing idempotency keys or duplicate-detection logic
 
-Required tests (you MUST cover):
-1. Timeout exhaustion: when the timeout is exceeded, the operation fails
-   with the expected error and does not hang
-2. Retry exhaustion: when all retries are consumed, the operation fails
-   with the expected error and reports the underlying cause
-3. No duplicate side effects: retries must not produce duplicate external
-   side effects (emails, charges, database writes), unless idempotency is
-   documented as not required for this operation
-4. Success on retry: if the underlying operation succeeds on a retry
-   attempt, the overall call must report success
-
-The duplicate-side-effect test is the one that catches the worst bugs.
-If your code retries an HTTP POST that creates a record, verify that two
-records are not created when the first attempt times out but actually
-succeeded server-side.
+Per-target obligations (timeout exhaustion, retry exhaustion, no
+duplicate side effects under retry, success-on-retry) are delivered
+in the declaration result.
 
 Target (required):
-Declare \`target: "prod"\` when editing the retry / timeout / backoff
-logic in production code, or \`target: "test"\` when editing its
-exhaustion / duplicate-side-effect / success-on-retry tests. Pair the
-two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (retry /
+timeout / backoff logic) and \`target: "test"\` for its exhaustion /
+duplicate-side-effect / success-on-retry tests. The two declarations
+may land in either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -823,6 +815,10 @@ General principles (apply to every edit):
 CI configuration, this server's behavior, or the tool descriptions of
 edit_* tools.
 
+The policy line being moved is defined by the policy text / ADR /
+compliance requirement, not by what the current configuration
+happens to allow.
+
 Use this tool when:
 - Modifying .claude/ configuration
 - Modifying .github/workflows/ files that affect meta-edit
@@ -835,17 +831,9 @@ Use this tool when:
   that change how the project builds or releases) — see the boundary
   note in edit_dependency_config
 
-Required tests (you MUST cover):
-1. Configuration validity: the new configuration must parse and load
-   without error
-2. Existing edit log entries must remain readable under the new
-   configuration
-3. The new configuration must be applicable from a clean checkout (no
-   hidden dependencies on local state)
-
-Policy changes are at a higher trust boundary than ordinary code. This
-tool exists to mark them clearly in the edit log so they can be reviewed
-separately.
+Per-target obligations (configuration validity, existing edit log
+backward compatibility, clean-checkout applicability) are delivered
+in the declaration result.
 
 Policy changes that LOOSEN restrictions (allowing previously-denied
 operations, reducing test obligations, removing obligations from edit_*
@@ -866,12 +854,14 @@ behavior, and editing tool descriptions all carry implications
 the user has the standing to weigh; do not assume.
 
 Target (required):
-Declare \`target: "prod"\` when editing the policy / configuration /
-description files themselves, or \`target: "test"\` when editing tests
-that exercise the new policy (validity, readability of existing log
-entries, clean-checkout applicability). Pair the two declarations in
-the same commit. When target is "test", \`target_file\` IS the test
-file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (policy /
+configuration / description files) and \`target: "test"\` for tests
+that exercise the new policy. The two declarations may land in
+either order — red-first (\`target: "test"\` first, then
+\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
+\`target: "test"\`) — and both may land in the same commit. When
+\`target: "test"\`, \`target_file\` IS the test file and
+\`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
