@@ -25,6 +25,7 @@ export function buildReminderContext(input: ReminderInput): string {
     phaseLine(input),
     scopeReviewLine(input.phase),
     kindCueLine(input.kind),
+    kindObligationsLine(input),
     provenanceLine(input.provenance, input.phase),
     executionStateLine(input),
     targetFollowupLine(input),
@@ -32,6 +33,116 @@ export function buildReminderContext(input: ReminderInput): string {
   ].filter((line): line is string => line !== undefined && line.length > 0);
 
   return `meta-edit reminder:\n\n${lines.join("\n\n")}`;
+}
+
+// SPEC §3.3.5 per-kind × per-target obligations relocated from
+// description bodies into the reminder. Workflow kinds (no target
+// axis) and edit_cosmetic (carve-out) return undefined. Wording is
+// SQLite-testing-methodology-derived (see docs/plan/spec-derivation-
+// matrix/design.md §6.1) but runtime text strips section markers per
+// D15 — the reading agent should not be sent to sqlite.org/testing.html
+// from a declaration result.
+type KindTargetObligations = { readonly prod: string; readonly test: string };
+const KIND_TARGET_OBLIGATIONS: Readonly<Record<string, KindTargetObligations>> = {
+  edit_boundary_condition: {
+    test:
+      "This test pins the defined limits of the boundary — both sides of the threshold and the case just beyond it where the spec says an error is the correct answer. The impl-mirror smell is a single off-by-one fixed-point lifted from the production code; real boundary tests push the system right to the edge of its defined limits. Cite an accepted_artifact that names the limit; if the only provenance is direct_observation against prod, the boundary the test pins is whatever the implementation happens to do, not what was promised.",
+    prod:
+      "You forward-declared boundary-value tests; this production edit must keep the defined limits stable on both sides. Movement of the threshold itself is a different kind — re-classify, do not absorb.",
+  },
+  edit_boolean_condition: {
+    test:
+      "This test pins the decision — every atomic condition independently flips the outcome, not merely drives the predicate to true once and false once. The impl-mirror smell is one happy-path case and one failure case, which achieves statement coverage but cannot show that each sub-condition matters. Cite an accepted_artifact stating the rule the predicate encodes; direct_observation provenance usually means \"I read && and || and wrote a case per branch\", which mirrors the implementation.",
+    prod:
+      "You committed to predicate-level tests; this production edit must keep each clause's independent effect on the outcome observable. Collapsing two conditions or short-circuiting one away breaks the matrix — re-derive it from the spec, do not let the new code shape it.",
+  },
+  edit_state_transition: {
+    test:
+      "This test pins the legal transition graph — which states reach which, which transitions are forbidden, and what invariant holds across each edge. The impl-mirror smell is a test that walks the exact sequence the code happens to implement and only asserts the final state. Cite an accepted_artifact drawing the state diagram; cover at least one forbidden transition explicitly.",
+    prod:
+      "You forward-declared state-transition tests; this production edit must preserve which legal transitions reach which states, which transitions are forbidden, and the across-edge invariants. Adding or removing a state, or changing reachability, is a spec-level change — surface it.",
+  },
+  edit_db_schema: {
+    test:
+      "This test pins the schema invariants — uniqueness, foreign-key closure, nullability, index reachability. Inspecting the produced schema shape is fine; sourcing the expected shape from the current CREATE TABLE is the impl-mirror smell. Cite an accepted_artifact (ERD, data dictionary, ADR) naming each invariant; direct_observation against the migration is a happy-path round-trip, not an invariant test.",
+    prod:
+      "You committed to schema-invariant tests; this production edit must keep the invariants enforceable by the DB itself (constraints, indexes, FKs). Moving a constraint from the DB to application code is a separate decision — surface it, do not weaken the schema and lean on tests to catch it.",
+  },
+  edit_data_migration: {
+    test:
+      "This test pins the anomaly behavior of the migration — what holds if the process dies mid-way, what holds on re-run, what holds under compound failure. Inspecting produced data is fine; the expected before/after invariants come from the migration's stated invariants, not from sampling current prod rows. The impl-mirror smell is a \"ran in a clean DB, counted rows, looks fine\" test, which is the happy path. The idempotency test runs first.",
+    prod:
+      "You forward-declared anomaly-style migration tests; this production migration must remain safe under interruption and re-run. A new atomic step the old migration did not require changes the anomaly surface — re-derive the test list, do not reuse the old one.",
+  },
+  edit_api_contract: {
+    test:
+      "This test pins the published interface — request shape, response shape, status codes, error semantics — using only what callers can observe. The impl-mirror smell is a test asserting on internal serialization order, internal field names not in the contract, or response timing the spec does not promise. Cite an accepted_artifact (OpenAPI / IDL / RFC / contract doc); direct_observation lets the test accidentally pin implementation leaks.",
+    prod:
+      "You committed to contract-level tests; this production edit must keep the published interface stable. Adding a field, narrowing input, or widening output is a contract change — re-classify, do not absorb.",
+  },
+  edit_serialization: {
+    test:
+      "This test pins two things: round-trip equivalence (serialize → deserialize → same value) and malformed-input robustness (parser must reject bytes changed by some means other than the canonical serializer, without unwholesome actions). The impl-mirror smell is a test that round-trips through the same library version's own encoder and decoder — that proves a fixed point of the current implementation, not format compatibility. Include at least one cross-version or hand-crafted byte fixture.",
+    prod:
+      "You forward-declared round-trip and malformed-input tests; this production edit must keep the serialized form readable by older consumers (or explicitly bump a version) and keep the parser robust against bytes it did not produce. Regenerating fixtures from the new encoder destroys the equivalence signal — re-derive fixtures from the spec.",
+  },
+  edit_error_handling: {
+    test:
+      "This test pins behavior under injected failure, not behavior on the happy path — rig a dependency to fail after a certain number of operations and assert both that the error is reported correctly and no invariant is violated. The impl-mirror smell is a test asserting try/catch fires on a real (uninjected) error during setup: that mirrors the catch block the code happens to have, not the spec's promise about errors. Cite an accepted_artifact listing which failure modes the contract acknowledges; run both single-failure and continuous-failure modes where the surface allows.",
+    prod:
+      "You committed to fault-injection tests; this production edit must keep every error path observable from the outside (correct code returned, no resource leaked, no invariant violated). A catch that drops the error silently is the failure case those tests exist to detect.",
+  },
+  edit_retry_timeout: {
+    test:
+      "This test pins the exhaustion semantics — how many retries, what backoff, what the caller sees after the final attempt — and the compound case where the retry itself encounters a new failure. The impl-mirror smell is asserting \"after retry succeeds, value matches\": that proves the retry loop exits, not that the policy is correct. Cover the \"Nth attempt succeeds\" case (recovery point advances) and the \"every attempt fails\" case (continuous-failure mode) plus the compound case \"retry path itself hits a different failure\". Cite an accepted_artifact naming the retry budget.",
+    prod:
+      "You forward-declared retry/timeout exhaustion tests; this production edit must keep the budget, backoff schedule, and giveup signal compatible with what those tests assert. Silent budget extension masks an underlying error — surface it.",
+  },
+  edit_concurrency: {
+    test:
+      "This test pins the across-interleaving invariant — what must always hold regardless of which thread interleaves where — not a particular observed interleaving. Assert mutexes are held at all the right moments; assert that nothing is written to X which has not first been written and synced to Y. The impl-mirror smell is running two threads, hitting a race a few times by luck, and asserting no exception fires — that pins the OS schedule, not the invariant. Cite an accepted_artifact naming the invariant (lock order, happens-before relation, atomicity boundary); prefer a precondition/postcondition assertion to a probabilistic schedule.",
+    prod:
+      "You committed to interleaving-invariant tests; this production edit must keep the lock order / happens-before / atomicity boundary intact. Widening or narrowing a critical section is a relevant change — re-derive the invariant list, do not lean on existing tests to catch a regression they were not designed for.",
+  },
+  edit_external_side_effect: {
+    test:
+      "This test pins what is sent to the outside world — count, ordering, idempotency under replay — track outbound effects (emails, webhooks, payments, log lines) and report leaks on every test run. The impl-mirror smell is asserting the side-effect function was called once on the happy path, with no retry-replay assertion, no partial-failure assertion, no ordering assertion: that pins the call site, not the contract. Cite an accepted_artifact describing the at-least-once / at-most-once / exactly-once contract; direct_observation gives you the production frequency, which is a fact about traffic, not about the contract.",
+    prod:
+      "You forward-declared side-effect accounting tests; this production edit must keep the at-least-once / at-most-once / exactly-once posture stated in the test, and keep emissions idempotent under retry. Adding a side effect to a previously side-effect-free path is a re-classification. If your test makes a real external call, your test is wrong — that prohibition stays in force.",
+  },
+  edit_cache_invalidation: {
+    test:
+      "This test pins the freshness invariant: cached answer must equal authoritative answer for every input. The impl-mirror smell is a write-through read-back test (the easiest case, read-your-own-writes) that entirely skips the cross-actor invalidation case where someone else changed the underlying data. Run the scenario with the cache enabled and again with it busted, assert identical results. Cite an accepted_artifact naming the staleness budget; direct_observation gives you the TTL window, not the contract.",
+    prod:
+      "You committed to freshness-invariant tests; this production edit must keep the equivalence cached answer == authoritative answer intact for every documented invalidation trigger. A new write path that does not invalidate the cache silently widens the staleness window — the canonical failure this kind exists to catch.",
+  },
+  edit_permission_logic: {
+    test:
+      "This test pins the authorization matrix — every (principal, resource, action) cell exercised in both allow and deny direction, where each axis independently flips the decision. The impl-mirror smell is a test that walks the if/else ladder in the authz function and writes one case per leaf: that proves the code is consistent with itself, not that the matrix matches the policy. Cite an accepted_artifact (RBAC table, policy doc, ADR); direct_observation is a strong smell because in prod you only see allowed requests at scale — denied requests are the negative space and must be tested explicitly.",
+    prod:
+      "You forward-declared an authz matrix; this production edit must keep every cell's allow/deny decision matching the cited policy. Loosening a deny or tightening an allow is edit_policy_change, not this kind — re-classify, do not let the matrix drift.",
+  },
+  edit_dependency_config: {
+    test:
+      "This test pins behavior across the dependency / build matrix — the same answer must come out regardless of optimization level, signed-char default, endianness, or word size. The impl-mirror smell is a test that succeeds on the developer's exact toolchain version and silently depends on it: that pins the dev environment, not the supported environment. Cite an accepted_artifact (supported-versions table, MSRV / engines policy, build-matrix CI config); for a pinned dependency version, include at least the boundary versions of the supported range.",
+    prod:
+      "You committed to build-matrix tests; this production edit must keep the equivalence \"same answer across all supported build variants\" intact. Tightening a version range is edit_policy_change; widening it requires fresh evidence from each new supported point — do not extrapolate.",
+  },
+  edit_policy_change: {
+    test:
+      "This test pins both sides of the policy line — the case just inside the new policy (must be allowed) and the case just outside (must be refused with the documented signal). This is the boundary-value pattern applied to a rule rather than a numeric limit. The impl-mirror smell is exercising only the side of the line that changed (loosening: only the newly-allowed case; tightening: only the newly-forbidden case): that demonstrates the code did the thing, not that the line is in the right place. Cite an accepted_artifact stating the new line.",
+    prod:
+      "You forward-declared both-sides-of-the-line tests; this production edit must keep the documented refusal on the forbidden side and the documented acceptance on the allowed side. The LOOSEN-restriction obligation stays in this tool's description — a loosening without a strong rationale citation means this is the wrong tool. Quiet threshold drift without updating the cited artifact is the canonical failure this kind exists to prevent.",
+  },
+};
+
+function kindObligationsLine(input: ReminderInput): string | undefined {
+  const { kind, target } = input;
+  if (kind === undefined || target === undefined) return undefined;
+  if (kind === "edit_cosmetic") return undefined; // §3.3.5 carve-out
+  const entry = KIND_TARGET_OBLIGATIONS[kind];
+  if (entry === undefined) return undefined; // workflow kinds + any unknown kind
+  return target === "prod" ? entry.prod : entry.test;
 }
 
 function phaseLine(input: ReminderInput): string {
