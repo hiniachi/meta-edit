@@ -191,6 +191,19 @@ the edit is expected to carry the uncertainty itself — a future
 session reading the file picks up the hedging language directly, with
 no structural-marker machinery in the loop.
 
+**Execution state flag.** Every declaration — all 21 tools — also
+carries a required `execution_state` field, a self-declared signal
+naming the state of the agent's work loop at the moment of
+declaration. Three values: `normal` (ordinary work, no active failure
+loop), `repeating_failure` (the agent has noticed it is repeating the
+same failure across multiple edits), and `recovery` (the agent has
+recorded the failure and is executing a deliberate single-intervention
+diagnosis). The field is a declaration (not detection) — the server
+does not analyze edit content or history to infer the state. It falls
+within Articles 1–2 (typed surface, non-adversarial threat model) and
+does not alter the Article 7 / scope-expansion amendment bar. The
+(kind, execution_state) audit matrix lives in §3.4.
+
 The full per-tool descriptions live in Part II §4 of SPEC.md and in
 `src/tools/descriptions.ts` verbatim. They are unconstitutional only in
 the sense that the spec does not constrain their wording — they are
@@ -461,6 +474,13 @@ type EditToolRequest = {
     | "inference"
     | "speculation";
 
+  // REQUIRED on every tool (v0.7.0). Self-declared state of the
+  // agent's work loop at the moment of declaration. The
+  // (kind, execution_state) audit matrix in §3.4 decides whether a
+  // warn is recorded; there is no REJ cell. Schema is strict
+  // (required, no default).
+  execution_state: "normal" | "repeating_failure" | "recovery";
+
   test_files: string[];           // forward declaration; not bound by token
 
   // ONLY accepted by the 5 workflow-axis kinds (v0.6.0). The 15
@@ -544,6 +564,7 @@ The MCP server enforces:
 - `rationale` is non-empty after trim.
 - `target` field presence: required (`"prod"` or `"test"`) on every impl tool (15 SQLite-derived + `edit_cosmetic`); forbidden on the 5 workflow-axis kinds. Validation rejects both omissions and misplacements.
 - `provenance` field presence: required on every declaration (v0.6.0). The schema is strict (no default). Cell-level acceptance by (kind, provenance) is then decided per §3.3.
+- `execution_state` presence: required on every declaration (v0.7.0). The schema is strict (no default). Cell-level audit by (kind, execution_state) is then decided per §3.4.
 - `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 5 workflow-axis kinds regardless.
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a subsequent declaration of the same impl tool with `target: "test"`. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
@@ -562,11 +583,13 @@ A successful declaration produces a token bound to the set of
 `(file, before_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The server computes each `before_sha256` from disk at declaration time; agents do not supply hashes. The token expires 10 minutes after issuance — operational hygiene only; the single-use binding is the actual integrity guarantee, so the TTL is purely garbage-collection (it keeps the grants/ dir from accumulating abandoned files). The 10-minute window absorbs realistic agent thinking time between the typed_edit call and the native Edit / Write call without weakening the model (v0.3.1: extended from 5 min after dogfood report of mid-edit expiry). Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
 The grant file also carries optional declaration metadata (`kind`,
-`target`, `provenance`, `target_file`, `test_files`). This metadata is
-not authority — the binding tuples remain the only authorization
-surface — but it lets the hook emit kind / target / provenance-aware
-success reminders after the native write gate is passed. Older grant
-files without this metadata remain valid and consumable.
+`target`, `provenance`, `execution_state`, `target_file`,
+`test_files`). This metadata is not authority — the binding tuples
+remain the only authorization surface — but it lets the hook emit
+kind / target / provenance / execution_state-aware success reminders
+after the native write gate is passed. Older grant files without this
+metadata remain valid and consumable; `execution_state` is optional on
+read (pre-0.7.0 grant files simply omit it).
 
 The result also carries a `next_action` field whenever a token is
 issued. It first reminds the agent that the next native `Edit` /
@@ -668,6 +691,51 @@ lints the rationale and records a `citation_lint_missing` audit
 warning if no reference is present. The lint is structure-only — the
 server does not verify the artifact exists or that its content matches
 the declaration.
+
+### 3.4. Kind × execution_state audit matrix (v0.7.0)
+
+The `execution_state` field is required on every declaration. Unlike
+§3.3's (kind, provenance) matrices, there is **no REJ cell** — the
+field is `soft + audit warn` per design Q3. Hard rejection would
+punish honest declaration and incentivize under-declaration (Article 3
+— the lazy agent routes around friction).
+
+```
+                                       normal   repeating_failure   recovery
+15 SQLite-derived impl + edit_cosmetic    OK           warn             OK
+edit_observation                          OK           OK               OK
+edit_proposal                             OK           OK               OK
+edit_progress                             OK           OK               OK
+edit_decision                             OK           OK               OK
+edit_explanation                          OK           OK               OK
+```
+
+The single `warn` group is the 16 impl tools × `repeating_failure`.
+An impl tool is a *fix attempt*; stacking another fix while the loop
+is acknowledged is the thing to flag. A `warn` records an
+`AuditWarning` with code `execution_state_repeating_failure` into the
+edit log's existing `audit_warnings` field and never blocks the
+declaration.
+
+**The escape set is `{edit_observation, edit_proposal}`** — the two
+recommended moves out of the loop (record the failure / raise a
+hypothesis or open question). `repeating_failure × {escape set}` is
+deliberately clean. The other three workflow kinds (`edit_progress`,
+`edit_decision`, `edit_explanation`) are also clean under
+`repeating_failure` because they are not fix attempts, not because
+they are escape moves.
+
+`recovery` is a sanctioned state and is clean in every cell.
+
+**Warn semantics are distinct from §3.3.** The §3.3 warnings
+(`kind_provenance_warn`, `additional_files_warn`,
+`citation_lint_missing`) all describe a *mismatch* — the
+declaration's pieces do not cohere. `execution_state_repeating_failure`
+is different: a correctly-formed declaration that is a
+*self-flagged loop signal*. Both ride the same `audit_warnings` field,
+but consumers (e.g. a future `meta-edit summary` warnings breakdown)
+MUST group by warning *code*, not pool a single warn count across the
+two meanings.
 
 ### Multi-kind precedence
 
@@ -808,6 +876,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 Provenance combinations (cosmetic-specific):
 This tool accepts only `user_confirmed`, `accepted_artifact`, and
 `direct_observation`. Declaring `inference` or `speculation` here
@@ -890,6 +980,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -967,6 +1079,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1033,6 +1167,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1105,6 +1261,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1173,6 +1351,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1246,6 +1446,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1312,6 +1534,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1382,6 +1626,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1448,6 +1714,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1518,6 +1806,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1590,6 +1900,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1654,6 +1986,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1731,6 +2085,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1819,6 +2195,28 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -1910,6 +2308,28 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -1933,8 +2353,9 @@ Every workflow-axis tool:
   impl-tool sense; `test_files` must be empty)
 - MAY carry `additional_files`, with per-cell acceptance per §3.3.2
 - carries the same required `provenance` field as every other tool
-- carries the standard `PROVENANCE_FOOTER` block + a kind-specific
-  `Provenance combinations` paragraph spelling out reject / warn cells
+- carries the standard `PROVENANCE_FOOTER` block + `EXECUTION_STATE_FOOTER`
+  block + a kind-specific `Provenance combinations` paragraph spelling
+  out reject / warn cells
 
 #### `edit_progress`
 
@@ -1948,6 +2369,28 @@ work-log entry written in speculative provenance whose prose reads as
 confirmed is the exact "past-chat looks like a decision" failure this
 refactor prevents).
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 #### `edit_observation`
 
 Record an observation, surprise, finding, or gotcha — content that
@@ -1959,6 +2402,40 @@ stale-comment deletions. Rejects `additional_files` for
 audit signal — re-route to `edit_proposal` if the body reads as "this
 is what I think given what I saw". Implementing detectors for the
 observed pattern is OUT of scope per Article 7.
+
+escaping a repeating_failure spiral:
+This is the tool to reach for first when you have noticed you are
+repeating the same class of failure. Record the reproduction
+conditions, the recent changes, and the competing hypotheses as
+separate items, and verify your assumptions against primary sources
+(official documentation, the actual source, execution logs) before
+forming the next hypothesis. Declare this edit with
+provenance: direct_observation — the reproduction conditions and
+recent changes are directly observed, and the hypotheses are framed
+as hedged prose — so the escape stays in this tool's typical
+provenance cell and does not trip a kind/provenance warning.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 #### `edit_proposal`
 
@@ -1972,6 +2449,28 @@ the other three provenance values. All five provenance values
 accepted at the base level; the typical value is `speculation`. When
 provenance is `speculation`, the prose MUST open with strong hedging.
 
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
+
 #### `edit_decision`
 
 Record a decision that has already been made. Typical targets:
@@ -1984,6 +2483,28 @@ and `speculation` (decisions are confirmed by their nature; treating
 an inference or hypothesis as a decision is the exact misclassification
 the workflow-axis split is meant to surface). The typical provenance
 is `user_confirmed`.
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 #### `edit_explanation`
 
@@ -1999,6 +2520,28 @@ explanations mislead more than they clarify). The typical provenance
 is `accepted_artifact` (the explanation is derived from an accepted
 spec, ADR, or API contract; quote the artifact in the rationale and,
 where natural, in the prose).
+
+Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- `normal` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- `repeating_failure` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- `recovery` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.
 
 The full verbatim descriptions live in `src/tools/descriptions.ts`.
 Per CLAUDE.md §4 the spec text above must move in lockstep with the
@@ -2153,6 +2696,9 @@ Each declaration produces two records:
  "rationale":"...",
  "risk_level":"medium",
  "target":"prod",
+ "provenance":"direct_observation",
+ "execution_state":"normal",
+ "audit_warnings":[],
  "test_files":["tests/foo.test.ts"],
  "binding":[{"file":"src/foo.ts","before_sha256":"..."}],
  "token":"met_20260502_a3f9b2..."}
@@ -2170,6 +2716,16 @@ signals from the (kind, provenance) cell matrices (codes:
 remains backward-compatible with v0.5.x entries; `meta-edit summary`
 buckets v0.5.x entries as the `unspecified` provenance and surfaces
 legacy `edit_docs_only` entries in a dedicated `legacy:` bucket.
+
+v0.7.0 additions: the issued record also carries an optional
+`execution_state` field (one of `"normal"` / `"repeating_failure"` /
+`"recovery"`). The field is optional on read — pre-0.7.0 entries omit
+it and are bucketed as `(pre-0.7.0)` in `meta-edit summary`'s
+execution_state breakdown. When `execution_state: "repeating_failure"`
+is declared on any of the 16 impl tools, the `audit_warnings` array
+gains the code `execution_state_repeating_failure` (see §3.4). This
+code is semantically distinct from the §3.3 mismatch codes —
+consumers MUST group by warning code, not pool a single warn count.
 
 The CLI exposes a `--provenance` filter on `meta-edit log` (e.g.
 `meta-edit log --provenance speculation,inference` to inspect every
@@ -2214,7 +2770,7 @@ sub-directory launch).
 Print the contents of `edits.jsonl`, optionally filtered.
 
 ```
-meta-edit log [--since DATE] [--tool TOOL_NAME] [--limit N]
+meta-edit log [--since DATE] [--tool TOOL_NAME] [--provenance VAL[,VAL...]] [--execution-state VAL[,VAL...]] [--limit N]
 ```
 
 Output is human-readable plain text. JSONL output is available with `--json`.
@@ -2256,6 +2812,12 @@ By provenance:
   direct_observation    8  (17%)
   inference             3  ( 6%)
   speculation           1  ( 2%)
+
+By execution state:
+  normal               43  (91%)
+  repeating_failure     2  ( 4%)
+  recovery              1  ( 2%)
+  (pre-0.7.0)           1  ( 2%)
 
 By risk_level:
   low      28

@@ -7,7 +7,7 @@
 
 **语言:** [English](./README.md) · [日本語](./README.ja.md) · **简体中文**
 
-> 一个 MCP 服务器,把编码代理唯一的 `Edit` 工具,替换为 **十七个按种类划分的编辑工具**。每种编辑必须伴随的测试义务,直接写在工具自身的描述里。
+> 一个 MCP 服务器,把编码代理唯一的 `Edit` 工具,替换为 **二十一个按种类划分的编辑工具**。每种编辑必须伴随的测试义务,直接写在工具自身的描述里。16 个实现工具要求 `target: "prod" | "test"` 字段,测试编辑在其实现种类的审计面内可见。每次声明还必须携带 `provenance` 字段(编辑的认识论来源:`user_confirmed` / `accepted_artifact` / `direct_observation` / `inference` / `speculation`)与 `execution_state` 字段(`normal` / `repeating_failure` / `recovery`),让审计日志同时记录每次编辑的确定性与会话上下文。
 
 更完整的概念阐述,以及文件编辑之外的应用,见[项目页](https://hiniachi.github.io/meta-edit/)。
 

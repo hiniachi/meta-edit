@@ -55,6 +55,15 @@ export const ProvenanceSchema = z.enum([
 ]);
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 
+// design §4.1: every typed_edit declaration carries a required
+// execution_state field naming the state of the agent's work loop.
+export const ExecutionStateSchema = z.enum([
+  "normal",
+  "repeating_failure",
+  "recovery",
+]);
+export type ExecutionState = z.infer<typeof ExecutionStateSchema>;
+
 const AdditionalFileSchema = z
   .object({
     file: z.string().min(1),
@@ -188,6 +197,22 @@ export function evaluateAdditionalFiles(
   return "reject";
 }
 
+// SPEC §3.4: (kind × execution_state) audit matrix. The only non-accept
+// cell is an impl tool (a fix attempt) declared in repeating_failure.
+// No "reject" cell — soft per design Q3.
+export function evaluateKindExecutionStateValidity(
+  kind: ToolName,
+  executionState: ExecutionState,
+): MatrixVerdict {
+  if (
+    executionState === "repeating_failure" &&
+    TOOLS_REQUIRING_TARGET.includes(kind)
+  ) {
+    return "warn";
+  }
+  return "accept";
+}
+
 /**
  * Citation lint for `provenance: "accepted_artifact"`. RFC §3.2:
  * "the rationale MUST include at least one artifact reference (`§...`,
@@ -265,6 +290,9 @@ export const EditToolRequestSchema = z
     // rather than a softer validateRequest warning that could be
     // mistaken for "shippable".
     provenance: ProvenanceSchema,
+    // design §4.1: required, no default — the forcing function dies
+    // with a default. The .strict() schema rejects omission.
+    execution_state: ExecutionStateSchema,
     test_files: z.preprocess(
       coerceJsonStringToArray("test_files"),
       z.array(z.string()),
@@ -296,7 +324,8 @@ export type AuditWarning = {
   code:
     | "kind_provenance_warn"
     | "additional_files_warn"
-    | "citation_lint_missing";
+    | "citation_lint_missing"
+    | "execution_state_repeating_failure";
   message: string;
 };
 
@@ -454,6 +483,23 @@ export function validateRequest(
         `recognizable artifact reference (\`§...\`, \`ADR-...\`, ` +
         `\`RFC-...\`, \`issues/...\`, or a URL). Add a citation so ` +
         `future readers can re-source the artifact.`,
+    });
+  }
+
+  // ---- 1d. kind × execution_state validity (SPEC §3.4) ----------------
+  if (
+    evaluateKindExecutionStateValidity(toolName, request.execution_state) ===
+    "warn"
+  ) {
+    auditWarnings.push({
+      code: "execution_state_repeating_failure",
+      message:
+        `execution_state="repeating_failure" was declared on ${toolName}, ` +
+        `an implementation fix attempt. This is a self-flagged loop signal, ` +
+        `not a mismatch — group it by code, separate from §3.3 warnings. ` +
+        `The escape move is edit_observation or edit_proposal: record the ` +
+        `failure (reproduction conditions, recent changes, hypotheses) ` +
+        `before stacking another fix.`,
     });
   }
 

@@ -89,6 +89,7 @@ async function issueOnce(
       // v0.6.0: log provenance on rejection so audit can group rejected
       // declarations by (kind, provenance) cell.
       provenance: args.provenance,
+      execution_state: args.execution_state,
       audit_error: auditMessage,
     };
     const auditError = appendRejectedSafely(log, rejected);
@@ -121,6 +122,7 @@ async function issueOnce(
         kind: toolName,
         ...(args.target !== undefined ? { target: args.target } : {}),
         provenance: args.provenance,
+        execution_state: args.execution_state,
         target_file: args.target_file,
         test_files: [...args.test_files],
       },
@@ -139,6 +141,7 @@ async function issueOnce(
       target_file: args.target_file,
       ...(args.target !== undefined ? { target: args.target } : {}),
       provenance: args.provenance,
+      execution_state: args.execution_state,
       audit_error: `grants.issue failed: ${reason}`,
     };
     const auditError = appendRejectedSafely(log, rejected);
@@ -177,6 +180,7 @@ async function issueOnce(
     // v0.6.0: provenance is required on every declaration; persist it
     // so audit and `meta-edit log --provenance` filters work.
     provenance: args.provenance,
+    execution_state: args.execution_state,
     ...(auditWarningEntries.length > 0
       ? { audit_warnings: auditWarningEntries }
       : {}),
@@ -225,6 +229,7 @@ async function issueOnce(
     kind: toolName,
     ...(args.target !== undefined ? { target: args.target } : {}),
     provenance: args.provenance,
+    executionState: args.execution_state,
     targetFile: args.target_file,
     declaredTestFiles: args.test_files,
     auditWarnings: validation.auditWarnings,
@@ -256,6 +261,7 @@ function declaredSummary(
     `${toolName} declared: ${sanitizeSummaryFragment(args.target_file)}`,
     args.target !== undefined ? `target=${args.target}` : undefined,
     `provenance=${args.provenance}`,
+    `execution_state=${args.execution_state}`,
     `bindings=${bindingCount}`,
   ]
     .filter((part): part is string => part !== undefined)
@@ -271,6 +277,7 @@ function rejectedSummary(
     `${toolName} rejected: ${sanitizeSummaryFragment(args.target_file)}`,
     args.target !== undefined ? `target=${args.target}` : undefined,
     `provenance=${args.provenance}`,
+    `execution_state=${args.execution_state}`,
     `warnings=${warningCount}`,
   ]
     .filter((part): part is string => part !== undefined)

@@ -11,6 +11,7 @@ export type ReminderInput = {
     code: string;
     message: string;
   }[];
+  executionState?: string;
 };
 
 /**
@@ -25,6 +26,7 @@ export function buildReminderContext(input: ReminderInput): string {
     scopeReviewLine(input.phase),
     kindCueLine(input.kind),
     provenanceLine(input.provenance, input.phase),
+    executionStateLine(input),
     targetFollowupLine(input),
     auditWarningsLine(input.auditWarnings, input.phase),
   ].filter((line): line is string => line !== undefined && line.length > 0);
@@ -114,6 +116,71 @@ function kindCueLine(kind: string | undefined): string | undefined {
         ? undefined
         : "I should follow the obligations in the selected tool description before moving on.";
   }
+}
+
+const WORKFLOW_KINDS: ReadonlySet<string> = new Set([
+  "edit_progress",
+  "edit_observation",
+  "edit_proposal",
+  "edit_decision",
+  "edit_explanation",
+]);
+const ESCAPE_KINDS: ReadonlySet<string> = new Set([
+  "edit_observation",
+  "edit_proposal",
+]);
+
+function executionStateLine(input: ReminderInput): string | undefined {
+  const state = input.executionState;
+  if (state === undefined || state === "normal") return undefined;
+  if (state === "recovery") {
+    return (
+      "I am in recovery — a deliberate diagnosis mode entered after " +
+      "recognizing a failure. Verify assumptions against primary sources " +
+      "(official documentation, etc.), confirm a single hypothesis, and " +
+      "make the next fix only then. Keep steps small and reversible. " +
+      "Return to normal once the failure is resolved."
+    );
+  }
+  if (state !== "repeating_failure") return undefined; // catch-all: unknown state values produce no text
+  const kind = input.kind;
+  if (kind === undefined) return undefined;
+  if (ESCAPE_KINDS.has(kind)) {
+    return (
+      "I have acknowledged repeating_failure and I am recording it — this " +
+      "is the right move. Write reproduction conditions, recent changes, " +
+      "and competing hypotheses as three separate items. Ground each " +
+      "hypothesis by checking my assumptions against primary sources " +
+      "before forming it, and do not return to implementation fixes until " +
+      "a single hypothesis is isolated."
+    );
+  }
+  if (WORKFLOW_KINDS.has(kind)) {
+    // edit_progress / edit_decision / edit_explanation: not a fix attempt
+    // and not the escape move — no execution_state text.
+    return undefined;
+  }
+  // impl tool (a fix attempt)
+  if (input.phase === "write_allowed") {
+    return (
+      "This fix landed while I had declared repeating_failure. If I have " +
+      "not yet run the escape procedure — record the failure with " +
+      "edit_observation, check my assumptions against primary sources, " +
+      "isolate one hypothesis — I should do that before the next edit " +
+      "instead of stacking another fix."
+    );
+  }
+  return (
+    "I was about to keep implementing while repeating the same kind of " +
+    "failure. Before stacking another fix I should run the escape " +
+    "procedure — (1) record it with edit_observation: write reproduction " +
+    "conditions, recent changes, and competing hypotheses as separate " +
+    "items; (2) re-read the error message literally and check my " +
+    "assumptions against primary sources (official documentation, the " +
+    "actual source, execution logs); (3) narrow to a single hypothesis " +
+    "and verify it with a minimal reproduction; (4) only then decide the " +
+    "next move."
+  );
 }
 
 function provenanceLine(

@@ -63,6 +63,7 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
     provenance: "direct_observation",
+    execution_state: "normal",
     target: "prod",
     test_files: ["tests/foo.test.ts"],
     ...overrides,
@@ -80,7 +81,7 @@ describe("makeIssuingHandler — successful declaration", () => {
     );
 
     expect(result.summary).toBe(
-      "edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation bindings=1",
+      "edit_boundary_condition declared: src/foo.ts target=prod provenance=direct_observation execution_state=normal bindings=1",
     );
     expect(Object.keys(result)[0]).toBe("summary");
     expect(result.warnings).toEqual([]);
@@ -116,6 +117,7 @@ describe("makeIssuingHandler — successful declaration", () => {
       kind: "edit_boundary_condition",
       target: "prod",
       provenance: "direct_observation",
+      execution_state: "normal",
       target_file: "src/foo.ts",
       test_files: ["tests/foo.test.ts"],
     });
@@ -186,6 +188,7 @@ describe("makeIssuingHandler — successful declaration", () => {
       rationale: "doc tweak",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
     } as EditToolRequest);
     const entries = log.readAll();
@@ -349,6 +352,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
         rationale: "rename product across the docs",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: [],
         additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
       } as EditToolRequest,
@@ -378,6 +382,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
       rationale: "...",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: additional,
     } as EditToolRequest);
@@ -391,6 +396,27 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
     expect(byFile.get("docs/extra0.md")).toBe(SHA256_EMPTY);
     expect(byFile.get("docs/extra31.md")).toBe(SHA256_EMPTY);
     expect(grant?.binding.length).toBe(33);
+  });
+});
+
+describe("makeIssuingHandler — execution_state threading", () => {
+  it("threads execution_state into the summary, the issued log entry, and the grant declaration", async () => {
+    writeFile("src/foo.ts", "hello\n");
+    const { handler, log, grants } = makeHandler();
+    const result = await handler(
+      "edit_boundary_condition",
+      modifyRequest({ execution_state: "recovery" }),
+    );
+    // Summary first-field carries the new token.
+    expect(result.summary).toContain("execution_state=recovery");
+    // The issued log entry carries it.
+    const entry = log.readAll().find((e) => e.phase === "issued");
+    expect(entry).toBeDefined();
+    if (entry?.phase !== "issued") throw new Error("expected issued phase");
+    expect(entry.execution_state).toBe("recovery");
+    // The grant declaration carries it (load-bearing for the hook).
+    const grant = await grants.lookup(result.token);
+    expect(grant?.declaration?.execution_state).toBe("recovery");
   });
 });
 

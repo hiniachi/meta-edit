@@ -11,7 +11,13 @@
 > **twenty-one kind-specific edit tools**. Each tool carries — in its own
 > description — the testing obligations for that kind of change. The 16
 > impl tools additionally carry a required `target: "prod" | "test"`
-> flag so test edits are visible inside their kind's audit surface.
+> flag so test edits are visible inside their kind's audit surface. Every
+> declaration also carries a required `provenance` field (the epistemic
+> source of the edit: `user_confirmed` / `accepted_artifact` /
+> `direct_observation` / `inference` / `speculation`) and a required
+> `execution_state` field (`normal` / `repeating_failure` / `recovery`)
+> so the audit log captures both the certainty and the session context
+> of every edit.
 
 For the long-form explanation, with applications beyond editing, see the
 [project page](https://hiniachi.github.io/meta-edit/).

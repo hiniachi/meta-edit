@@ -145,6 +145,36 @@ The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.`;
 
+// Shared execution state block appended to every tool description after
+// PROVENANCE_FOOTER. v0.7.0 adds `execution_state` as a required
+// declaration field on all 21 tools, per docs/SPEC.md §3.4 and the
+// execution-state-declaration design doc §4.4 / §4.7 / §4.1.1.
+// The three-value lifecycle (normal → repeating_failure → recovery → normal)
+// is identical across tools; the edit_observation description additionally
+// carries the escape paragraph (§4.1.1) that names this tool as the first
+// move when repeating_failure is recognized.
+const EXECUTION_STATE_FOOTER = `Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- \`normal\` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- \`repeating_failure\` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- \`recovery\` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.`;
+
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   edit_cosmetic: `Surface-level edit with no semantic effect and no information change:
 whitespace, formatter output, or comment edits that do not change the
@@ -216,6 +246,8 @@ keeps the typed surface honest.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 Provenance combinations (cosmetic-specific):
 This tool accepts only \`user_confirmed\`, \`accepted_artifact\`, and
 \`direct_observation\`. Declaring \`inference\` or \`speculation\` here
@@ -268,6 +300,8 @@ empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -315,6 +349,8 @@ must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -351,6 +387,8 @@ two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -393,6 +431,8 @@ commit. When target is "test", \`target_file\` IS the test file and
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -431,6 +471,8 @@ the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -474,6 +516,8 @@ IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -510,6 +554,8 @@ target is "test", \`target_file\` IS the test file and \`test_files\`
 must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -550,6 +596,8 @@ file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -586,6 +634,8 @@ two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -626,6 +676,8 @@ tests. Pair the two declarations in the same commit. When target is
 empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -668,6 +720,8 @@ two declarations in the same commit. When target is "test",
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -702,6 +756,8 @@ is "test", \`target_file\` IS the test file and \`test_files\` must be
 empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -749,6 +805,8 @@ same commit. When target is "test", \`target_file\` IS the test file
 and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -807,6 +865,8 @@ Pair the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -868,6 +928,8 @@ file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -925,6 +987,8 @@ between "done" and "should be done" — the exact distinction this
 refactor is meant to restore.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_progress-specific):
 All five provenance values are accepted. The typical value is
@@ -992,7 +1056,21 @@ encountering the observation file picks up the lesson without retracing
 the discovery. Mixing observation with proposal / decision erodes the
 file's value as a lesson archive.
 
+escaping a repeating_failure spiral:
+This is the tool to reach for first when you have noticed you are
+repeating the same class of failure. Record the reproduction
+conditions, the recent changes, and the competing hypotheses as
+separate items, and verify your assumptions against primary sources
+(official documentation, the actual source, execution logs) before
+forming the next hypothesis. Declare this edit with
+provenance: direct_observation — the reproduction conditions and
+recent changes are directly observed, and the hypotheses are framed
+as hedged prose — so the escape stays in this tool's typical
+provenance cell and does not trip a kind/provenance warning.
+
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_observation-specific):
 The typical provenance is \`direct_observation\` (you observed the
@@ -1058,6 +1136,8 @@ been accepted vs. what is still being weighed.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 Provenance combinations (edit_proposal-specific):
 The typical provenance is \`speculation\` (the proposal is exploratory
 by nature). All five values are accepted. When provenance is
@@ -1122,6 +1202,8 @@ speculation produces the exact "past-chat looks like a confirmed
 decision" failure this refactor is meant to prevent.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_decision-specific):
 This tool rejects \`inference\` and \`speculation\`. The typical
@@ -1208,6 +1290,8 @@ unverified speculation poisons every later citation that depends on
 it.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_explanation-specific):
 This tool rejects \`speculation\`. The typical provenance is

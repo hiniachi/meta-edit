@@ -163,6 +163,18 @@ describe("twenty-one tools", () => {
     expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 6);
   });
 
+  it("every description carries the Execution state block", () => {
+    for (const name of TOOL_NAMES) {
+      expect(TOOL_DESCRIPTIONS[name]).toContain("Execution state (required):");
+      expect(TOOL_DESCRIPTIONS[name]).toContain("repeating_failure");
+    }
+  });
+  it("edit_observation description carries the repeating_failure escape paragraph", () => {
+    expect(TOOL_DESCRIPTIONS.edit_observation).toContain(
+      "escaping a repeating_failure",
+    );
+  });
+
   it("includes the universal General principles block verbatim in every description", () => {
     // Per the v0.1.2 policy change: every edit_* tool description must
     // carry the same three-line block so the agent reads the same text
@@ -186,6 +198,33 @@ describe("twenty-one tools", () => {
 // =====================================================================
 
 describe("registerTools — ListToolsRequest handler", () => {
+  it("every tool's input schema requires execution_state", async () => {
+    const server = new Server(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerTools(server, {
+      context: { repoRoot: process.cwd() },
+      handler: async () => ({
+        token: "",
+        expires_at: "",
+        edit_id: "edit_20260523_0001",
+        warnings: [],
+      }),
+    });
+    const listHandler = (server as unknown as {
+      _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+    })._requestHandlers.get("tools/list");
+    if (!listHandler) throw new Error("tools/list handler not registered");
+    const result = (await listHandler({
+      method: "tools/list",
+      params: {},
+    })) as { tools: Array<{ inputSchema: { required: string[] } }> };
+    for (const tool of result.tools) {
+      expect(tool.inputSchema.required).toContain("execution_state");
+    }
+  });
+
   it("returns titles so clients can display the specific edit kind in collapsed tool rows", async () => {
     const server = new Server(
       { name: "test", version: "0.0.0" },
@@ -301,6 +340,7 @@ describe("registerTools — CallToolRequest handler", () => {
           risk_level: "medium",
           target: "prod",
           provenance: "direct_observation",
+          execution_state: "normal",
           test_files: ["tests/foo.test.ts"],
         },
       },

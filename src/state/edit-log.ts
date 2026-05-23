@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import {
   EditTargetSchema,
+  ExecutionStateSchema,
   ProvenanceSchema,
   RiskLevelSchema,
 } from "../tools/common.js";
@@ -56,6 +57,7 @@ const AuditWarningEntrySchema = z.object({
     "kind_provenance_warn",
     "additional_files_warn",
     "citation_lint_missing",
+    "execution_state_repeating_failure",
   ]),
   message: z.string(),
 });
@@ -80,6 +82,8 @@ export const IssuedEntrySchema = z.object({
   // consume v0.5.x entries that predate the field; meta-edit summary
   // surfaces those as the "unspecified" bucket.
   provenance: ProvenanceSchema.optional(),
+  // design §4.5: optional on read so pre-0.7.0 entries still validate.
+  execution_state: ExecutionStateSchema.optional(),
   // v0.6.0: soft-signal warnings from the validation matrices (warn cells,
   // citation lint). Optional on read.
   audit_warnings: z.array(AuditWarningEntrySchema).optional(),
@@ -114,6 +118,8 @@ export const RejectedEntrySchema = z.object({
   // declared epistemic source so audit can group rejections by
   // (kind, provenance) cell. Optional on read for backward compat.
   provenance: ProvenanceSchema.optional(),
+  // design §4.5: optional on read so pre-0.7.0 entries still validate.
+  execution_state: ExecutionStateSchema.optional(),
   // SPEC §6: rejected records carry a non-empty audit_error so audit
   // consumers always have an actionable reason. (Codex review: LOW,
   // in-scope under Article 3.)

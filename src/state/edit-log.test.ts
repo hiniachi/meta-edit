@@ -458,6 +458,36 @@ describe("EditLog phases (issued / consumed / rejected)", () => {
     ).toThrow();
   });
 
+  it("round-trips execution_state on an issued entry", () => {
+    const log = new EditLog(tmpRoot);
+    log.appendIssued(issued({ execution_state: "recovery" }));
+    const first = log.readAll()[0];
+    if (first?.phase !== "issued") throw new Error("expected issued phase");
+    expect(first.execution_state).toBe("recovery");
+  });
+
+  it("still validates a pre-0.7.0 issued entry that omits execution_state", () => {
+    const log = new EditLog(tmpRoot);
+    log.appendIssued(issued());
+    expect(log.readAll().length).toBe(1);
+  });
+
+  it("round-trips an audit_warnings entry carrying execution_state_repeating_failure", () => {
+    const log = new EditLog(tmpRoot);
+    log.appendIssued(
+      issued({
+        audit_warnings: [
+          { code: "execution_state_repeating_failure", message: "x" },
+        ],
+      }),
+    );
+    const first = log.readAll()[0];
+    if (first?.phase !== "issued") throw new Error("expected issued phase");
+    expect(first.audit_warnings?.[0]?.code).toBe(
+      "execution_state_repeating_failure",
+    );
+  });
+
   // Codex review: LOW, in-scope under Article 3. SPEC §6 requires
   // rejected records to carry a non-empty audit_error so audit consumers
   // always have an actionable reason.

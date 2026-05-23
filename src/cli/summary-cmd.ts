@@ -110,6 +110,9 @@ export function formatSummary(
   const byProvenance = countBy(issuedEntries, (e) =>
     e.provenance === undefined ? "unspecified" : e.provenance,
   );
+  const byExecutionState = countBy(issuedEntries, (e) =>
+    e.execution_state === undefined ? "(pre-0.7.0)" : e.execution_state,
+  );
 
   const lines: string[] = [];
   lines.push(`meta-edit summary (${sinceLabel})`);
@@ -187,6 +190,27 @@ export function formatSummary(
     anyProvenance = true;
   }
   if (!anyProvenance) {
+    lines.push("  (no issued entries)");
+  }
+  lines.push("");
+
+  lines.push("By execution state:");
+  const executionStateOrder = [
+    "normal",
+    "repeating_failure",
+    "recovery",
+    "(pre-0.7.0)",
+  ];
+  let anyExecutionState = false;
+  for (const s of executionStateOrder) {
+    const count = byExecutionState.get(s) ?? 0;
+    if (count === 0) continue;
+    lines.push(
+      `  ${s.padEnd(20)} ${String(count).padStart(4)}  (${pct(count, issuedEntries.length)})`,
+    );
+    anyExecutionState = true;
+  }
+  if (!anyExecutionState) {
     lines.push("  (no issued entries)");
   }
   lines.push("");

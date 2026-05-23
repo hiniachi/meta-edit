@@ -136,6 +136,23 @@ describe("formatSummary", () => {
       /edit_boundary_condition\s+3 \(prod 1 \/ test 1 \/ pre-v0\.5 1\)/,
     );
   });
+
+  it("renders a By execution state breakdown", () => {
+    const entries = [
+      issued({ edit_id: "edit_20260523_0001", execution_state: "recovery" }),
+      issued({ edit_id: "edit_20260523_0002", execution_state: "normal" }),
+    ];
+    const text = formatSummary(entries, undefined);
+    expect(text).toContain("By execution state:");
+    expect(text).toContain("recovery");
+  });
+  it("buckets pre-0.7.0 entries under (pre-0.7.0)", () => {
+    const text = formatSummary(
+      [issued({ edit_id: "edit_20260523_0003" })], // no execution_state
+      undefined,
+    );
+    expect(text).toContain("(pre-0.7.0)");
+  });
 });
 
 // Closes issue 2026-05-02-1041-invalid-timestamp-silently-dropped-by-since-filter

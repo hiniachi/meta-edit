@@ -54,6 +54,7 @@ export type GrantDeclaration = {
   kind: string;
   target?: "prod" | "test";
   provenance: string;
+  execution_state?: string; // design §4.5: optional on read — pre-0.7.0 grants omit it
   target_file: string;
   test_files: string[];
 };
@@ -191,6 +192,9 @@ function isGrantDeclaration(value: unknown): value is GrantDeclaration {
   const v = value as Record<string, unknown>;
   if (typeof v.kind !== "string" || v.kind.length === 0) return false;
   if (v.target !== undefined && v.target !== "prod" && v.target !== "test") {
+    return false;
+  }
+  if (v.execution_state !== undefined && typeof v.execution_state !== "string") {
     return false;
   }
   if (typeof v.provenance !== "string" || v.provenance.length === 0) {

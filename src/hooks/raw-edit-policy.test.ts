@@ -585,6 +585,67 @@ describe("evaluateTokenedEdit — happy path", () => {
     expect(r.additionalContext).toContain('target="test"');
   });
 
+  it("write_allowed additionalContext branches on execution_state", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/foo.ts", "hello\n");
+    await issueGrant(
+      grants,
+      "edit_20260523_0200",
+      [{ file: "src/foo.ts", before_sha256: sha256("hello\n") }],
+      {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "direct_observation",
+        execution_state: "repeating_failure",
+        target_file: "src/foo.ts",
+        test_files: ["tests/foo.test.ts"],
+      },
+    );
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/foo.ts"),
+        old_string: "hello\n",
+        new_string: "hi\n",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
+    expect(r.additionalContext).toContain("landed while");
+  });
+  it("consumes a pre-0.7.0 grant whose declaration omits execution_state", async () => {
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    writeFile("src/bar.ts", "hello\n");
+    await issueGrant(
+      grants,
+      "edit_20260523_0201",
+      [{ file: "src/bar.ts", before_sha256: sha256("hello\n") }],
+      {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "direct_observation",
+        target_file: "src/bar.ts",
+        test_files: ["tests/bar.test.ts"],
+      },
+    );
+    const r = await evaluateTokenedEdit({
+      toolName: "Edit",
+      toolInput: {
+        file_path: path.join(tmpRoot, "src/bar.ts"),
+        old_string: "hello\n",
+        new_string: "hi\n",
+      },
+      repoRoot: tmpRoot,
+      grants,
+      log,
+    });
+    expect(r.decision).toBe("allow");
+  });
+
   it("allows + consumes a Write call when before_sha256 matches disk", async () => {
     const grants = createGrantsStore(tmpRoot);
     const log = new EditLog(tmpRoot);
