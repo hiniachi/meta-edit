@@ -2696,6 +2696,9 @@ Each declaration produces two records:
  "rationale":"...",
  "risk_level":"medium",
  "target":"prod",
+ "provenance":"direct_observation",
+ "execution_state":"normal",
+ "audit_warnings":[],
  "test_files":["tests/foo.test.ts"],
  "binding":[{"file":"src/foo.ts","before_sha256":"..."}],
  "token":"met_20260502_a3f9b2..."}
@@ -2767,7 +2770,7 @@ sub-directory launch).
 Print the contents of `edits.jsonl`, optionally filtered.
 
 ```
-meta-edit log [--since DATE] [--tool TOOL_NAME] [--limit N]
+meta-edit log [--since DATE] [--tool TOOL_NAME] [--provenance VAL[,VAL...]] [--execution-state VAL[,VAL...]] [--limit N]
 ```
 
 Output is human-readable plain text. JSONL output is available with `--json`.
@@ -2809,6 +2812,12 @@ By provenance:
   direct_observation    8  (17%)
   inference             3  ( 6%)
   speculation           1  ( 2%)
+
+By execution state:
+  normal               43  (91%)
+  repeating_failure     2  ( 4%)
+  recovery              1  ( 2%)
+  (pre-0.7.0)           1  ( 2%)
 
 By risk_level:
   low      28
