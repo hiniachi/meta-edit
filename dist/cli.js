@@ -18315,7 +18315,7 @@ var implToolInputSchema = {
     target: {
       type: "string",
       enum: ["prod", "test"],
-      description: 'Required. Declare whether this edit lands in production code ("prod") or test code ("test"). One declaration covers exactly one target. To pair an implementation change with its tests, issue two declarations of the same tool: one with target="prod" (test_files forward-declares the test files), then one with target="test" (target_file IS the test file, test_files MUST be empty). Both may land in the same commit. The server does not pattern-match paths against test-directory conventions — the target declaration is your statement of intent.'
+      description: 'Required. Declare whether this edit lands in production code ("prod") or test code ("test"). One declaration covers exactly one target. To pair an implementation change with its tests, issue two declarations of the same tool — one with target="prod" and one with target="test" — in either order: red-first (target="test" first declaring the failing test, then target="prod" turning it green) or green-first (target="prod" first forward-declaring the test files, then target="test" populating them). Both may land in the same commit. When target="test", target_file IS the test file and test_files MUST be empty; when target="prod", test_files names the paired test files (forward declaration). The server does not pattern-match paths against test-directory conventions — the target declaration is your statement of intent.'
     },
     provenance: {
       type: "string",
@@ -20696,4 +20696,4 @@ export {
   main
 };
 
-//# debugId=B3E17505512BA3CA64756E2164756E21
+//# debugId=ECA1E46CA5671CA264756E2164756E21

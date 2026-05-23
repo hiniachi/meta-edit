@@ -19,6 +19,7 @@ import {
   evaluateAdditionalFiles,
   evaluateKindExecutionStateValidity,
   evaluateKindProvenanceValidity,
+  evaluateTargetSpecDerivation,
   rationaleHasArtifactCitation,
   sha256Hex,
   validateRequest,
@@ -775,6 +776,65 @@ describe("evaluateKindExecutionStateValidity (SPEC §3.4)", () => {
   });
 });
 
+describe("evaluateTargetSpecDerivation (SPEC §3.3.5)", () => {
+  const SQLITE_KINDS: ToolName[] = TOOLS_REQUIRING_TARGET.filter(
+    (k) => k !== "edit_cosmetic",
+  );
+  const ALL_PROVENANCES: Provenance[] = [
+    "user_confirmed",
+    "accepted_artifact",
+    "direct_observation",
+    "inference",
+    "speculation",
+  ];
+
+  it("accepts every SQLite-derived impl tool with target='prod' regardless of provenance", () => {
+    for (const k of SQLITE_KINDS) {
+      for (const p of ALL_PROVENANCES) {
+        expect(evaluateTargetSpecDerivation(k, "prod", p)).toBe("accept");
+      }
+    }
+  });
+
+  it("accepts target='test' × user_confirmed for every SQLite-derived impl tool", () => {
+    for (const k of SQLITE_KINDS) {
+      expect(evaluateTargetSpecDerivation(k, "test", "user_confirmed")).toBe("accept");
+    }
+  });
+
+  it("accepts target='test' × accepted_artifact for every SQLite-derived impl tool", () => {
+    for (const k of SQLITE_KINDS) {
+      expect(evaluateTargetSpecDerivation(k, "test", "accepted_artifact")).toBe("accept");
+    }
+  });
+
+  it("warns on target='test' × direct_observation for every SQLite-derived impl tool", () => {
+    for (const k of SQLITE_KINDS) {
+      expect(evaluateTargetSpecDerivation(k, "test", "direct_observation")).toBe("warn");
+    }
+  });
+
+  it("rejects target='test' × inference for every SQLite-derived impl tool", () => {
+    for (const k of SQLITE_KINDS) {
+      expect(evaluateTargetSpecDerivation(k, "test", "inference")).toBe("reject");
+    }
+  });
+
+  it("rejects target='test' × speculation for every SQLite-derived impl tool", () => {
+    for (const k of SQLITE_KINDS) {
+      expect(evaluateTargetSpecDerivation(k, "test", "speculation")).toBe("reject");
+    }
+  });
+
+  it("accepts every (target, provenance) combination for edit_cosmetic (carve-out)", () => {
+    for (const t of ["prod", "test"] as const) {
+      for (const p of ALL_PROVENANCES) {
+        expect(evaluateTargetSpecDerivation("edit_cosmetic", t, p)).toBe("accept");
+      }
+    }
+  });
+});
+
 describe("rationaleHasArtifactCitation (RFC §3.2 citation lint)", () => {
   it("accepts rationale carrying §-style spec references", () => {
     expect(rationaleHasArtifactCitation("per SPEC.md §4")).toBe(true);
@@ -1034,6 +1094,102 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       expect(
         r.warnings.some((w) => w.includes("does not accept additional_files")),
       ).toBe(true);
+    }
+  });
+
+  // SPEC §3.3.5 — (kind, target, provenance) test-obligation matrix.
+  it("warns target_spec_derivation_warn on target=test × direct_observation for an impl tool", () => {
+    writeFile2("src/foo.test.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.test.ts",
+      rationale: "pin upper bound at 100/101 — observed external API behavior",
+      risk_level: "low",
+      target: "test",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "target_spec_derivation_warn"),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects target=test × inference for an impl tool", () => {
+    writeFile2("src/foo.test.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.test.ts",
+      rationale: "based on the surrounding code, likely the bound is 100",
+      risk_level: "low",
+      target: "test",
+      provenance: "inference",
+      execution_state: "normal",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) => w.includes("§3.3.5")),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects target=test × speculation for an impl tool", () => {
+    writeFile2("src/foo.test.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.test.ts",
+      rationale: "**Hypothesis**: the bound should be 100",
+      risk_level: "low",
+      target: "test",
+      provenance: "speculation",
+      execution_state: "normal",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) => w.includes("§3.3.5")),
+      ).toBe(true);
+    }
+  });
+
+  it("does not emit target_spec_derivation_warn on target=prod × direct_observation", () => {
+    writeFile2("src/foo.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "tighten upper bound; observed from src/foo.ts:42",
+      risk_level: "low",
+      target: "prod",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      test_files: ["src/foo.test.ts"],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "target_spec_derivation_warn"),
+      ).toBe(false);
+    }
+  });
+
+  it("edit_cosmetic + target=test + direct_observation is exempt from §3.3.5 (carve-out)", () => {
+    writeFile2("src/foo.test.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/foo.test.ts",
+      rationale: "fix indentation; observed via prettier diff",
+      risk_level: "low",
+      target: "test",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      test_files: [],
+    }, ctx2());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "target_spec_derivation_warn"),
+      ).toBe(false);
     }
   });
 });

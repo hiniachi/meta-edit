@@ -214,6 +214,34 @@ export function evaluateKindExecutionStateValidity(
 }
 
 /**
+ * SPEC §3.3.5 — (kind, target, provenance) test-obligation matrix.
+ * Called only for impl tools (kind ∈ TOOLS_REQUIRING_TARGET); the
+ * validator's own allow-list gate is the workflow-target guard.
+ *
+ *                              u_c    a_a    d_o    inf    spec
+ * target="test", 15 SQLite     OK     OK     warn   REJ    REJ
+ * target="test", edit_cosmetic OK     OK     OK     OK     OK   (carve-out)
+ * target="prod", any impl      OK across the board
+ *
+ * `edit_cosmetic` is exempt: whitespace / formatter / information-
+ * invariant comment edits do not pin behavior, so spec-derivation
+ * discipline does not apply. The carve-out parallels §3.3.3.
+ */
+export function evaluateTargetSpecDerivation(
+  kind: ToolName,
+  target: EditTarget,
+  provenance: Provenance,
+): MatrixVerdict {
+  if (target === "prod") return "accept";
+  if (kind === "edit_cosmetic") return "accept";
+  if (provenance === "inference" || provenance === "speculation") {
+    return "reject";
+  }
+  if (provenance === "direct_observation") return "warn";
+  return "accept";
+}
+
+/**
  * Citation lint for `provenance: "accepted_artifact"`. RFC §3.2:
  * "the rationale MUST include at least one artifact reference (`§...`,
  * `ADR-...`, `issues/...`, `RFC-...`, or a URL); the server lints this
@@ -325,7 +353,8 @@ export type AuditWarning = {
     | "kind_provenance_warn"
     | "additional_files_warn"
     | "citation_lint_missing"
-    | "execution_state_repeating_failure";
+    | "execution_state_repeating_failure"
+    | "target_spec_derivation_warn";
   message: string;
 };
 
@@ -501,6 +530,45 @@ export function validateRequest(
         `failure (reproduction conditions, recent changes, hypotheses) ` +
         `before stacking another fix.`,
     });
+  }
+
+  // ---- 1e. kind × target × provenance validity (SPEC §3.3.5) ----------
+  // Defense-in-depth: gate on the impl-tools allow-list, not just on
+  // request.target presence. A future schema regression that let a
+  // workflow kind carry target cannot silently extend this matrix's
+  // scope.
+  if (
+    TOOLS_REQUIRING_TARGET.includes(toolName) &&
+    request.target !== undefined
+  ) {
+    const tsVerdict = evaluateTargetSpecDerivation(
+      toolName,
+      request.target,
+      request.provenance,
+    );
+    if (tsVerdict === "reject") {
+      warnings.push(
+        `(kind=${toolName}, target="${request.target}", provenance=` +
+          `${request.provenance}) is rejected per SPEC §3.3.5. A test ` +
+          `declared with inferred or speculative provenance cannot pin ` +
+          `spec-defined behavior. If the spec is unclear, stop and ask ` +
+          `which document defines the behavior the test should pin.`,
+      );
+    } else if (tsVerdict === "warn") {
+      auditWarnings.push({
+        code: "target_spec_derivation_warn",
+        message:
+          `target="${request.target}" with provenance=` +
+          `"${request.provenance}" usually means the test pins ` +
+          `implementation-observed behavior, not spec-defined behavior ` +
+          `(SPEC §3.3.5 impl-mirror smell). If the observation source ` +
+          `is an external system (e.g. third-party API contract under ` +
+          `test as regression), make the externality visible in the ` +
+          `rationale. Otherwise re-classify provenance to ` +
+          `accepted_artifact or user_confirmed citing the spec the ` +
+          `test pins.`,
+      });
+    }
   }
 
   // ---- 2a. target field presence (impl tools require it; workflow forbids it) -

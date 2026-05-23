@@ -566,7 +566,7 @@ The MCP server enforces:
 - `provenance` field presence: required on every declaration (v0.6.0). The schema is strict (no default). Cell-level acceptance by (kind, provenance) is then decided per §3.3.
 - `execution_state` presence: required on every declaration (v0.7.0). The schema is strict (no default). Cell-level audit by (kind, execution_state) is then decided per §3.4.
 - `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 5 workflow-axis kinds regardless.
-- `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a subsequent declaration of the same impl tool with `target: "test"`. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
+- `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a paired declaration of the same impl tool with `target: "test"`. The two declarations may land in either order — red-first (`target: "test"` first, declaring the test that must fail; `target: "prod"` second, declaring the production change that turns it green) or green-first (`target: "prod"` first, forward-declaring the test files; `target: "test"` second, populating them). Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
 - v0.4.2 removed the v0.3.1 "create the empty file first via a `content === ""` Write, THEN declare" requirement. That ordering-sensitive dance was a primary cause of binding failures (issues/2026-05-17-grant-binding-canonicalization-parity.md). The free empty-`content` Write to a non-existent in-repo path is still authorized at the hook (it remains a convenient scaffold), but it is no longer a prerequisite for declaring against a new file.
 - `additional_files` is accepted only for the 5 workflow-axis kinds, with cardinality ≤ 32 (operational hygiene; not a constitutional value). Per-cell acceptance / warning / rejection is further decided by §3.3.2.
@@ -616,12 +616,17 @@ bookkeeping (and of telling the agent what comes next). On rejection,
 
 The MCP server does not analyze the new content. It does not check whether the chosen tool is appropriate for the change. It does not verify the test files exist or contain meaningful tests. None of that. The whole point per Article 4 is that tool descriptions, not server logic, do the work.
 
-### 3.3. Kind × provenance matrices (v0.6.0)
+### 3.3. Kind × provenance matrices (v0.6.0; extended in v0.8.0)
 
 The `provenance` field is required on every declaration, and the
 (kind, provenance) cell decides whether the declaration is accepted,
 accepted-with-warning, or rejected. The matrices below are the
-validation rule.
+validation rule. §3.3.1 is the base cell matrix; §3.3.2 adds an
+`additional_files`-presence axis for workflow kinds; §3.3.3 carves
+out `edit_cosmetic`'s provenance rules; §3.3.4 lints
+`accepted_artifact` citations; §3.3.5 (v0.8.0) adds a `target` axis
+for the 16 impl tools so test-side declarations land in a
+spec-derivation matrix distinct from prod-side.
 
 #### 3.3.1. Base validity of a (kind, provenance) declaration
 
@@ -692,6 +697,105 @@ warning if no reference is present. The lint is structure-only — the
 server does not verify the artifact exists or that its content matches
 the declaration.
 
+#### 3.3.5. Kind × target × provenance (test-obligation) matrix (v0.8.0)
+
+The `target` axis is added as a third dimension to §3.3 for the 16
+impl tools (15 SQLite-derived + `edit_cosmetic`). The 5 workflow-axis
+kinds do not carry `target` and are not affected by this matrix.
+
+The matrix encodes the principle that tests should pin **spec-defined**
+behavior, not implementation-defined behavior. A test derived from
+"what the production code currently does" is tautological — it
+confirms the implementation matches the implementation, and fails to
+catch drift away from the spec. The natural provenance for a
+`target: "test"` declaration is therefore `accepted_artifact` (cite
+the spec / ADR / contract); a `direct_observation` test usually reads
+as derived from the prod code under test, which is the impl-mirror
+smell; `inference` and `speculation` for a test are structurally
+fragile (a test against an inferred or unverified spec catches nothing
+reliably).
+
+```
+                              u_c    a_a    d_o    inf    spec
+target="test", 15 SQLite      OK     OK◎    warn   REJ    REJ
+target="test", edit_cosmetic  OK     OK     OK     OK     OK   (carve-out)
+target="prod", any impl       (covered by §3.3.1 — all OK)
+```
+
+`◎` denotes the typical / encouraged cell. `warn` lands with
+`target_spec_derivation_warn` recorded in `audit_warnings`; the
+declaration still issues a grant. `REJ` rejects outright with a
+non-empty `warnings` array.
+
+Per-cell rationale:
+
+- `target="test"` × `user_confirmed` (OK) — user verbally confirmed
+  the spec value in the current session; the rationale should quote
+  or paraphrase the user.
+- `target="test"` × `accepted_artifact` (OK◎) — canonical TDD case:
+  the test pins behavior defined in a written spec / ADR / contract.
+  The rationale must cite the artifact per §3.3.4.
+- `target="test"` × `direct_observation` (warn) — usually the
+  impl-mirror smell ("I read the prod code and pinned what it does").
+  Legitimate uses survive — a third-party API regression test pins
+  observed external behavior as a contract — but the rationale should
+  make the externality visible. Emits `target_spec_derivation_warn`.
+- `target="test"` × `inference` (REJ) — you do not write tests against
+  an inferred spec. If the spec is unclear, stop and ask which document
+  defines the behavior the test should pin.
+- `target="test"` × `speculation` (REJ) — you do not write tests
+  against an unverified hypothesis.
+
+`edit_cosmetic` is exempt: cosmetic edits to test files (whitespace,
+formatter output, information-invariant comments) do not pin
+behavior, so spec-derivation discipline does not apply. This carve-out
+parallels §3.3.3's provenance carve-out for the same kind.
+
+`target="prod"` cells are not tightened by this matrix; the prose
+obligation around impl edits remains §3.3.1's "all OK" softness, with
+the description footer carrying the per-kind discipline. Tightening
+the prod axis is deferred pending observation of whether prod-side
+impl-derived patterns show up in the audit log.
+
+**New `AuditWarning` code: `target_spec_derivation_warn`.** Added to
+the `code` union in `AuditWarning` (`src/tools/common.ts`) and to the
+`AuditWarningEntrySchema` zod enum (`src/state/edit-log.ts`). The
+emitted message names the kind, target, and provenance trio and points
+the reader at this section.
+
+**Reader-version compatibility.** The `AuditWarningEntrySchema` zod
+enum is strict. Pre-v0.8.0 readers using the older schema will reject
+log lines containing `target_spec_derivation_warn` at parse time. This
+is a forward-compat-only bump — v0.8.0+ servers may emit the new
+code; pre-v0.8.0 readers must upgrade in lockstep. Downstream
+consumers (CLI summary scripts, external dashboards) that pin to a
+specific schema version must upgrade with the server.
+
+**Composition with the other §3.3 / §3.4 matrices.** Order of
+evaluation inside `validateRequest`:
+
+1. §3.3.1 base `(kind, provenance)` — may REJ (e.g., `edit_decision +
+   inference`) or warn.
+2. §3.3.3 `edit_cosmetic` carve-out — may REJ.
+3. §3.3.4 citation lint — may add warn.
+4. §3.4 `(kind, execution_state)` — may add warn.
+5. **§3.3.5 `(kind, target, provenance)` — may REJ or add warn (this
+   section).**
+6. §3.3.2 `additional_files` — may REJ or warn (workflow kinds only).
+
+Multiple warns aggregate into the `audit_warnings` array. A REJ at
+any step ends evaluation immediately; the declaration's `warnings`
+field is populated and no grant is issued.
+
+**Workflow-target guard.** The §3.3.5 evaluation runs only when the
+kind is in `TOOLS_REQUIRING_TARGET` (the 16 impl tools). The MCP
+input schema already excludes `target` from workflow-tool input
+(`registry.ts`'s `workflowToolInputSchema`), but the validator's own
+allow-list check is defense-in-depth: a future schema regression that
+let a workflow kind slip through carrying `target` would silently
+extend this matrix's scope. The validator gates on the allow-list,
+not on `request.target !== undefined`.
+
 ### 3.4. Kind × execution_state audit matrix (v0.7.0)
 
 The `execution_state` field is required on every declaration. Unlike
@@ -729,13 +833,16 @@ they are escape moves.
 
 **Warn semantics are distinct from §3.3.** The §3.3 warnings
 (`kind_provenance_warn`, `additional_files_warn`,
-`citation_lint_missing`) all describe a *mismatch* — the
-declaration's pieces do not cohere. `execution_state_repeating_failure`
-is different: a correctly-formed declaration that is a
-*self-flagged loop signal*. Both ride the same `audit_warnings` field,
-but consumers (e.g. a future `meta-edit summary` warnings breakdown)
-MUST group by warning *code*, not pool a single warn count across the
-two meanings.
+`citation_lint_missing`, `target_spec_derivation_warn`) all describe
+a *mismatch* — the declaration's pieces do not cohere
+(`target_spec_derivation_warn` specifically: `target: "test"` claims
+to pin spec-defined behavior but `provenance: "direct_observation"`
+admits the source is the impl, see §3.3.5).
+`execution_state_repeating_failure` is different: a correctly-formed
+declaration that is a *self-flagged loop signal*. All ride the same
+`audit_warnings` field, but consumers (e.g. a future `meta-edit
+summary` warnings breakdown) MUST group by warning *code*, not pool a
+single warn count across the two meanings.
 
 ### Multi-kind precedence
 
