@@ -146,7 +146,7 @@ reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.`;
 
 // Shared execution state block appended to every tool description after
-// PROVENANCE_FOOTER. v0.5.1 adds `execution_state` as a required
+// PROVENANCE_FOOTER. v0.7.0 adds `execution_state` as a required
 // declaration field on all 21 tools, per docs/SPEC.md §3.4 and the
 // execution-state-declaration design doc §4.4 / §4.7 / §4.1.1.
 // The three-value lifecycle (normal → repeating_failure → recovery → normal)
