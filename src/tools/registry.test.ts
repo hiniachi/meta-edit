@@ -163,6 +163,18 @@ describe("twenty-one tools", () => {
     expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 6);
   });
 
+  it("every description carries the Execution state block", () => {
+    for (const name of TOOL_NAMES) {
+      expect(TOOL_DESCRIPTIONS[name]).toContain("Execution state (required):");
+      expect(TOOL_DESCRIPTIONS[name]).toContain("repeating_failure");
+    }
+  });
+  it("edit_observation description carries the repeating_failure escape paragraph", () => {
+    expect(TOOL_DESCRIPTIONS.edit_observation).toContain(
+      "escaping a repeating_failure",
+    );
+  });
+
   it("includes the universal General principles block verbatim in every description", () => {
     // Per the v0.1.2 policy change: every edit_* tool description must
     // carry the same three-line block so the agent reads the same text
