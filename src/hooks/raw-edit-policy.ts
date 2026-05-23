@@ -411,6 +411,9 @@ export async function evaluateTokenedEdit(args: TokenedEvalArgs): Promise<HookDe
             ? { target: grant.declaration.target }
             : {}),
           provenance: grant.declaration.provenance,
+          ...(grant.declaration.execution_state !== undefined
+            ? { executionState: grant.declaration.execution_state }
+            : {}),
           targetFile: canonical,
           declaredTestFiles: grant.declaration.test_files,
         })

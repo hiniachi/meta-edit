@@ -742,4 +742,45 @@ describe("tool.execute.after write-allowed reminder", () => {
     );
     expect(fooOut.output).not.toContain("drive the intended failure path");
   });
+
+  it("appends the execution_state repeating_failure cue when grant carries execution_state", async () => {
+    // design §4.3 / plan Task 4.2: execution_state from the declaration
+    // must flow through evaluateTokenedEdit → buildReminderContext → the
+    // after-hook's appended output. "landed while" is the distinguishing
+    // phrase produced by the repeating_failure + write_allowed branch.
+    writeFile("src/baz.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260523_0300",
+      binding: [{ file: "src/baz.ts", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "accepted_artifact",
+        execution_state: "repeating_failure",
+        target_file: "src/baz.ts",
+        test_files: ["src/baz.test.ts"],
+      },
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-C" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/baz.ts"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-C" },
+      afterOutput,
+    );
+
+    expect(afterOutput.output).toContain("landed while");
+  });
 });
