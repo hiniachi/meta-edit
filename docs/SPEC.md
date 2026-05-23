@@ -1026,6 +1026,10 @@ General principles (apply to every edit):
 ```
 Modify a comparison, threshold, limit, or boundary in production code.
 
+The boundary value being changed is defined by the spec / accepted
+artifact / user statement, not by what the implementation currently
+happens to compute.
+
 Use this tool when:
 - Changing comparison operators (<, <=, >, >=, ==, !=)
 - Changing numeric limits or thresholds (max, min, cap, floor, ceiling)
@@ -1033,33 +1037,26 @@ Use this tool when:
 - Changing pagination, rate limit, timeout duration, retry count
 - Changing buffer or window sizes
 
-Required tests (you MUST cover all three of these per boundary):
-1. Value just below the boundary (boundary - 1, or just-outside)
-2. Value exactly at the boundary
-3. Value just above the boundary (boundary + 1, or just-inside)
+Per-target obligations (what `target: "prod"` commits to, what
+`target: "test"` must contain) are delivered in the declaration
+result. If you cannot enumerate all three boundary values
+(just-below, at, just-above) for this change at declaration time,
+the boundary semantics are unclear; stop and ask the user to clarify
+which value should be inclusive and which should be exclusive before
+declaring.
 
-These three cases are non-negotiable. Off-by-one errors are the most common
-bug class in this category, and SQLite testing methodology treats boundary
-tests as a hard requirement. If your change has multiple boundaries
-(e.g., both a min and a max), all three cases must be tested for each
-boundary.
-
-If you cannot enumerate all three boundary values for this change, the
-boundary semantics are unclear. Stop and ask the user to clarify which
-value should be inclusive and which should be exclusive, before applying
-the edit.
-
-test_files must list at least one file where these three cases will be
-added. Existing test files are acceptable.
+When `target: "prod"`, `test_files` must list at least one file
+where the boundary tests will be added. Existing test files are
+acceptable.
 
 Target (required):
-Declare `target: "prod"` when editing the production boundary itself,
-or `target: "test"` when editing the boundary tests (the file pointed
-at by your earlier target: prod declaration's `test_files`). One
-declaration covers one target — pair a target: prod call with a
-target: test call to land both within the same commit. When target is
-"test", `target_file` IS the test file and `test_files` must be
-empty.
+Declare `target: "prod"` for the production-side edit and
+`target: "test"` for the test-side edit. The two declarations may
+land in either order — red-first (`target: "test"` first, then
+`target: "prod"`) or green-first (`target: "prod"` first, then
+`target: "test"`) — and both may land in the same commit. When
+`target: "test"`, `target_file` IS the test file and
+`test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -1122,6 +1119,10 @@ General principles (apply to every edit):
 Modify a boolean expression, conditional logic, or guard clause in
 production code.
 
+The boolean rule being changed is defined by the spec / accepted
+artifact / user statement (the business rule, policy, or invariant),
+not by what the implementation currently happens to evaluate.
+
 Use this tool when:
 - Changing boolean operators (&&, ||, !)
 - Adding or removing conditions in an if / else / switch
@@ -1129,22 +1130,9 @@ Use this tool when:
 - Changing the structure of conditional branching
 - Changing null / nil / undefined checks
 
-Required tests (you MUST cover):
-1. Each path through the new conditional must have at least one test
-   that takes that path
-2. For each atomic condition that was changed (e.g., changing `a && b` to
-   `a && b && c`), there must be a test where that atomic condition
-   independently determines the outcome
-3. Boolean inversion: at least one test where the change in logic produces
-   a different observable result than the old logic would have
-
-The third requirement is the test that proves your edit was meaningful.
-If no test exists that distinguishes the new behavior from the old, the
-edit is either a no-op or insufficiently tested. Either is a problem.
-
-This is a lightweight version of MC/DC (Modified Condition / Decision
-Coverage). Full MC/DC is not required, but the spirit of "each condition
-independently affects outcome" is.
+Per-target obligations (path coverage, independent influence of each
+atomic condition, and a test that distinguishes the new logic from
+the old) are delivered in the declaration result.
 
 If the boolean change is purely a transformation that preserves truth
 values (e.g., De Morgan's law applied), it still goes through this tool —
@@ -1154,11 +1142,13 @@ whitespace / comments / formatter output only and does NOT cover boolean
 restructuring.
 
 Target (required):
-Declare `target: "prod"` when editing the conditional logic in
-production code, or `target: "test"` when editing the boolean tests
-that exercise it. Pair the two declarations in the same commit. When
-target is "test", `target_file` IS the test file and `test_files`
-must be empty.
+Declare `target: "prod"` for the production-side edit and
+`target: "test"` for the test-side edit. The two declarations may
+land in either order — red-first (`target: "test"` first, then
+`target: "prod"`) or green-first (`target: "prod"` first, then
+`target: "test"`) — and both may land in the same commit. When
+`target: "test"`, `target_file` IS the test file and
+`test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -1494,6 +1484,10 @@ General principles (apply to every edit):
 Modify the request or response shape of an API: endpoints, fields, status
 codes, schemas.
 
+The contract being changed is defined by the spec / accepted
+artifact (OpenAPI, IDL, RFC, ADR), not by what the current handler
+implementation happens to return.
+
 Use this tool when:
 - Adding, removing, or renaming fields in API request or response
 - Changing field types or formats
@@ -1501,31 +1495,23 @@ Use this tool when:
 - Adding or removing endpoints
 - Modifying OpenAPI / GraphQL / gRPC schema files
 
-Required tests (you MUST cover):
-1. Backward compatibility: existing clients (including older versions)
-   must continue to work, or the breaking change must be explicitly
-   acknowledged in rationale
-2. Missing field: request with the new field absent must behave correctly
-   (default value, error, or fallback as documented)
-3. Extra field: request with unknown extra fields must behave correctly
-   (typically ignored, but verify)
-4. Status code: each status code path that this change affects must have
-   a test verifying the correct code is returned
-
-API contract changes affect every consumer. The backward compatibility
-test is the most important — name it explicitly and write it first.
+Per-target obligations (what `target: "prod"` commits to —
+backward compatibility, missing/extra field handling, status-code
+coverage — and what the matching `target: "test"` file must
+contain) are delivered in the declaration result.
 
 If the change is a breaking change, the rationale field must say so
 explicitly, e.g., "Breaking change: removing the deprecated `legacyId`
 field. Migration plan: ..."
 
 Target (required):
-Declare `target: "prod"` when editing the API surface in production
-code (handlers, schemas, OpenAPI / GraphQL / gRPC definitions), or
-`target: "test"` when editing the contract tests (backward
-compatibility, missing/extra field, status code). Pair the two
-declarations in the same commit. When target is "test", `target_file`
-IS the test file and `test_files` must be empty.
+Declare `target: "prod"` for the production-side edit (handlers,
+schemas, OpenAPI / GraphQL / gRPC definitions) and `target: "test"`
+for the contract tests. The two declarations may land in either order
+— red-first (`target: "test"` first, then `target: "prod"`) or
+green-first (`target: "prod"` first, then `target: "test"`) — and
+both may land in the same commit. When `target: "test"`,
+`target_file` IS the test file and `test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -2041,32 +2027,28 @@ General principles (apply to every edit):
 ```
 Modify cache keys, TTLs, invalidation logic, or staleness handling.
 
+The freshness contract being changed (staleness budget, invalidation
+events, TTL) is defined by the spec / accepted artifact, not by what
+the current cache code happens to return.
+
 Use this tool when:
 - Changing cache key generation
 - Modifying TTL or expiration logic
 - Adding or removing invalidation triggers
 - Changing what is cached or where
 
-Required tests (you MUST cover):
-1. Stale data prevention: after an invalidation event, the next read must
-   return fresh data, not the cached stale value
-2. Invalidation triggers: the events that should invalidate the cache
-   must be tested explicitly
-3. TTL boundary: behavior just before, at, and after expiration (this is
-   also a boundary_condition pattern — be explicit)
-4. Cache key collision: keys for different data must not collide
-
-Cache bugs typically manifest as "wrong data shown to user" or "stale
-data persisted to a downstream system". Both are silent until reported
-by users, which is too late. Test invalidation explicitly.
+Per-target obligations (stale-data prevention, invalidation-trigger
+coverage, TTL boundary, key collision) are delivered in the
+declaration result.
 
 Target (required):
-Declare `target: "prod"` when editing cache key / TTL / invalidation
-code in production, or `target: "test"` when editing its tests
-(stale-data prevention, invalidation triggers, TTL boundary, key
-collision). Pair the two declarations in the same commit. When target
-is "test", `target_file` IS the test file and `test_files` must be
-empty.
+Declare `target: "prod"` for the production-side edit (cache key /
+TTL / invalidation logic) and `target: "test"` for its tests. The
+two declarations may land in either order — red-first
+(`target: "test"` first, then `target: "prod"`) or green-first
+(`target: "prod"` first, then `target: "test"`) — and both may
+land in the same commit. When `target: "test"`, `target_file`
+IS the test file and `test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
