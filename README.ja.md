@@ -7,7 +7,7 @@
 
 **言語:** [English](./README.md) · **日本語** · [简体中文](./README.zh-CN.md)
 
-> AIコーディングエージェントの唯一の `Edit` ツールを、**17個の種類別編集ツール**に置き換えるMCPサーバ。各ツールの説明文には、その種類の変更に伴うべきテスト義務が直接書き込まれている。16個の実装ツールには `target: "prod" | "test"` フラグが必須で、テスト編集はその実装種類の監査面に紐づけて記録される。
+> AIコーディングエージェントの唯一の `Edit` ツールを、**21個の種類別編集ツール**に置き換えるMCPサーバ。各ツールの説明文には、その種類の変更に伴うべきテスト義務が直接書き込まれている。16個の実装ツールには `target: "prod" | "test"` フラグが必須で、テスト編集はその実装種類の監査面に紐づけて記録される。さらに、すべての宣言に必須の `provenance` フィールド（編集の認識論的根拠: `user_confirmed` / `accepted_artifact` / `direct_observation` / `inference` / `speculation`）と必須の `execution_state` フィールド（`normal` / `repeating_failure` / `recovery`）が加わり、監査ログに確信度とセッション文脈の両方が記録される。
 
 ファイル編集の枠を越えた応用も含めた、より詳しい解説は[プロジェクトページ](https://hiniachi.github.io/meta-edit/)にある。
 

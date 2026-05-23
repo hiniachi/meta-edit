@@ -60,6 +60,7 @@ function buildReminderContext(input) {
     scopeReviewLine(input.phase),
     kindCueLine(input.kind),
     provenanceLine(input.provenance, input.phase),
+    executionStateLine(input),
     targetFollowupLine(input),
     auditWarningsLine(input.auditWarnings, input.phase)
   ].filter((line) => line !== undefined && line.length > 0);
@@ -138,6 +139,40 @@ function kindCueLine(kind) {
     default:
       return kind === undefined ? undefined : "I should follow the obligations in the selected tool description before moving on.";
   }
+}
+var WORKFLOW_KINDS = new Set([
+  "edit_progress",
+  "edit_observation",
+  "edit_proposal",
+  "edit_decision",
+  "edit_explanation"
+]);
+var ESCAPE_KINDS = new Set([
+  "edit_observation",
+  "edit_proposal"
+]);
+function executionStateLine(input) {
+  const state = input.executionState;
+  if (state === undefined || state === "normal")
+    return;
+  if (state === "recovery") {
+    return "I am in recovery — a deliberate diagnosis mode entered after " + "recognizing a failure. Verify assumptions against primary sources " + "(official documentation, etc.), confirm a single hypothesis, and " + "make the next fix only then. Keep steps small and reversible. " + "Return to normal once the failure is resolved.";
+  }
+  if (state !== "repeating_failure")
+    return;
+  const kind = input.kind;
+  if (kind === undefined)
+    return;
+  if (ESCAPE_KINDS.has(kind)) {
+    return "I have acknowledged repeating_failure and I am recording it — this " + "is the right move. Write reproduction conditions, recent changes, " + "and competing hypotheses as three separate items. Ground each " + "hypothesis by checking my assumptions against primary sources " + "before forming it, and do not return to implementation fixes until " + "a single hypothesis is isolated.";
+  }
+  if (WORKFLOW_KINDS.has(kind)) {
+    return;
+  }
+  if (input.phase === "write_allowed") {
+    return "This fix landed while I had declared repeating_failure. If I have " + "not yet run the escape procedure — record the failure with " + "edit_observation, check my assumptions against primary sources, " + "isolate one hypothesis — I should do that before the next edit " + "instead of stacking another fix.";
+  }
+  return "I was about to keep implementing while repeating the same kind of " + "failure. Before stacking another fix I should run the escape " + "procedure — (1) record it with edit_observation: write reproduction " + "conditions, recent changes, and competing hypotheses as separate " + "items; (2) re-read the error message literally and check my " + "assumptions against primary sources (official documentation, the " + "actual source, execution logs); (3) narrow to a single hypothesis " + "and verify it with a minimal reproduction; (4) only then decide the " + "next move.";
 }
 function provenanceLine(provenance, phase) {
   switch (provenance) {
@@ -4235,6 +4270,27 @@ Declare the epistemic source of this edit. Pick exactly one of:
 The prose-uncertainty obligation is load-bearing: a later session that
 reads this file picks up the hedging language directly, with no
 structural-marker machinery in the loop.`;
+var EXECUTION_STATE_FOOTER = `Execution state (required):
+Declare the state of your work loop for this edit. Pick exactly one of:
+- \`normal\` — ordinary work; no active failure loop. The default;
+  declare it unless one of the two below applies.
+- \`repeating_failure\` — you have noticed you are repeating the same
+  class of failure (two or more unresolved fix attempts at one failure).
+  Declare it the moment you recognize the loop. The intended move is to
+  declare it on an edit_observation (or edit_proposal) that records the
+  failure — reproduction conditions, recent changes, and competing
+  hypotheses as separate items. Declaring repeating_failure on another
+  implementation fix attempt is recorded as an audit warning, and the
+  reminder will redirect you to the escape procedure.
+- \`recovery\` — you have recorded the failure and isolated a single
+  hypothesis, and you are now making deliberate, hypothesis-driven
+  diagnostic edits. Keep steps small and reversible. Return to normal
+  once the failure is resolved for the understood reason.
+
+The lifecycle is normal -> repeating_failure -> recovery -> normal.
+recovery may be skipped if the escape observation immediately resolves
+the failure; repeating_failure is never skipped on the path into
+recovery.`;
 var TOOL_DESCRIPTIONS = {
   edit_cosmetic: `Surface-level edit with no semantic effect and no information change:
 whitespace, formatter output, or comment edits that do not change the
@@ -4306,6 +4362,8 @@ keeps the typed surface honest.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 Provenance combinations (cosmetic-specific):
 This tool accepts only \`user_confirmed\`, \`accepted_artifact\`, and
 \`direct_observation\`. Declaring \`inference\` or \`speculation\` here
@@ -4357,6 +4415,8 @@ empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4403,6 +4463,8 @@ must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4438,6 +4500,8 @@ two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4479,6 +4543,8 @@ commit. When target is "test", \`target_file\` IS the test file and
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4516,6 +4582,8 @@ the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4558,6 +4626,8 @@ IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4593,6 +4663,8 @@ target is "test", \`target_file\` IS the test file and \`test_files\`
 must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4632,6 +4704,8 @@ file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4667,6 +4741,8 @@ two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4706,6 +4782,8 @@ tests. Pair the two declarations in the same commit. When target is
 empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4747,6 +4825,8 @@ two declarations in the same commit. When target is "test",
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4780,6 +4860,8 @@ is "test", \`target_file\` IS the test file and \`test_files\` must be
 empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4826,6 +4908,8 @@ same commit. When target is "test", \`target_file\` IS the test file
 and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4883,6 +4967,8 @@ Pair the two declarations in the same commit. When target is "test",
 \`target_file\` IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -4943,6 +5029,8 @@ file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
@@ -4999,6 +5087,8 @@ between "done" and "should be done" — the exact distinction this
 refactor is meant to restore.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_progress-specific):
 All five provenance values are accepted. The typical value is
@@ -5065,7 +5155,21 @@ encountering the observation file picks up the lesson without retracing
 the discovery. Mixing observation with proposal / decision erodes the
 file's value as a lesson archive.
 
+escaping a repeating_failure spiral:
+This is the tool to reach for first when you have noticed you are
+repeating the same class of failure. Record the reproduction
+conditions, the recent changes, and the competing hypotheses as
+separate items, and verify your assumptions against primary sources
+(official documentation, the actual source, execution logs) before
+forming the next hypothesis. Declare this edit with
+provenance: direct_observation — the reproduction conditions and
+recent changes are directly observed, and the hypotheses are framed
+as hedged prose — so the escape stays in this tool's typical
+provenance cell and does not trip a kind/provenance warning.
+
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_observation-specific):
 The typical provenance is \`direct_observation\` (you observed the
@@ -5130,6 +5234,8 @@ been accepted vs. what is still being weighed.
 
 ${PROVENANCE_FOOTER}
 
+${EXECUTION_STATE_FOOTER}
+
 Provenance combinations (edit_proposal-specific):
 The typical provenance is \`speculation\` (the proposal is exploratory
 by nature). All five values are accepted. When provenance is
@@ -5193,6 +5299,8 @@ speculation produces the exact "past-chat looks like a confirmed
 decision" failure this refactor is meant to prevent.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_decision-specific):
 This tool rejects \`inference\` and \`speculation\`. The typical
@@ -5278,6 +5386,8 @@ unverified speculation poisons every later citation that depends on
 it.
 
 ${PROVENANCE_FOOTER}
+
+${EXECUTION_STATE_FOOTER}
 
 Provenance combinations (edit_explanation-specific):
 This tool rejects \`speculation\`. The typical provenance is
@@ -5522,6 +5632,11 @@ var ProvenanceSchema = exports_external.enum([
   "inference",
   "speculation"
 ]);
+var ExecutionStateSchema = exports_external.enum([
+  "normal",
+  "repeating_failure",
+  "recovery"
+]);
 var AdditionalFileSchema = exports_external.object({
   file: exports_external.string().min(1)
 }).strict();
@@ -5591,6 +5706,12 @@ function evaluateAdditionalFiles(kind, provenance) {
   }
   return "reject";
 }
+function evaluateKindExecutionStateValidity(kind, executionState) {
+  if (executionState === "repeating_failure" && TOOLS_REQUIRING_TARGET.includes(kind)) {
+    return "warn";
+  }
+  return "accept";
+}
 var ARTIFACT_CITATION_RE = new RegExp([
   "§",
   "\\bADR-\\w",
@@ -5624,6 +5745,7 @@ var EditToolRequestSchema = exports_external.object({
   risk_level: RiskLevelSchema,
   target: EditTargetSchema.optional(),
   provenance: ProvenanceSchema,
+  execution_state: ExecutionStateSchema,
   test_files: exports_external.preprocess(coerceJsonStringToArray("test_files"), exports_external.array(exports_external.string())),
   additional_files: exports_external.preprocess(coerceJsonStringToArray("additional_files"), exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES)).optional()
 }).strict();
@@ -5654,6 +5776,12 @@ function validateRequest(toolName, request, ctx) {
     auditWarnings.push({
       code: "citation_lint_missing",
       message: `provenance="accepted_artifact" but the rationale has no ` + `recognizable artifact reference (\`§...\`, \`ADR-...\`, ` + `\`RFC-...\`, \`issues/...\`, or a URL). Add a citation so ` + `future readers can re-source the artifact.`
+    });
+  }
+  if (evaluateKindExecutionStateValidity(toolName, request.execution_state) === "warn") {
+    auditWarnings.push({
+      code: "execution_state_repeating_failure",
+      message: `execution_state="repeating_failure" was declared on ${toolName}, ` + `an implementation fix attempt. This is a self-flagged loop signal, ` + `not a mismatch — group it by code, separate from §3.3 warnings. ` + `The escape move is edit_observation or edit_proposal: record the ` + `failure (reproduction conditions, recent changes, hypotheses) ` + `before stacking another fix.`
     });
   }
   const toolRequiresTarget = TOOLS_REQUIRING_TARGET.includes(toolName);
@@ -5836,7 +5964,8 @@ var AuditWarningEntrySchema = exports_external.object({
   code: exports_external.enum([
     "kind_provenance_warn",
     "additional_files_warn",
-    "citation_lint_missing"
+    "citation_lint_missing",
+    "execution_state_repeating_failure"
   ]),
   message: exports_external.string()
 });
@@ -5850,6 +5979,7 @@ var IssuedEntrySchema = exports_external.object({
   risk_level: RiskLevelSchema,
   target: EditTargetSchema.optional(),
   provenance: ProvenanceSchema.optional(),
+  execution_state: ExecutionStateSchema.optional(),
   audit_warnings: exports_external.array(AuditWarningEntrySchema).optional(),
   test_files: exports_external.array(exports_external.string()),
   binding: exports_external.array(BindingEntrySchema).min(1),
@@ -5869,6 +5999,7 @@ var RejectedEntrySchema = exports_external.object({
   target_file: exports_external.string(),
   target: EditTargetSchema.optional(),
   provenance: ProvenanceSchema.optional(),
+  execution_state: ExecutionStateSchema.optional(),
   audit_error: exports_external.string().min(1)
 });
 var EditLogEntrySchema = exports_external.discriminatedUnion("phase", [
@@ -6283,6 +6414,7 @@ async function evaluateTokenedEdit(args) {
     kind: grant.declaration.kind,
     ...grant.declaration.target !== undefined ? { target: grant.declaration.target } : {},
     provenance: grant.declaration.provenance,
+    ...grant.declaration.execution_state !== undefined ? { executionState: grant.declaration.execution_state } : {},
     targetFile: canonical,
     declaredTestFiles: grant.declaration.test_files
   }) : undefined;
@@ -7907,6 +8039,9 @@ function isGrantDeclaration(value) {
   if (v.target !== undefined && v.target !== "prod" && v.target !== "test") {
     return false;
   }
+  if (v.execution_state !== undefined && typeof v.execution_state !== "string") {
+    return false;
+  }
   if (typeof v.provenance !== "string" || v.provenance.length === 0) {
     return false;
   }
@@ -8460,4 +8595,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=973BDBDAE3629A3764756E2164756E21
+//# debugId=C37DAD818E42968D64756E2164756E21

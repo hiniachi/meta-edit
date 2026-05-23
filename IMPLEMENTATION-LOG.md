@@ -1590,6 +1590,64 @@ mis-marshals non-empty string arrays.
   was not green in its sandbox due to a `/tmp/.git` repo-discovery
   collision; that collision does not reproduce in this checkout.)
 
+## v0.7.0: execution_state declaration field
+
+- Completed: 2026-05-23 (branch `codex-reminder-context`).
+- Design review: two Codex+Claude review rounds before implementation
+  (subagents af2a19d5, a70bda6); two implementation-plan review rounds
+  before execution (subagents a176707e, ab0ff725, a9a3eb1f, a98ba0a4).
+  No CRITICAL/HIGH findings remained before execution began.
+- What works:
+  - All 21 typed-edit tools now carry a required `execution_state` field
+    with three states: `normal` (standard edit), `repeating_failure`
+    (agent is in a fix→fail→fix loop on this file), `recovery` (agent is
+    explicitly stepping back from a spiral). Schema enforced in
+    `src/tools/common.ts` (`EditToolRequestSchema`); workflow-axis kinds
+    (edit_progress / edit_observation / edit_proposal / edit_decision /
+    edit_explanation) carry the field alongside the impl tools.
+  - `(kind × execution_state)` audit matrix at SPEC §3.4: the
+    `impl × repeating_failure` cell warns (`execution_state_repeating_failure`
+    code) to surface fix→fail→fix spirals in the edit log's
+    `audit_warnings` field; all other cells accept without warning.
+  - `executionStateLine()` helper in `src/reminders/context.ts` branches
+    the reminder text by `execution_state`: `repeating_failure` prepends
+    a self-check cue ("I may be in a fix→fail→fix spiral — before
+    writing, re-read the last few edit log entries for this file and
+    confirm I'm not repeating the same mis-fix"); `recovery` prepends an
+    acknowledgment cue; `normal` adds no extra line.
+  - CLI `meta-edit log --execution-state <val>` filter added; supports
+    single and comma-separated values. `meta-edit summary` adds a "By
+    execution state" breakdown with a `(pre-0.7.0)` legacy bucket for
+    entries that predate the field.
+- Tests added (~21 new tests across):
+  - `src/tools/common.test.ts` — schema rejection on missing /
+    invalid `execution_state`; acceptance of all three values on impl
+    and workflow-axis kinds.
+  - `src/tools/grants.test.ts` — `execution_state` round-trips through
+    grant issue / lookup.
+  - `src/state/edit-log.test.ts` — `execution_state` persists in
+    `EditLogEntrySchema`; legacy entries (field absent) parse cleanly
+    under the optional schema field.
+  - `src/reminders/context.test.ts` — `repeating_failure` reminder cue
+    present; `recovery` cue present; `normal` produces no extra line.
+  - `src/hooks/raw-edit-policy.test.ts` — `execution_state_repeating_failure`
+    audit warning surfaces in the allow-time `additionalContext`.
+  - `src/opencode/plugin.test.ts` — `execution_state` metadata persists
+    through the opencode grant round-trip.
+  - `src/cli/log-cmd.test.ts` — `--execution-state` flag parsing and
+    filter behavior.
+  - `src/cli/summary-cmd.test.ts` — "By execution state" breakdown;
+    `(pre-0.7.0)` legacy bucket.
+  - `src/tools/registry.test.ts` — all 21 tool schemas include
+    `execution_state` in `inputSchema.properties`.
+  - `src/tools/handler.test.ts` — end-to-end validate → apply → log
+    with `execution_state` present in the log entry.
+- Spec deviations: none. `src/tools/descriptions.ts` and `docs/SPEC.md`
+  §4 updated verbatim per CLAUDE.md §4. SPEC §3.4 is the authoritative
+  audit matrix; implementations read from it.
+- Version bump: `package.json` and `.claude-plugin/plugin.json`
+  0.6.3 → 0.7.0 (minor — new required field on all 21 tools).
+
 ## opencode port — v0.6.3 write_allowed reminder via tool.execute.after
 
 - Completed: 2026-05-22 (branch `codex-reminder-context`).

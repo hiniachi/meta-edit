@@ -230,6 +230,51 @@ hold:
 5. `OBSERVED-FAILURES.md`: move this entry to "Resolved
    (promoted to MVP)" with the trigger that fired.
 
+## execution_state under-declaration — v0.2 cadence-counter candidate
+
+v0.7.0 added a required `execution_state` field (`normal` /
+`repeating_failure` / `recovery`) to all 21 typed_edit tools. The field
+is a self-declaration: the agent states what kind of session moment the
+edit is coming from. The audit matrix (SPEC §3.4) warns on
+`impl × repeating_failure` to surface fix→fail→fix spirals in the log.
+
+The bet is that the description's obligation text is enough to make the
+agent declare `repeating_failure` honestly when in a spiral. If the
+descriptions are not enough, the cadence-counter backstop (count
+consecutive same-file impl declarations from the edit log and prompt)
+becomes the next candidate.
+
+### Promotion triggers (description-alone bet → cadence-counter backstop)
+
+Promote when *either* of the following holds:
+
+1. **Review signal** — code reviews on AI-PR transcripts repeatedly find
+   a fix→fail→fix loop where `repeating_failure` was never declared.
+   The pattern: the agent issues three or more consecutive impl
+   declarations against the same file, all with `execution_state:
+   normal`, and the commit history shows the file cycling through the
+   same bug more than once. When this appears in two or more independent
+   PR reviews, the description-alone bet has failed on this field.
+
+2. **User-report signal** — the project owner reports observing an
+   undeclared spiral during dogfooding: the agent went through multiple
+   rounds of `edit_error_handling` / `edit_boolean_condition` on the
+   same file with `execution_state: normal` throughout, while the
+   session transcript shows repeated test failures on the same assertion.
+
+### Promotion procedure (if triggered)
+
+The backstop is the cadence-counter: read the last N declarations from
+`.meta-edit/state/edits.jsonl` for the current `target_file`, and if
+K or more consecutive impl declarations share the same file without an
+intervening `recovery` or `normal`-after-gap, surface a prompt to the
+agent asking it to re-evaluate `execution_state`.
+
+This is a v0.2 / classifier-class change. Do not implement in MVP —
+the signal question is still open. Record the trigger in this file and
+move this entry to "Resolved (promoted to v0.2)" when the backstop
+ships.
+
 ## Phase 8 (apply) residual gaps
 
 ### MEDIUM: Phase-1 read vs Phase-3 rename TOCTOU on the content-pair flow
