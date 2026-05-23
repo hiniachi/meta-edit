@@ -186,6 +186,33 @@ describe("twenty-one tools", () => {
 // =====================================================================
 
 describe("registerTools — ListToolsRequest handler", () => {
+  it("every tool's input schema requires execution_state", async () => {
+    const server = new Server(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerTools(server, {
+      context: { repoRoot: process.cwd() },
+      handler: async () => ({
+        token: "",
+        expires_at: "",
+        edit_id: "edit_20260523_0001",
+        warnings: [],
+      }),
+    });
+    const listHandler = (server as unknown as {
+      _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+    })._requestHandlers.get("tools/list");
+    if (!listHandler) throw new Error("tools/list handler not registered");
+    const result = (await listHandler({
+      method: "tools/list",
+      params: {},
+    })) as { tools: Array<{ inputSchema: { required: string[] } }> };
+    for (const tool of result.tools) {
+      expect(tool.inputSchema.required).toContain("execution_state");
+    }
+  });
+
   it("returns titles so clients can display the specific edit kind in collapsed tool rows", async () => {
     const server = new Server(
       { name: "test", version: "0.0.0" },
@@ -301,6 +328,7 @@ describe("registerTools — CallToolRequest handler", () => {
           risk_level: "medium",
           target: "prod",
           provenance: "direct_observation",
+          execution_state: "normal",
           test_files: ["tests/foo.test.ts"],
         },
       },

@@ -64,9 +64,22 @@ describe("EditToolRequestSchema — zod surface", () => {
       rationale: "ok",
       risk_level: "medium",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: ["t.test.ts"],
     });
     expect(r.success).toBe(true);
+  });
+
+  it("rejects a request missing execution_state (design §4.1)", () => {
+    const r = EditToolRequestSchema.safeParse({
+      target_file: "src/foo.ts",
+      rationale: "ok",
+      risk_level: "medium",
+      target: "prod",
+      provenance: "direct_observation",
+      test_files: ["t.test.ts"],
+    });
+    expect(r.success).toBe(false);
   });
 
   it("rejects unknown extra fields (strict)", () => {
@@ -181,6 +194,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         rationale: "ok",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: "[]" as unknown as string[],
       });
     });
@@ -199,6 +213,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         rationale: "ok",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: '["src/foo.test.ts"]' as unknown as string[],
       });
     });
@@ -216,6 +231,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         rationale: "ok",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: [],
       });
     });
@@ -253,6 +269,7 @@ describe("EditToolRequestSchema — opencode JSON-string array coercion", () => 
         rationale: "ok",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: [],
         additional_files: "[]" as unknown as { file: string }[],
       });
@@ -272,6 +289,7 @@ describe("validateRequest — disk + path-safety", () => {
       risk_level: "medium",
       target: "prod",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: ["tests/foo.test.ts"],
       ...overrides,
     };
@@ -407,6 +425,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: [
         { file: "docs/b.md" },
@@ -426,6 +445,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: [{ file: "docs/a.md" }],
     }, ctx());
@@ -442,6 +462,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "tighten the boundary assertion",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       target: "test",
       test_files: [],
     }, ctx());
@@ -460,6 +481,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "...",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       target: "test",
       test_files: ["tests/foo.test.ts"],
     }, ctx());
@@ -476,6 +498,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "tighten boundary",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       target: "prod",
       test_files: [],
     }, ctx());
@@ -492,6 +515,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "tighten boundary",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: ["tests/foo.test.ts"],
     }, ctx());
     expect(r.ok).toBe(false);
@@ -507,6 +531,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "doc tweak",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       target: "prod",
       test_files: [],
     }, ctx());
@@ -523,10 +548,25 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "reformat trailing whitespace",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       target: "prod",
       test_files: [],
     }, ctx());
     expect(r.ok).toBe(true);
+  });
+
+  it("records execution_state_repeating_failure for an impl tool in repeating_failure", () => {
+    const res = validateRequest(
+      "edit_boundary_condition",
+      modifyReq({ execution_state: "repeating_failure" }),
+      ctx(),
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(
+        res.auditWarnings.some((w) => w.code === "execution_state_repeating_failure"),
+      ).toBe(true);
+    }
   });
 
   it("computes before_sha256 server-side for each additional_files entry", () => {
@@ -538,6 +578,7 @@ describe("validateRequest — disk + path-safety", () => {
       rationale: "rename product across the docs",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
     }, ctx());
@@ -787,6 +828,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "explain feature X (see SPEC.md §4)",
       risk_level: "low",
       provenance,
+      execution_state: "normal",
       test_files: [],
       ...overrides,
     };
@@ -800,6 +842,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       risk_level: "low",
       target: "prod",
       provenance: "speculation",
+      execution_state: "normal",
       test_files: [],
     }, ctx2());
     expect(r.ok).toBe(false);
@@ -830,6 +873,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "noted that X breaks Y",
       risk_level: "low",
       provenance: "inference",
+      execution_state: "normal",
       test_files: [],
     }, ctx2());
     expect(r.ok).toBe(true);
@@ -845,6 +889,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "explain feature X",
       risk_level: "low",
       provenance: "accepted_artifact",
+      execution_state: "normal",
       test_files: [],
     }, ctx2());
     expect(r.ok).toBe(true);
@@ -862,6 +907,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "explain feature X per SPEC.md §4",
       risk_level: "low",
       provenance: "accepted_artifact",
+      execution_state: "normal",
       test_files: [],
     }, ctx2());
     expect(r.ok).toBe(true);
@@ -880,6 +926,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "session work-log",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: [{ file: "docs/log2.md" }],
     }, ctx2());
@@ -894,6 +941,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "feature kickoff: file follow-up issues",
       risk_level: "low",
       provenance: "speculation",
+      execution_state: "normal",
       test_files: [],
       additional_files: [{ file: "issues/b.md" }],
     }, ctx2());
@@ -911,6 +959,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       rationale: "explain X based on observed behavior",
       risk_level: "low",
       provenance: "inference",
+      execution_state: "normal",
       test_files: [],
       additional_files: [{ file: "docs/b.md" }],
     }, ctx2());
@@ -919,6 +968,51 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       expect(
         r.auditWarnings.some((w) => w.code === "additional_files_warn"),
       ).toBe(true);
+    }
+  });
+
+  it("does not warn for an escape edit_observation in repeating_failure", () => {
+    writeFile2("docs/obs.md", "x\n");
+    const res = validateRequest(
+      "edit_observation",
+      workflowReq("edit_observation", "direct_observation", {
+        target_file: "docs/obs.md",
+        execution_state: "repeating_failure",
+      }),
+      ctx2(),
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(
+        res.auditWarnings.some((w) => w.code === "execution_state_repeating_failure"),
+      ).toBe(false);
+    }
+  });
+  it("records additional_files_warn but NOT execution_state_repeating_failure on a batched workflow declaration in repeating_failure", () => {
+    // The pair (edit_proposal, direct_observation) is a WARN cell in
+    // §3.3.2 — it produces additional_files_warn. The test confirms
+    // execution_state_repeating_failure (impl-only) does NOT co-occur:
+    // design §4.1's "never co-occur on one declaration" invariant.
+    writeFile2("docs/a.md", "x\n");
+    writeFile2("docs/b.md", "y\n");
+    const res = validateRequest(
+      "edit_proposal",
+      workflowReq("edit_proposal", "direct_observation", {
+        target_file: "docs/a.md",
+        execution_state: "repeating_failure",
+        rationale: "RFC sweep across docs/a.md and docs/b.md (direct observation)",
+        additional_files: [{ file: "docs/b.md" }],
+      }),
+      ctx2(),
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(
+        res.auditWarnings.some((w) => w.code === "additional_files_warn"),
+      ).toBe(true);
+      expect(
+        res.auditWarnings.some((w) => w.code === "execution_state_repeating_failure"),
+      ).toBe(false);
     }
   });
 
@@ -931,6 +1025,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
       risk_level: "low",
       target: "prod",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: ["tests/foo.test.ts"],
       additional_files: [{ file: "src/bar.ts" }],
     }, ctx2());

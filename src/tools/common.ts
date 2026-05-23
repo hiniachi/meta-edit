@@ -290,6 +290,9 @@ export const EditToolRequestSchema = z
     // rather than a softer validateRequest warning that could be
     // mistaken for "shippable".
     provenance: ProvenanceSchema,
+    // design §4.1: required, no default — the forcing function dies
+    // with a default. The .strict() schema rejects omission.
+    execution_state: ExecutionStateSchema,
     test_files: z.preprocess(
       coerceJsonStringToArray("test_files"),
       z.array(z.string()),
@@ -480,6 +483,23 @@ export function validateRequest(
         `recognizable artifact reference (\`§...\`, \`ADR-...\`, ` +
         `\`RFC-...\`, \`issues/...\`, or a URL). Add a citation so ` +
         `future readers can re-source the artifact.`,
+    });
+  }
+
+  // ---- 1d. kind × execution_state validity (SPEC §3.4) ----------------
+  if (
+    evaluateKindExecutionStateValidity(toolName, request.execution_state) ===
+    "warn"
+  ) {
+    auditWarnings.push({
+      code: "execution_state_repeating_failure",
+      message:
+        `execution_state="repeating_failure" was declared on ${toolName}, ` +
+        `an implementation fix attempt. This is a self-flagged loop signal, ` +
+        `not a mismatch — group it by code, separate from §3.3 warnings. ` +
+        `The escape move is edit_observation or edit_proposal: record the ` +
+        `failure (reproduction conditions, recent changes, hypotheses) ` +
+        `before stacking another fix.`,
     });
   }
 

@@ -63,6 +63,7 @@ function modifyRequest(overrides: Partial<EditToolRequest> = {}): EditToolReques
     rationale: "fix off-by-one in the boundary check",
     risk_level: "medium",
     provenance: "direct_observation",
+    execution_state: "normal",
     target: "prod",
     test_files: ["tests/foo.test.ts"],
     ...overrides,
@@ -186,6 +187,7 @@ describe("makeIssuingHandler — successful declaration", () => {
       rationale: "doc tweak",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
     } as EditToolRequest);
     const entries = log.readAll();
@@ -349,6 +351,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
         rationale: "rename product across the docs",
         risk_level: "low",
         provenance: "direct_observation",
+        execution_state: "normal",
         test_files: [],
         additional_files: [{ file: "docs/b.md" }, { file: "docs/c.md" }],
       } as EditToolRequest,
@@ -378,6 +381,7 @@ describe("makeIssuingHandler — additional_files gate (17 vs 2)", () => {
       rationale: "...",
       risk_level: "low",
       provenance: "direct_observation",
+      execution_state: "normal",
       test_files: [],
       additional_files: additional,
     } as EditToolRequest);

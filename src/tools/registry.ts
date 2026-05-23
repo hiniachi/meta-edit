@@ -49,6 +49,7 @@ const implToolInputSchema = {
     "risk_level",
     "target",
     "provenance",
+    "execution_state",
     "test_files",
   ],
   properties: {
@@ -84,6 +85,17 @@ const implToolInputSchema = {
       description:
         "Required (v0.6.0). The epistemic source of this edit: user_confirmed (the user explicitly stated it this session), accepted_artifact (based on an accepted spec / ADR / test / API; rationale should cite §..., ADR-..., RFC-..., issues/..., or a URL), direct_observation (observed from execution / logs / just-read code; the prose should make the observation source visible), inference (reasoned from observation; the prose must frame it as an inference — \"Based on X, it appears that...\", \"Likely...\"), speculation (an unverified hypothesis; the prose must open with strong hedging — \"**Unverified**: ...\", \"**Hypothesis**: ...\", \"TODO: verify — ...\"). The reader sees the prose, not this field — the load-bearing obligation is that the prose itself carries the hedging language. See docs/SPEC.md §3.3 for the (kind, provenance) acceptance matrices.",
     },
+    execution_state: {
+      type: "string",
+      enum: ["normal", "repeating_failure", "recovery"],
+      description:
+        "Required (v0.7.0). The state of your work loop: normal " +
+        "(ordinary work, the default), repeating_failure (you have noticed " +
+        "you are repeating the same class of failure — declare it on an " +
+        "edit_observation/edit_proposal that records the failure), recovery " +
+        "(you isolated a single hypothesis and are diagnosing deliberately). " +
+        "See docs/SPEC.md §3.4.",
+    },
     test_files: {
       type: "array",
       items: { type: "string" },
@@ -115,6 +127,7 @@ const workflowToolInputSchema = {
     "rationale",
     "risk_level",
     "provenance",
+    "execution_state",
     "test_files",
   ],
   properties: {
