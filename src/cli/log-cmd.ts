@@ -1,5 +1,5 @@
 import { EditLog, type EditLogEntry } from "../state/edit-log.js";
-import { ProvenanceSchema, type EditTarget, type Provenance, type RiskLevel } from "../tools/common.js";
+import { ExecutionStateSchema, ProvenanceSchema, type EditTarget, type ExecutionState, type Provenance, type RiskLevel } from "../tools/common.js";
 import { parseStrictSince } from "./parse-since.js";
 
 export type LogFilters = {
@@ -25,6 +25,14 @@ export type LogFilters = {
    * predate provenance are dropped when this filter is set.
    */
   provenance?: ReadonlySet<Provenance> | undefined;
+  /**
+   * Filter on the v0.6.0 execution_state field. Accepts a single value
+   * (`--execution-state recovery`) or a comma-separated set
+   * (`--execution-state repeating_failure,recovery`). Consumed records
+   * and issued/rejected records without an execution_state are dropped
+   * when this filter is set.
+   */
+  executionState?: ReadonlySet<ExecutionState> | undefined;
   /** Inclusive lower bound on the record `ts` field. */
   since?: Date | undefined;
 };
@@ -86,6 +94,15 @@ export function filterEntries(
       if (e.provenance === undefined) return false;
       if (!filters.provenance.has(e.provenance)) return false;
     }
+    if (filters.executionState !== undefined) {
+      // execution_state only on issued/rejected v0.6.0+ records. consumed
+      // records carry no execution_state; entries lacking the field
+      // (legacy or workflow-axis kinds) likewise drop out when this
+      // filter is in play.
+      if (e.phase === "consumed") return false;
+      if (e.execution_state === undefined) return false;
+      if (!filters.executionState.has(e.execution_state)) return false;
+    }
     if (filters.since !== undefined) {
       if (ts.getTime() < filters.since.getTime()) return false;
     }
@@ -105,6 +122,7 @@ export function parseLogArgs(argv: string[]): {
   let riskSeen = false;
   let targetSeen = false;
   let provenanceSeen = false;
+  let executionStateSeen = false;
   let sinceSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -153,6 +171,27 @@ export function parseLogArgs(argv: string[]): {
         set.add(parsed.data);
       }
       filters.provenance = set;
+    } else if (arg === "--execution-state") {
+      if (executionStateSeen) return { ok: false, error: "--execution-state may only appear once" };
+      executionStateSeen = true;
+      const v = argv[++i];
+      if (v === undefined) return { ok: false, error: "--execution-state requires a value" };
+      const parts = v.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      if (parts.length === 0) {
+        return { ok: false, error: `--execution-state: empty value` };
+      }
+      const set = new Set<ExecutionState>();
+      for (const p of parts) {
+        const parsed = ExecutionStateSchema.safeParse(p);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: `--execution-state: invalid value "${p}" (expected one of normal, repeating_failure, recovery)`,
+          };
+        }
+        set.add(parsed.data);
+      }
+      filters.executionState = set;
     } else if (arg === "--since") {
       if (sinceSeen) return { ok: false, error: "--since may only appear once" };
       sinceSeen = true;

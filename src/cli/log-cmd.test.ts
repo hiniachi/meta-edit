@@ -183,6 +183,18 @@ describe("filterEntries", () => {
     });
     expect(r.length).toBe(1);
   });
+
+  it("filters by --execution-state (single value)", () => {
+    const entries = [
+      issued({ edit_id: "edit_20260523_0001", execution_state: "recovery" }),
+      issued({ edit_id: "edit_20260523_0002", execution_state: "normal" }),
+    ];
+    const out = filterEntries(entries, {
+      executionState: new Set(["recovery"]),
+    });
+    expect(out.length).toBe(1);
+    expect(out[0]?.edit_id).toBe("edit_20260523_0001");
+  });
 });
 
 describe("parseLogArgs", () => {
@@ -307,6 +319,16 @@ describe("parseLogArgs", () => {
     const r = parseLogArgs(["--since", "2026-04-29", "--since", "2026-04-30"]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/--since may only appear once/);
+  });
+
+  it("parses --execution-state as a comma-separated set", () => {
+    const p = parseLogArgs(["--execution-state", "repeating_failure,recovery"]);
+    expect(p.ok).toBe(true);
+    if (p.ok) expect(p.filters.executionState?.size).toBe(2);
+  });
+
+  it("rejects an invalid --execution-state value", () => {
+    expect(parseLogArgs(["--execution-state", "bogus"]).ok).toBe(false);
   });
 });
 
