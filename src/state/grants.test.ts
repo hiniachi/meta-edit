@@ -178,6 +178,39 @@ describe("grants.issue", () => {
     ).rejects.toThrow(/file/);
   });
 
+  it("round-trips execution_state in declaration metadata", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260523_0001",
+      binding: [binding("src/foo.ts")],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "direct_observation",
+        execution_state: "repeating_failure",
+        target_file: "src/foo.ts",
+        test_files: ["tests/foo.test.ts"],
+      },
+    });
+    const looked = await store.lookup(g.token_id);
+    expect(looked?.declaration?.execution_state).toBe("repeating_failure");
+  });
+  it("still validates a pre-0.7.0 declaration that omits execution_state", async () => {
+    const store = createGrantsStore(tmpRoot);
+    const g = await store.issue({
+      edit_id: "edit_20260523_0002",
+      binding: [binding("src/foo.ts")],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "direct_observation",
+        target_file: "src/foo.ts",
+        test_files: ["tests/foo.test.ts"],
+      },
+    });
+    expect((await store.lookup(g.token_id))?.declaration).toBeDefined();
+  });
+
   it("two parallel issues produce different token_ids", async () => {
     const store = createGrantsStore(tmpRoot);
     const N = 8;
