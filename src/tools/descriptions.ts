@@ -180,6 +180,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
 whitespace, formatter output, or comment edits that do not change the
 information content of the comment.
 
+Cosmetic edits are exempt from spec-derivation discipline —
+whitespace, formatter output, and information-invariant comment
+edits do not pin behavior.
+
 Use this tool when, and ONLY when, the patch is one of the following:
 - Whitespace adjustment (indentation, blank lines, trailing whitespace,
   line breaks)
@@ -224,15 +228,6 @@ Declare \`target: "prod"\` for cosmetic edits to production files, or
 \`target: "test"\` for cosmetic edits to test files. Cosmetic changes
 do not require behavioral tests in either case; \`test_files\` may be
 empty.
-
-Rationale for the narrow scope:
-edit_cosmetic intentionally has a narrow vocabulary — whitespace,
-comments, formatter output — to avoid being a hiding place for behavior
-changes rationalized as "just a refactor". If your change does not fit
-this narrow definition, the typed surface does not have a tool for what
-you want. Stop and ask the user. That friction is the design: the absence
-of a generic refactor tool forces the question "what kind of change is
-this, really?"
 
 Fallback obligation:
 If, after applying this tool, you discover that your patch did anything
@@ -386,37 +381,31 @@ General principles (apply to every edit):
 
   edit_db_schema: `Modify database schema: tables, columns, indexes, constraints, migrations.
 
+The schema invariants being changed (uniqueness, foreign-key closure,
+nullability, index reachability) are defined by the data model / ERD /
+accepted ADR, not by what the current CREATE TABLE statement happens
+to produce.
+
 Use this tool when:
 - Adding, removing, or modifying columns, tables, indexes
 - Changing constraints (NOT NULL, UNIQUE, FOREIGN KEY, CHECK)
 - Creating or modifying migration files (DDL)
 - Changing collation, charset, or storage parameters
 
-Required tests (you MUST cover):
-1. Migration application: the migration must apply cleanly to a schema in
-   the previous state
-2. Existing data compatibility: the migration must not corrupt or lose
-   existing data. Provide test fixtures that exist before the migration
-   and verify they are accessible after
-3. Rollback OR forward-only justification: either provide a tested
-   down-migration, or document explicitly in rationale why this migration
-   is forward-only and how recovery would work
-4. Index / constraint behavior: any new index must have a test
-   demonstrating it is used; any new constraint must have a test showing
-   both accepted and rejected inputs
+Per-target obligations (migration applies cleanly, existing data
+compatibility, rollback OR forward-only justification, index /
+constraint behavior) are delivered in the declaration result.
 
-Schema changes are infrastructural and rarely revertible in production.
-The rollback question is not optional — answer it explicitly even if the
-answer is "no rollback, here's why."
-
-If your change modifies existing data (UPDATE statements, data backfills),
-you MUST also use edit_data_migration alongside this tool.
+If your change modifies existing data (UPDATE statements, data
+backfills), you MUST also use edit_data_migration alongside this tool.
 
 Target (required):
-Declare \`target: "prod"\` when editing the migration / DDL itself, or
-\`target: "test"\` when editing the migration tests (apply / data /
-rollback / constraint tests). Pair the two declarations in the same
-commit. When target is "test", \`target_file\` IS the test file and
+Declare \`target: "prod"\` for the production-side edit (migration /
+DDL) and \`target: "test"\` for the migration tests. The two
+declarations may land in either order — red-first (\`target: "test"\`
+first, then \`target: "prod"\`) or green-first (\`target: "prod"\`
+first, then \`target: "test"\`) — and both may land in the same
+commit. When \`target: "test"\`, \`target_file\` IS the test file and
 \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
@@ -430,35 +419,29 @@ General principles (apply to every edit):
   edit_data_migration: `Modify production data through migration scripts, backfills, or
 data-transformation code.
 
+The before/after invariants being established are defined by the
+migration spec / accepted artifact, not by what the current data
+happens to look like in production.
+
 Use this tool when:
 - Backfilling data into new columns
 - Transforming or normalizing existing data
 - Correcting bad data through scripted updates
 - Splitting or merging records
 
-Required tests (you MUST cover):
-1. Idempotency: running the migration twice must produce the same result
-   as running it once
-2. Partial failure recovery: if the migration fails partway through, the
-   remaining work must be safely re-runnable
-3. Existing fixture transformation: provide concrete examples of
-   pre-migration data and verify they are correctly transformed
-4. Edge cases: NULL values, empty strings, maximum-length values,
-   already-migrated rows
-
-Data migrations are one-way operations on production data. Test them as
-thoroughly as production code, ideally more so. The idempotency test is
-the single most important one — write it first.
-
-For long-running migrations, also consider testing chunked execution and
-verifying that an interrupted-then-resumed migration completes correctly.
+Per-target obligations (idempotency, partial-failure recovery, fixture
+transformation, edge cases) are delivered in the declaration result.
+**The idempotency test is the single most important one — write it
+first.** That ordering is load-bearing.
 
 Target (required):
-Declare \`target: "prod"\` when editing the migration / backfill script
-itself, or \`target: "test"\` when editing the migration tests
-(idempotency, partial failure, fixture transformation, edge cases). Pair
-the two declarations in the same commit. When target is "test",
-\`target_file\` IS the test file and \`test_files\` must be empty.
+Declare \`target: "prod"\` for the production-side edit (migration /
+backfill script) and \`target: "test"\` for the migration tests. The
+two declarations may land in either order — red-first
+(\`target: "test"\` first, then \`target: "prod"\`) or green-first
+(\`target: "prod"\` first, then \`target: "test"\`) — and both may
+land in the same commit. When \`target: "test"\`, \`target_file\`
+IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
@@ -630,6 +613,11 @@ General principles (apply to every edit):
   edit_concurrency: `Modify concurrency primitives: locks, transactions, mutexes, parallelism,
 race conditions.
 
+The concurrency invariant being changed (atomicity boundary, lock
+order, happens-before relation) is defined by the spec / accepted
+artifact / concurrency model, not by what the current code happens
+to interleave.
+
 Use this tool when:
 - Adding, removing, or modifying locks (mutex, RWLock, semaphore)
 - Changing transaction boundaries or isolation levels
@@ -637,29 +625,22 @@ Use this tool when:
 - Changing lock ordering or scope
 - Adding or removing critical sections
 
-Required tests (you MUST cover):
-1. Concurrent execution: multiple invocations in parallel must produce a
-   consistent final state
-2. Race prevention: a sequence that would race without the new primitives
-   must produce a correct result with them
-3. Transaction or lock scope: assertions about what is or is not atomic
-   must be tested
-
-Concurrency tests are notoriously hard to write reliably. If your test
-framework supports controlled scheduling (e.g., loom in Rust, or property-
-based testing with race scheduling), use it. Otherwise, loop the test
-many times under stress and treat any failure as a bug.
+Per-target obligations (consistent-final-state under concurrent
+execution, race-prevention coverage, atomic-scope assertions) are
+delivered in the declaration result.
 
 If you cannot reproduce the race or contention this change addresses,
 the change is speculative. Prefer to demonstrate the bug with a failing
 test before applying the fix.
 
 Target (required):
-Declare \`target: "prod"\` when editing the concurrency primitives in
-production code, or \`target: "test"\` when editing the concurrency
-tests. Pair the two declarations in the same commit. When target is
-"test", \`target_file\` IS the test file and \`test_files\` must be
-empty.
+Declare \`target: "prod"\` for the production-side edit (concurrency
+primitives) and \`target: "test"\` for the concurrency tests. The
+two declarations may land in either order — red-first
+(\`target: "test"\` first, then \`target: "prod"\`) or green-first
+(\`target: "prod"\` first, then \`target: "test"\`) — and both may
+land in the same commit. When \`target: "test"\`, \`target_file\`
+IS the test file and \`test_files\` must be empty.
 
 ${PROVENANCE_FOOTER}
 
