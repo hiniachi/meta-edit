@@ -1645,6 +1645,10 @@ General principles (apply to every edit):
 ```
 Modify how errors, exceptions, or failure paths are handled.
 
+The failure surface being changed (which errors propagate, in what
+form, with what observable signal) is defined by the contract /
+accepted artifact, not by whatever the current code happens to throw.
+
 Use this tool when:
 - Adding, removing, or modifying try / catch blocks
 - Changing what exceptions are thrown or how they propagate
@@ -1652,29 +1656,22 @@ Use this tool when:
 - Changing rollback behavior on partial success
 - Changing what is logged or reported on error
 
-Required tests (you MUST cover):
-1. Failure path executes: trigger the error condition and verify the new
-   handling code runs
-2. Observable error: the caller (or user, or log) must see an appropriate
-   error indicator. Silent failures are forbidden
-3. State after failure: any partial state changes must be either rolled
-   back or explicitly documented as accepted partial state
-4. Error type / code: if specific error types or codes are part of the
-   contract, verify the correct one is produced
-
-Silent failure — a catch block that doesn't re-throw, log, or otherwise
-expose the error — is almost certainly a bug. Add at least one test that
-verifies the error is observable.
+Per-target obligations (failure-path execution, observable error,
+post-failure state, error type / code) are delivered in the
+declaration result.
 
 Swallowing exceptions is forbidden unless the rationale explicitly states
 why and what the recovery path is.
 
 Target (required):
-Declare `target: "prod"` when editing error-handling code in
-production, or `target: "test"` when editing the tests that exercise
-failure paths and observable-error contracts. Pair the two declarations
-in the same commit. When target is "test", `target_file` IS the test
-file and `test_files` must be empty.
+Declare `target: "prod"` for the production-side edit (error-handling
+code) and `target: "test"` for the tests that exercise failure paths
+and observable-error contracts. The two declarations may land in
+either order — red-first (`target: "test"` first, then
+`target: "prod"`) or green-first (`target: "prod"` first, then
+`target: "test"`) — and both may land in the same commit. When
+`target: "test"`, `target_file` IS the test file and
+`test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -1916,6 +1913,11 @@ General principles (apply to every edit):
 Modify code that produces external side effects: emails, events, queue
 messages, webhooks, billing operations, audit logs.
 
+The side-effect contract being changed (when it fires, against whom,
+with what payload, at-least-once / at-most-once / exactly-once
+posture) is defined by the integration spec / accepted artifact, not
+by the production frequency the current code happens to produce.
+
 Use this tool when:
 - Adding, removing, or modifying calls that affect external systems
 - Changing what events are emitted or to whom
@@ -1923,30 +1925,23 @@ Use this tool when:
 - Changing notification logic
 - Adding or removing audit or compliance logging
 
-Required tests (you MUST cover):
-1. Side effect fires on success: when the conditions for the side effect
-   are met, the side effect occurs (with correct payload)
-2. Side effect does NOT fire on failure: when the operation fails, no
-   spurious external effect is produced
-3. Idempotency: if the operation is retried (network failure, duplicate
-   request), the side effect occurs at most once
-4. Correct recipient / payload: the side effect targets the right
-   external system with the right data
-
-The "no spurious side effect on failure" test is the most important one
-for billing, email, and audit code. Send-money-but-fail-to-record is the
-textbook AI-generated billing bug.
+Per-target obligations (fires-on-success, no-fire-on-failure,
+idempotency under retry, correct recipient / payload) are delivered
+in the declaration result.
 
 For test environments, side effects MUST be mocked or routed to a test
 sink. Verify that the test does not actually charge a card or send a
-real email. If your test makes a real external call, your test is wrong.
+real email. **If your test makes a real external call, your test is
+wrong.** This prohibition is load-bearing.
 
 Target (required):
-Declare `target: "prod"` when editing the side-effect-producing code
-in production, or `target: "test"` when editing its tests (fires-on-
-success, no-fire-on-failure, idempotency, correct recipient). Pair the
-two declarations in the same commit. When target is "test",
-`target_file` IS the test file and `test_files` must be empty.
+Declare `target: "prod"` for the production-side edit (side-effect-
+producing code) and `target: "test"` for its tests. The two
+declarations may land in either order — red-first (`target: "test"`
+first, then `target: "prod"`) or green-first (`target: "prod"`
+first, then `target: "test"`) — and both may land in the same
+commit. When `target: "test"`, `target_file` IS the test file and
+`test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -2092,6 +2087,10 @@ General principles (apply to every edit):
 Modify authorization, access control, role checks, ownership checks,
 tenancy, or feature flag gating.
 
+The authorization matrix being changed (which subjects may take which
+actions on which resources) is defined by the policy / RBAC table /
+ADR, not by what the current authz code happens to allow.
+
 Use this tool when:
 - Changing role / permission / owner / tenant / feature flag checks
 - Modifying access control predicates
@@ -2099,36 +2098,24 @@ Use this tool when:
 - Modifying authentication state checks
 - Changing API key, token, or session validation
 
-Required tests (you MUST cover):
-1. Allow matrix: enumerate the (subject, resource) pairs that should be
-   allowed, and test each one
-2. Deny matrix: enumerate the (subject, resource) pairs that should be
-   denied, and test each one
-3. Negative side-effect: when access is denied, no database write, no
-   event emission, no external call, no state mutation must occur. Test
-   this explicitly with a deny case
-4. Edge cases: suspended user, expired token, missing role, deleted
-   resource — each must have a test
-
-Permission bugs are silent failures that compromise data integrity, user
-trust, and regulatory compliance. They cannot be caught by ordinary smoke
-tests, because the system continues to function — it just authorizes the
-wrong people.
+Per-target obligations (allow matrix coverage, deny matrix coverage,
+negative-side-effect-on-deny, edge cases: suspended user / expired
+token / missing role / deleted resource) are delivered in the
+declaration result.
 
 If you cannot enumerate the allow matrix and the deny matrix for this
 change, the change is too risky to apply without further specification.
 Stop and ask for the matrix to be confirmed before proceeding.
 
-The negative side-effect test (test 3) is the one that catches the worst
-bugs. A permission check that returns false but still writes to the
-database is a permission bypass. Test it.
-
 Target (required):
-Declare `target: "prod"` when editing permission / authz code in
-production, or `target: "test"` when editing the allow / deny matrix
-tests and negative-side-effect tests. Pair the two declarations in the
-same commit. When target is "test", `target_file` IS the test file
-and `test_files` must be empty.
+Declare `target: "prod"` for the production-side edit (permission /
+authz code) and `target: "test"` for the allow / deny matrix tests
+and negative-side-effect tests. The two declarations may land in
+either order — red-first (`target: "test"` first, then
+`target: "prod"`) or green-first (`target: "prod"` first, then
+`target: "test"`) — and both may land in the same commit. When
+`target: "test"`, `target_file` IS the test file and
+`test_files` must be empty.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -2191,25 +2178,20 @@ General principles (apply to every edit):
 Modify package dependencies, runtime configuration, or feature
 configuration files.
 
+The dependency / config contract being changed (supported versions,
+runtime defaults, environment expectations) is defined by the
+supported-versions table / MSRV / build-matrix CI config / accepted
+artifact, not by what is on the developer's machine right now.
+
 Use this tool when:
 - Adding, removing, or upgrading package dependencies
 - Modifying runtime config (env vars, config files)
 - Changing feature flag default values
 - Modifying build or deploy configuration that affects runtime behavior
 
-Required tests (you MUST cover):
-1. Build / install reproducibility: the new configuration must produce a
-   working build from a clean state
-2. Behavior under new config: at least one test exercises code paths
-   affected by the configuration change
-3. Default value: if a default is changed, both the old and new default
-   behaviors must be tested (the new default for the new code, the old
-   default for backward compatibility verification)
-
-Dependency upgrades are a common source of subtle regressions. If a
-dependency is upgraded, run the existing test suite and verify no
-behavior change in covered paths. If you observe a behavior change,
-document it explicitly — do not silently absorb it.
+Per-target obligations (build / install reproducibility, behavior
+under new config, default-value backward compatibility) are
+delivered in the declaration result.
 
 For security-related dependency upgrades, the rationale must say so
 explicitly.
@@ -2234,10 +2216,12 @@ updates are how contributors lose a day to a broken local
 environment; the user has standing to intercept before it lands.
 
 Target (required):
-Declare `target: "prod"` when editing the manifest / config in
-production, or `target: "test"` when editing tests that exercise the
-new configuration (reproducibility, default value, new-config behavior).
-Pair the two declarations in the same commit. When target is "test",
+Declare `target: "prod"` for the production-side edit (manifest /
+config) and `target: "test"` for tests that exercise the new
+configuration. The two declarations may land in either order —
+red-first (`target: "test"` first, then `target: "prod"`) or
+green-first (`target: "prod"` first, then `target: "test"`) — and
+both may land in the same commit. When `target: "test"`,
 `target_file` IS the test file and `test_files` must be empty.
 
 Provenance (required):
