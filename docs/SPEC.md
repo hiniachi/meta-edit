@@ -191,6 +191,19 @@ the edit is expected to carry the uncertainty itself — a future
 session reading the file picks up the hedging language directly, with
 no structural-marker machinery in the loop.
 
+**Execution state flag.** Every declaration — all 21 tools — also
+carries a required `execution_state` field, a self-declared signal
+naming the state of the agent's work loop at the moment of
+declaration. Three values: `normal` (ordinary work, no active failure
+loop), `repeating_failure` (the agent has noticed it is repeating the
+same failure across multiple edits), and `recovery` (the agent has
+recorded the failure and is executing a deliberate single-intervention
+diagnosis). The field is a declaration (not detection) — the server
+does not analyze edit content or history to infer the state. It falls
+within Articles 1–2 (typed surface, non-adversarial threat model) and
+does not alter the Article 7 / scope-expansion amendment bar. The
+(kind, execution_state) audit matrix lives in §3.4.
+
 The full per-tool descriptions live in Part II §4 of SPEC.md and in
 `src/tools/descriptions.ts` verbatim. They are unconstitutional only in
 the sense that the spec does not constrain their wording — they are
@@ -461,6 +474,13 @@ type EditToolRequest = {
     | "inference"
     | "speculation";
 
+  // REQUIRED on every tool (v0.7.0). Self-declared state of the
+  // agent's work loop at the moment of declaration. The
+  // (kind, execution_state) audit matrix in §3.4 decides whether a
+  // warn is recorded; there is no REJ cell. Schema is strict
+  // (required, no default).
+  execution_state: "normal" | "repeating_failure" | "recovery";
+
   test_files: string[];           // forward declaration; not bound by token
 
   // ONLY accepted by the 5 workflow-axis kinds (v0.6.0). The 15
@@ -544,6 +564,7 @@ The MCP server enforces:
 - `rationale` is non-empty after trim.
 - `target` field presence: required (`"prod"` or `"test"`) on every impl tool (15 SQLite-derived + `edit_cosmetic`); forbidden on the 5 workflow-axis kinds. Validation rejects both omissions and misplacements.
 - `provenance` field presence: required on every declaration (v0.6.0). The schema is strict (no default). Cell-level acceptance by (kind, provenance) is then decided per §3.3.
+- `execution_state` presence: required on every declaration (v0.7.0). The schema is strict (no default). Cell-level audit by (kind, execution_state) is then decided per §3.4.
 - `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 5 workflow-axis kinds regardless.
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a subsequent declaration of the same impl tool with `target: "test"`. Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
@@ -562,11 +583,13 @@ A successful declaration produces a token bound to the set of
 `(file, before_sha256)` tuples (1 entry for SQLite-derived; 1+N for workflow tools). The server computes each `before_sha256` from disk at declaration time; agents do not supply hashes. The token expires 10 minutes after issuance — operational hygiene only; the single-use binding is the actual integrity guarantee, so the TTL is purely garbage-collection (it keeps the grants/ dir from accumulating abandoned files). The 10-minute window absorbs realistic agent thinking time between the typed_edit call and the native Edit / Write call without weakening the model (v0.3.1: extended from 5 min after dogfood report of mid-edit expiry). Storage is `.meta-edit/state/grants/<token_id>.json`, a protected path.
 
 The grant file also carries optional declaration metadata (`kind`,
-`target`, `provenance`, `target_file`, `test_files`). This metadata is
-not authority — the binding tuples remain the only authorization
-surface — but it lets the hook emit kind / target / provenance-aware
-success reminders after the native write gate is passed. Older grant
-files without this metadata remain valid and consumable.
+`target`, `provenance`, `execution_state`, `target_file`,
+`test_files`). This metadata is not authority — the binding tuples
+remain the only authorization surface — but it lets the hook emit
+kind / target / provenance / execution_state-aware success reminders
+after the native write gate is passed. Older grant files without this
+metadata remain valid and consumable; `execution_state` is optional on
+read (pre-0.7.0 grant files simply omit it).
 
 The result also carries a `next_action` field whenever a token is
 issued. It first reminds the agent that the next native `Edit` /
@@ -668,6 +691,51 @@ lints the rationale and records a `citation_lint_missing` audit
 warning if no reference is present. The lint is structure-only — the
 server does not verify the artifact exists or that its content matches
 the declaration.
+
+### 3.4. Kind × execution_state audit matrix (v0.7.0)
+
+The `execution_state` field is required on every declaration. Unlike
+§3.3's (kind, provenance) matrices, there is **no REJ cell** — the
+field is `soft + audit warn` per design Q3. Hard rejection would
+punish honest declaration and incentivize under-declaration (Article 3
+— the lazy agent routes around friction).
+
+```
+                                       normal   repeating_failure   recovery
+15 SQLite-derived impl + edit_cosmetic    OK           warn             OK
+edit_observation                          OK           OK               OK
+edit_proposal                             OK           OK               OK
+edit_progress                             OK           OK               OK
+edit_decision                             OK           OK               OK
+edit_explanation                          OK           OK               OK
+```
+
+The single `warn` group is the 16 impl tools × `repeating_failure`.
+An impl tool is a *fix attempt*; stacking another fix while the loop
+is acknowledged is the thing to flag. A `warn` records an
+`AuditWarning` with code `execution_state_repeating_failure` into the
+edit log's existing `audit_warnings` field and never blocks the
+declaration.
+
+**The escape set is `{edit_observation, edit_proposal}`** — the two
+recommended moves out of the loop (record the failure / raise a
+hypothesis or open question). `repeating_failure × {escape set}` is
+deliberately clean. The other three workflow kinds (`edit_progress`,
+`edit_decision`, `edit_explanation`) are also clean under
+`repeating_failure` because they are not fix attempts, not because
+they are escape moves.
+
+`recovery` is a sanctioned state and is clean in every cell.
+
+**Warn semantics are distinct from §3.3.** The §3.3 warnings
+(`kind_provenance_warn`, `additional_files_warn`,
+`citation_lint_missing`) all describe a *mismatch* — the
+declaration's pieces do not cohere. `execution_state_repeating_failure`
+is different: a correctly-formed declaration that is a
+*self-flagged loop signal*. Both ride the same `audit_warnings` field,
+but consumers (e.g. a future `meta-edit summary` warnings breakdown)
+MUST group by warning *code*, not pool a single warn count across the
+two meanings.
 
 ### Multi-kind precedence
 
@@ -2645,6 +2713,16 @@ signals from the (kind, provenance) cell matrices (codes:
 remains backward-compatible with v0.5.x entries; `meta-edit summary`
 buckets v0.5.x entries as the `unspecified` provenance and surfaces
 legacy `edit_docs_only` entries in a dedicated `legacy:` bucket.
+
+v0.7.0 additions: the issued record also carries an optional
+`execution_state` field (one of `"normal"` / `"repeating_failure"` /
+`"recovery"`). The field is optional on read — pre-0.7.0 entries omit
+it and are bucketed as `(pre-0.7.0)` in `meta-edit summary`'s
+execution_state breakdown. When `execution_state: "repeating_failure"`
+is declared on any of the 16 impl tools, the `audit_warnings` array
+gains the code `execution_state_repeating_failure` (see §3.4). This
+code is semantically distinct from the §3.3 mismatch codes —
+consumers MUST group by warning code, not pool a single warn count.
 
 The CLI exposes a `--provenance` filter on `meta-edit log` (e.g.
 `meta-edit log --provenance speculation,inference` to inspect every
