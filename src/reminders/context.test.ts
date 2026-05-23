@@ -191,6 +191,18 @@ describe("buildReminderContext", () => {
     expect(out).not.toContain("escape procedure");
     expect(out).not.toContain("recovery");
   });
+  it("returns no execution_state text for an unknown state value (catch-all)", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_boundary_condition",
+      target: "prod",
+      executionState: "uncertain", // not a real state — caller typo
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("recovery");
+    expect(out).not.toContain("this is the right move");
+  });
+
   it("write_allowed gives the post-hoc variant for repeating_failure x impl", () => {
     const out = buildReminderContext({
       phase: "write_allowed",

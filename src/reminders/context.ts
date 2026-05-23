@@ -142,7 +142,7 @@ function executionStateLine(input: ReminderInput): string | undefined {
       "Return to normal once the failure is resolved."
     );
   }
-  // state === "repeating_failure"
+  if (state !== "repeating_failure") return undefined; // catch-all: unknown state values produce no text
   const kind = input.kind;
   if (kind === undefined) return undefined;
   if (ESCAPE_KINDS.has(kind)) {
