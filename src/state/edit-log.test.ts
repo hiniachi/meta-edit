@@ -488,6 +488,22 @@ describe("EditLog phases (issued / consumed / rejected)", () => {
     );
   });
 
+  it("round-trips an audit_warnings entry carrying target_spec_derivation_warn (SPEC §3.3.5)", () => {
+    const log = new EditLog(tmpRoot);
+    log.appendIssued(
+      issued({
+        audit_warnings: [
+          { code: "target_spec_derivation_warn", message: "x" },
+        ],
+      }),
+    );
+    const first = log.readAll()[0];
+    if (first?.phase !== "issued") throw new Error("expected issued phase");
+    expect(first.audit_warnings?.[0]?.code).toBe(
+      "target_spec_derivation_warn",
+    );
+  });
+
   // Codex review: LOW, in-scope under Article 3. SPEC §6 requires
   // rejected records to carry a non-empty audit_error so audit consumers
   // always have an actionable reason.

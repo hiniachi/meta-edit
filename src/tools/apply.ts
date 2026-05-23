@@ -235,12 +235,11 @@ async function issueOnce(
     auditWarnings: validation.auditWarnings,
   });
   const nextAction =
-    `On your next native Edit / Write / MultiEdit call against ${fileList}, ` +
-    `the deny-raw-edit hook will resolve this declaration automatically (no ` +
-    `extra parameters needed). The declaration covers ${nFiles} ${fileNoun} ` +
-    `and expires at ${grant.expires_at}.` +
+    `${declarationReminder}` +
     batchNote +
-    `\n\n${declarationReminder}`;
+    `\n\n(On your next native Edit / Write / MultiEdit against ${fileList}, ` +
+    `the deny-raw-edit hook resolves this declaration automatically; ` +
+    `expires ${grant.expires_at}.)`;
   return {
     summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,

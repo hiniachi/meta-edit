@@ -248,4 +248,160 @@ describe("buildReminderContext", () => {
       expect(text).toContain(cue);
     }
   });
+
+  // SPEC §3.3.5 — per-kind × per-target obligations relocated from
+  // descriptions to the reminder. Anchor phrases lifted from
+  // sqlite.org/testing.html vocabulary with section markers stripped
+  // (D15: runtime text carries the concept, not the citation).
+  it("emits a target=test obligation paragraph for every SQLite-derived impl kind", () => {
+    const cases: Array<[string, string]> = [
+      ["edit_boundary_condition", "defined limits"],
+      ["edit_boolean_condition", "atomic condition independently flips"],
+      ["edit_state_transition", "legal transition graph"],
+      ["edit_db_schema", "schema invariants"],
+      ["edit_data_migration", "before/after invariants"],
+      ["edit_api_contract", "published interface"],
+      ["edit_serialization", "round-trip equivalence"],
+      ["edit_error_handling", "injected failure"],
+      ["edit_retry_timeout", "exhaustion semantics"],
+      ["edit_concurrency", "across-interleaving invariant"],
+      ["edit_external_side_effect", "outside world"],
+      ["edit_cache_invalidation", "freshness invariant"],
+      ["edit_permission_logic", "authorization matrix"],
+      ["edit_dependency_config", "build matrix"],
+      ["edit_policy_change", "both sides of the policy line"],
+    ];
+    for (const [kind, phrase] of cases) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind,
+        target: "test",
+        provenance: "accepted_artifact",
+        targetFile: "x.test.ts",
+      });
+      expect(text).toContain(phrase);
+    }
+  });
+
+  it("emits a target=prod obligation paragraph for every SQLite-derived impl kind", () => {
+    const cases: Array<[string, string]> = [
+      ["edit_boundary_condition", "defined limits stable on both sides"],
+      ["edit_boolean_condition", "each clause's independent effect"],
+      ["edit_state_transition", "legal transitions"],
+      ["edit_db_schema", "invariants enforceable by the DB itself"],
+      ["edit_data_migration", "safe under interruption and re-run"],
+      ["edit_api_contract", "published interface stable"],
+      ["edit_serialization", "serialized form readable by older consumers"],
+      ["edit_error_handling", "every error path observable from the outside"],
+      ["edit_retry_timeout", "budget, backoff schedule, and giveup signal"],
+      ["edit_concurrency", "lock order"],
+      ["edit_external_side_effect", "at-least-once"],
+      ["edit_cache_invalidation", "cached answer == authoritative answer"],
+      ["edit_permission_logic", "every cell's allow/deny decision"],
+      ["edit_dependency_config", "same answer across all supported build variants"],
+      ["edit_policy_change", "documented refusal on the forbidden side"],
+    ];
+    for (const [kind, phrase] of cases) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind,
+        target: "prod",
+        provenance: "accepted_artifact",
+        targetFile: "x.ts",
+        declaredTestFiles: ["x.test.ts"],
+      });
+      expect(text).toContain(phrase);
+    }
+  });
+
+  it("emits no obligations paragraph for edit_cosmetic regardless of target (§3.3.5 carve-out)", () => {
+    const hallmarks = [
+      "defined limits",
+      "published interface",
+      "at-least-once",
+      "authorization matrix",
+    ];
+    for (const t of ["prod", "test"] as const) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind: "edit_cosmetic",
+        target: t,
+        provenance: "accepted_artifact",
+        targetFile: "x.ts",
+      });
+      for (const h of hallmarks) {
+        expect(text).not.toContain(h);
+      }
+    }
+  });
+
+  it("emits no obligations paragraph for workflow kinds (no target axis)", () => {
+    const workflowKinds = [
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+    ];
+    const hallmarks = [
+      "defined limits",
+      "published interface",
+      "at-least-once",
+      "authorization matrix",
+    ];
+    for (const kind of workflowKinds) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind,
+        provenance: "accepted_artifact",
+        targetFile: "x.md",
+      });
+      for (const h of hallmarks) {
+        expect(text).not.toContain(h);
+      }
+    }
+  });
+
+  it("renders target_spec_derivation_warn through auditWarningsLine", () => {
+    const text = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_boundary_condition",
+      target: "test",
+      provenance: "direct_observation",
+      targetFile: "x.test.ts",
+      auditWarnings: [
+        {
+          code: "target_spec_derivation_warn",
+          message: "test pins implementation-observed behavior",
+        },
+      ],
+    });
+    expect(text).toContain("target_spec_derivation_warn");
+    expect(text).toContain("test pins implementation-observed behavior");
+  });
+
+  it("runtime obligation text carries no SQLite section meta-citation (D15 grep gate)", () => {
+    // Sample a handful of (kind, target) cells and assert the rendered
+    // reminder does not leak SQLite §x.y citations that exist in the
+    // design.md drafts for traceability.
+    const samples: Array<[string, "prod" | "test"]> = [
+      ["edit_boundary_condition", "test"],
+      ["edit_boundary_condition", "prod"],
+      ["edit_data_migration", "test"],
+      ["edit_external_side_effect", "prod"],
+      ["edit_policy_change", "test"],
+    ];
+    const forbidden = /§[0-9]+(\.[0-9]+)*( retention| compound| -style)?/;
+    for (const [kind, t] of samples) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind,
+        target: t,
+        provenance: "accepted_artifact",
+        targetFile: t === "test" ? "x.test.ts" : "x.ts",
+        ...(t === "prod" ? { declaredTestFiles: ["x.test.ts"] } : {}),
+      });
+      expect(text).not.toMatch(forbidden);
+    }
+  });
 });
