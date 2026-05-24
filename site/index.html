@@ -235,7 +235,10 @@
           workflow-axis kinds) carry a required
           <code>target: "prod" | "test"</code> flag, and every
           declaration carries a required <code>provenance</code> field
-          naming the epistemic source of the edit.
+          naming the epistemic source of the edit. Workflow kinds may
+          also declare related files via <code>additional_files</code>
+          (accepted cell-wise by <code>(kind, provenance)</code>);
+          impl tools never do.
         </p>
         <ul class="tool-grid" aria-label="Tools">
           <li><span class="tool-name">edit_cosmetic</span></li>
@@ -286,8 +289,11 @@
             Which do you prefer?"
           </p>
           <footer class="quote-attr" data-i18n="proof.evidence.quote.attr">
-            — agent transcript that led to the eighteenth tool,
-            <code>edit_docs_only</code>
+            — agent transcript that led to the eighteenth tool
+            <code>edit_docs_only</code>, later refined in v0.6.0 into the
+            five workflow-axis kinds (<code>edit_progress</code>,
+            <code>edit_observation</code>, <code>edit_proposal</code>,
+            <code>edit_decision</code>, <code>edit_explanation</code>)
           </footer>
         </blockquote>
       </section>
@@ -328,8 +334,11 @@
               <strong data-i18n="lifecycle.s3.t">Validate</strong>
               <p data-i18n="lifecycle.s3.b">
                 meta-edit checks the declaration. Missing rationale, missing
-                test files (for non-refactor / non-test edits), or a target
-                inside a protected path → reject. The edit log records
+                <code>test_files</code> on an impl-tool prod edit (target
+                <code>"prod"</code>, anything except <code>edit_cosmetic</code>),
+                a target inside a protected path, or a
+                <code>(kind, target, provenance)</code> cell the matrix
+                rejects → reject. The edit log records
                 <code>phase: "rejected"</code> with the reason.
               </p>
             </div>
@@ -348,11 +357,16 @@
           <li>
             <span class="step-num">5</span>
             <div>
-              <strong data-i18n="lifecycle.s5.t">Write — under a hook</strong>
+              <strong data-i18n="lifecycle.s5.t">Write — under two hooks</strong>
               <p data-i18n="lifecycle.s5.b">
                 The agent then calls native <code>Edit</code> to write bytes.
-                A pre-write hook checks that a matching token exists, hasn't
-                expired, and that each file's hash still matches the binding.
+                The <code>deny-raw-edit</code> hook checks that a matching
+                token exists, hasn't expired, and that each file's hash still
+                matches the binding. A sibling hook,
+                <code>deny-bash-write-bypass</code>, closes the obvious
+                shell escape routes (<code>sed -i</code>,
+                <code>cat &gt; file</code>, <code>git apply</code>, …) so
+                the typed surface stays the only way bytes land in the repo.
                 If anything is off, the write is denied.
               </p>
             </div>
@@ -542,6 +556,31 @@
             spec-defined behaviour, not whatever the implementation happens
             to do today.
           </dd>
+
+          <dt data-i18n="faq.q9">What ends up in the audit log?</dt>
+          <dd data-i18n="faq.a9">
+            Every declaration writes a <code>phase: "issued"</code> or
+            <code>phase: "rejected"</code> record to
+            <code>.meta-edit/state/edits.jsonl</code>; a successful write
+            appends <code>phase: "consumed"</code>. Soft signals surface
+            as <code>audit_warnings</code>. Five codes today:
+            <code>kind_provenance_warn</code> (the
+            <code>(kind, provenance)</code> cell warns or rejects),
+            <code>additional_files_warn</code> (a workflow tool declared
+            <code>additional_files</code> against a cell that should
+            reject), <code>citation_lint_missing</code>
+            (<code>accepted_artifact</code> provenance without an
+            artifact reference), <code>execution_state_repeating_failure</code>
+            (an impl-kind edit declared while in a fix→fail spiral
+            instead of the prescribed <code>edit_observation</code>
+            escape), and <code>target_spec_derivation_warn</code> (a test
+            grounded in <code>direct_observation</code> of the
+            implementation). Hard rejections record an
+            <code>audit_error</code> and never issue a token.
+            <code>meta-edit summary</code> aggregates everything; rows
+            without a <code>consumed</code> sibling are evidence of
+            abandoned declarations.
+          </dd>
         </dl>
       </section>
 
@@ -657,12 +696,12 @@
             "So we split. <code>Edit</code> becomes twenty-one edits, one per kind of change. Each carries its own obligations in its own description. And critically, <strong>the agent must pick a kind before it can edit</strong>. Picking the kind <em>is</em> the reasoning step.",
           "proof.title": "The twenty-one typed edits",
           "proof.lede":
-            "The current set of kinds: 15 SQLite-derived impl tools, the narrow <code>edit_cosmetic</code>, and 5 workflow-axis kinds. Each tool's description says when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user. The 16 impl tools carry a required prod/test target flag, and every declaration carries a required <code>provenance</code> field naming the epistemic source of the edit.",
+            "The current set of kinds: 15 SQLite-derived impl tools, the narrow <code>edit_cosmetic</code>, and 5 workflow-axis kinds. Each tool's description says when to use it, when not to use it, which tests must accompany the edit, and when to stop and ask the user. The 16 impl tools carry a required prod/test target flag, and every declaration carries a required <code>provenance</code> field naming the epistemic source of the edit. Workflow kinds may also declare related files via <code>additional_files</code> (accepted cell-wise by <code>(kind, provenance)</code>); impl tools never do.",
           "proof.evidence.title": "What we've observed",
           "proof.evidence.body":
             "When no kind cleanly fits a requested change, the agent <strong>stops and asks</strong>, instead of forcing the change through the nearest tool. We have observed this at ~80% context utilisation — exactly the regime where instructions in <code>CLAUDE.md</code> normally lose their grip. Tool-shaped instructions, reloaded at every call, kept working when text-shaped instructions did not.",
           "proof.evidence.quote":
-            "<p>\"<code>OBSERVED-FAILURES.md</code> is a docs file and matches none of the seventeen <code>edit_*</code> tools strictly (descriptions assume 'production code' / 'test files' / 'policy/governance'). <code>CLAUDE.md</code> §9 says 'no edit_* tool fits, stop and ask.' Two options: (a) stretch <code>edit_refactor_only</code> — its MUST-NOT list trivially passes for prose, and the 'no observable behavior change' intent is satisfied; (b) <code>/plugin disable meta-edit</code> and use raw <code>Edit</code>. Which do you prefer?\"</p><footer class=\"quote-attr\">— agent transcript that led to the eighteenth tool, <code>edit_docs_only</code></footer>",
+            "<p>\"<code>OBSERVED-FAILURES.md</code> is a docs file and matches none of the seventeen <code>edit_*</code> tools strictly (descriptions assume 'production code' / 'test files' / 'policy/governance'). <code>CLAUDE.md</code> §9 says 'no edit_* tool fits, stop and ask.' Two options: (a) stretch <code>edit_refactor_only</code> — its MUST-NOT list trivially passes for prose, and the 'no observable behavior change' intent is satisfied; (b) <code>/plugin disable meta-edit</code> and use raw <code>Edit</code>. Which do you prefer?\"</p><footer class=\"quote-attr\">— agent transcript that led to the eighteenth tool <code>edit_docs_only</code>, later refined in v0.6.0 into the five workflow-axis kinds (<code>edit_progress</code>, <code>edit_observation</code>, <code>edit_proposal</code>, <code>edit_decision</code>, <code>edit_explanation</code>)</footer>",
           "lifecycle.title": "How a typed edit actually flows",
           "lifecycle.lede":
             "meta-edit isn't only descriptive. The agent's choice of tool is also gated — the write itself is bound to that choice. Here is the lifecycle of one edit.",
@@ -674,13 +713,13 @@
             "It declares the change: <code>target_file</code>, <code>rationale</code>, <code>test_files</code>, plus the pre-edit SHA-256 of each file it intends to touch.",
           "lifecycle.s3.t": "Validate",
           "lifecycle.s3.b":
-            "meta-edit checks the declaration. Missing rationale, missing test files (for non-refactor / non-test edits), or a target inside a protected path → reject. The edit log records <code>phase: \"rejected\"</code> with the reason.",
+            "meta-edit checks the declaration. Missing rationale, missing <code>test_files</code> on an impl-tool prod edit (target <code>\"prod\"</code>, anything except <code>edit_cosmetic</code>), a target inside a protected path, or a <code>(kind, target, provenance)</code> cell the matrix rejects → reject. The edit log records <code>phase: \"rejected\"</code> with the reason.",
           "lifecycle.s4.t": "Issue a token",
           "lifecycle.s4.b":
             "On success, meta-edit returns a short-lived token bound to the declared files, and writes <code>phase: \"issued\"</code> to <code>.meta-edit/state/edits.jsonl</code>.",
-          "lifecycle.s5.t": "Write — under a hook",
+          "lifecycle.s5.t": "Write — under two hooks",
           "lifecycle.s5.b":
-            "The agent then calls native <code>Edit</code> to write bytes. A pre-write hook checks that a matching token exists, hasn't expired, and that each file's hash still matches the binding. If anything is off, the write is denied.",
+            "The agent then calls native <code>Edit</code> to write bytes. The <code>deny-raw-edit</code> hook checks that a matching token exists, hasn't expired, and that each file's hash still matches the binding. A sibling hook, <code>deny-bash-write-bypass</code>, closes the obvious shell escape routes (<code>sed -i</code>, <code>cat &gt; file</code>, <code>git apply</code>, …) so the typed surface stays the only way bytes land in the repo. If anything is off, the write is denied.",
           "lifecycle.s6.t": "Consume + audit",
           "lifecycle.s6.b":
             "A successful write appends <code>phase: \"consumed\"</code>. An <code>issued</code> row without a <code>consumed</code> sibling is evidence of an abandoned or expired declaration.",
@@ -737,6 +776,9 @@
           "faq.q8": "What is the spec-derivation matrix?",
           "faq.a8":
             "Added in v0.8.0 (SPEC §3.3.5). The <code>provenance</code> field already declared where the rationale came from; the matrix cross-references it with <code>target</code>. A test declaration (<code>target: \"test\"</code>) whose rationale is <code>direct_observation</code> of the production code is the <em>impl-mirror</em> smell — it earns a <code>target_spec_derivation_warn</code> in the audit log. Tests grounded in <code>inference</code> or <code>speculation</code> are rejected outright. The point: tests should pin spec-defined behaviour, not whatever the implementation happens to do today.",
+          "faq.q9": "What ends up in the audit log?",
+          "faq.a9":
+            "Every declaration writes a <code>phase: \"issued\"</code> or <code>phase: \"rejected\"</code> record to <code>.meta-edit/state/edits.jsonl</code>; a successful write appends <code>phase: \"consumed\"</code>. Soft signals surface as <code>audit_warnings</code>. Five codes today: <code>kind_provenance_warn</code> (the <code>(kind, provenance)</code> cell warns or rejects), <code>additional_files_warn</code> (a workflow tool declared <code>additional_files</code> against a cell that should reject), <code>citation_lint_missing</code> (<code>accepted_artifact</code> provenance without an artifact reference), <code>execution_state_repeating_failure</code> (an impl-kind edit declared while in a fix→fail spiral instead of the prescribed <code>edit_observation</code> escape), and <code>target_spec_derivation_warn</code> (a test grounded in <code>direct_observation</code> of the implementation). Hard rejections record an <code>audit_error</code> and never issue a token. <code>meta-edit summary</code> aggregates everything; rows without a <code>consumed</code> sibling are evidence of abandoned declarations.",
           "limits.title": "When this isn't the right tool",
           "limits.lede":
             "meta-edit is opinionated. The honest list of cases where it adds friction without value:",
@@ -782,12 +824,12 @@
             "だから分ける。<code>Edit</code>は21個の編集に分解される。変更の「種類」ごとに1つずつ、それぞれの説明にそれぞれの義務が乗る。そして決定的なのは、<strong>エージェントは種類を選ばなければ編集できない</strong>という点だ。種類を選ぶこと自体が、思考のステップになる。",
           "proof.title": "21個の型付き編集",
           "proof.lede":
-            "現時点の種類一覧――SQLite由来の実装ツール15個、狭く絞った<code>edit_cosmetic</code>、そしてworkflow軸の5種類。各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、どんなときに立ち止まってユーザーに尋ねるかが書かれている。実装ツール16個にはprod/testのtargetフラグが必須で、すべての宣言に編集の認識的出所を示す<code>provenance</code>フィールドが必須だ。",
+            "現時点の種類一覧――SQLite由来の実装ツール15個、狭く絞った<code>edit_cosmetic</code>、そしてworkflow軸の5種類。各ツールの説明には、いつ使うか、いつ使ってはいけないか、どんなテストを伴うべきか、どんなときに立ち止まってユーザーに尋ねるかが書かれている。実装ツール16個にはprod/testのtargetフラグが必須で、すべての宣言に編集の認識的出所を示す<code>provenance</code>フィールドが必須だ。ワークフロー系のツールは関連ファイルを<code>additional_files</code>で宣言できる(<code>(kind, provenance)</code>のセルごとに受理判定される)。実装ツールはこのフィールドを受け付けない。",
           "proof.evidence.title": "観察されたこと",
           "proof.evidence.body":
             "依頼された変更にどの種類もきれいに当てはまらないとき、エージェントは近い型に無理やり押し込まずに<strong>立ち止まって尋ねる</strong>。これがコンテキスト使用率およそ80%――<code>CLAUDE.md</code>の指示が通常効かなくなる領域――でも起こることを確認している。毎回ロードされる「ツール型」の指示は、セッション開始時にしか読まれない「テキスト型」の指示が機能しなくなった後でも、機能し続けた。",
           "proof.evidence.quote":
-            "<p>「<code>OBSERVED-FAILURES.md</code>はドキュメントファイルで、17種類の<code>edit_*</code>ツールのどれにも厳密には合致しない(説明文はどれも『プロダクションコード』『テストファイル』『ポリシー/ガバナンス』を前提としている)。<code>CLAUDE.md</code> §9は『適合する<code>edit_*</code>ツールが無いときは止めて尋ねる』と指示している。選択肢は二つ。(a) <code>edit_refactor_only</code>を流用する――そのMUST-NOTリストは散文には自明に当てはまらず、『観測可能な振る舞いを変えない』という意図は満たされる。(b) <code>/plugin disable meta-edit</code>してから素の<code>Edit</code>を使う。どちらにする?」</p><footer class=\"quote-attr\">――18番目のツール<code>edit_docs_only</code>の元になったエージェントの発話</footer>",
+            "<p>「<code>OBSERVED-FAILURES.md</code>はドキュメントファイルで、17種類の<code>edit_*</code>ツールのどれにも厳密には合致しない(説明文はどれも『プロダクションコード』『テストファイル』『ポリシー/ガバナンス』を前提としている)。<code>CLAUDE.md</code> §9は『適合する<code>edit_*</code>ツールが無いときは止めて尋ねる』と指示している。選択肢は二つ。(a) <code>edit_refactor_only</code>を流用する――そのMUST-NOTリストは散文には自明に当てはまらず、『観測可能な振る舞いを変えない』という意図は満たされる。(b) <code>/plugin disable meta-edit</code>してから素の<code>Edit</code>を使う。どちらにする?」</p><footer class=\"quote-attr\">――18番目のツール<code>edit_docs_only</code>の元になったエージェントの発話。<code>edit_docs_only</code>はその後v0.6.0で5つのworkflow軸ツール(<code>edit_progress</code>、<code>edit_observation</code>、<code>edit_proposal</code>、<code>edit_decision</code>、<code>edit_explanation</code>)へと分解された</footer>",
           "lifecycle.title": "型付き編集が実際に流れる仕組み",
           "lifecycle.lede":
             "meta-editは記述だけにとどまらない。エージェントの「ツール選択」自体が仕組みで縛られ、書き込みはその選択に束縛される。1回の編集のライフサイクルを追う。",
@@ -799,13 +841,13 @@
             "変更を宣言する。対象ファイル(<code>target_file</code>)、理由(<code>rationale</code>)、テストファイル(<code>test_files</code>)、それぞれの編集前 SHA-256。",
           "lifecycle.s3.t": "検証する",
           "lifecycle.s3.b":
-            "meta-editが宣言を検証する。理由が空、テストファイルが欠落(リファクタ/テスト変更以外)、対象が保護パス配下――いずれかなら却下。編集ログには<code>phase: \"rejected\"</code>として理由付きで記録される。",
+            "meta-editが宣言を検証する。理由が空、<code>test_files</code>が欠落(<code>target: \"prod\"</code>の実装ツール、<code>edit_cosmetic</code>を除く)、対象が保護パス配下、<code>(kind, target, provenance)</code>マトリクスで却下されるセル――いずれかなら却下。編集ログには<code>phase: \"rejected\"</code>として理由付きで記録される。",
           "lifecycle.s4.t": "トークンを発行する",
           "lifecycle.s4.b":
             "通れば、宣言されたファイルに束縛された短命のトークンが返り、<code>phase: \"issued\"</code>が<code>.meta-edit/state/edits.jsonl</code>に書き込まれる。",
-          "lifecycle.s5.t": "書く――フック下で",
+          "lifecycle.s5.t": "書く――2つのフック下で",
           "lifecycle.s5.b":
-            "エージェントが標準の<code>Edit</code>を呼んでバイトを書く。書き込み直前のフックがトークンの有無・有効期限・各ファイルのハッシュと束縛の一致を確認する。どれかが合わなければ書き込みは拒否される。",
+            "エージェントが標準の<code>Edit</code>を呼んでバイトを書く。<code>deny-raw-edit</code>フックがトークンの有無・有効期限・各ファイルのハッシュと束縛の一致を確認する。兄弟フック<code>deny-bash-write-bypass</code>が、<code>sed -i</code>・<code>cat &gt; file</code>・<code>git apply</code>といった明白なシェル迂回路を塞ぐ――こうして型付き表面が「リポジトリにバイトを着地させる唯一の経路」であり続ける。どれかが合わなければ書き込みは拒否される。",
           "lifecycle.s6.t": "消費 + 監査",
           "lifecycle.s6.b":
             "書き込み成功後、フックが<code>phase: \"consumed\"</code>を追記する。<code>issued</code>はあるが<code>consumed</code>がない記録は、宣言が放棄または期限切れになった証拠だ。",
@@ -863,6 +905,9 @@
           "faq.q8": "spec-derivation matrixとは?",
           "faq.a8":
             "v0.8.0で追加(SPEC §3.3.5)。<code>provenance</code>フィールドは「根拠の出所」を宣言するために以前から存在していた。matrixはそれを<code>target</code>と掛け合わせる。テスト宣言(<code>target: \"test\"</code>)の根拠が<code>direct_observation</code>――つまりプロダクションコードを観察して書いたテスト――は<em>実装の鏡(impl-mirror)</em>の臭いとして<code>target_spec_derivation_warn</code>が立つ。<code>inference</code>や<code>speculation</code>を根拠にしたテストは却下する。狙いは、テストが「いま実装がたまたまそうなっている挙動」ではなく「仕様が定めた挙動」を固定することだ。",
+          "faq.q9": "監査ログには何が残る?",
+          "faq.a9":
+            "宣言ごとに<code>phase: \"issued\"</code>または<code>phase: \"rejected\"</code>のレコードが<code>.meta-edit/state/edits.jsonl</code>に書かれる。書き込み成功で<code>phase: \"consumed\"</code>が追記される。ソフトな警告は<code>audit_warnings</code>として現れる。現時点で5種類――<code>kind_provenance_warn</code>(<code>(kind, provenance)</code>のセルがwarn/reject)、<code>additional_files_warn</code>(ワークフローツールが、本来rejectすべきセルに対して<code>additional_files</code>を宣言)、<code>citation_lint_missing</code>(<code>accepted_artifact</code>を選んだのに成果物参照が無い)、<code>execution_state_repeating_failure</code>(修正→失敗のループ中に、規定の<code>edit_observation</code>での退避ではなく、また実装ツールで宣言した)、<code>target_spec_derivation_warn</code>(仕様ではなく実装の<code>direct_observation</code>を根拠にしたテスト)。ハードな却下は<code>audit_error</code>として記録され、トークンは発行されない。<code>meta-edit summary</code>はこれらを集計する――<code>consumed</code>を持たない<code>issued</code>行は、放棄または期限切れになった宣言の証拠だ。",
           "limits.title": "meta-editが向かない場面",
           "limits.lede":
             "meta-editには立場がある。価値がなく摩擦だけ生む場面は次の通り。",
@@ -908,12 +953,12 @@
             "所以拆。<code>Edit</code> 拆成二十一个编辑,每种变更对应一个,各自的义务写进各自的描述。关键的一步是:<strong>代理必须先选一个类型,才能编辑</strong>。选类型这件事本身,就是思考的那一步。",
           "proof.title": "二十一个类型化编辑",
           "proof.lede":
-            "当前的种类清单 —— 15 个 SQLite 衍生的实现工具、收窄的 <code>edit_cosmetic</code>,以及 5 个 workflow 轴种类。每个工具的描述都写明:何时使用、何时不该使用、必须附带哪些测试、何时停下来询问用户。16 个实现工具都带有必填的 prod/test target 标志,而每一次声明都带有必填的 <code>provenance</code> 字段,标明该次编辑的认知来源。",
+            "当前的种类清单 —— 15 个 SQLite 衍生的实现工具、收窄的 <code>edit_cosmetic</code>,以及 5 个 workflow 轴种类。每个工具的描述都写明:何时使用、何时不该使用、必须附带哪些测试、何时停下来询问用户。16 个实现工具都带有必填的 prod/test target 标志,而每一次声明都带有必填的 <code>provenance</code> 字段,标明该次编辑的认知来源。工作流类工具可以通过 <code>additional_files</code> 声明相关文件(由 <code>(kind, provenance)</code> 单元格逐格判定是否受理);实现工具不接受这个字段。",
           "proof.evidence.title": "我们观察到的现象",
           "proof.evidence.body":
             "当请求的改动没有类型能干净匹配时,代理不会硬塞进最近的工具,而是<strong>停下来询问</strong>。我们在上下文使用率约 80% 的会话里观察到了这一点——这正是 <code>CLAUDE.md</code> 中的指令通常已经失去约束力的区段。每次调用都会被重新加载的「工具型」指令,在「文本型」指令失效之后仍然继续起作用。",
           "proof.evidence.quote":
-            "<p>「<code>OBSERVED-FAILURES.md</code> 是文档文件,与十七个 <code>edit_*</code> 工具中的任何一个都不能严格匹配(这些说明文都假定目标是『生产代码』/『测试文件』/『策略 / 治理』)。<code>CLAUDE.md</code> §9 写的是『找不到合适的 <code>edit_*</code> 工具时停下来询问』。两个选项:(a) 借用 <code>edit_refactor_only</code> —— 它的 MUST-NOT 列表对纯散文天然不触发,『不改变可观察行为』的意图在文档场景下也成立;(b) <code>/plugin disable meta-edit</code> 后用原生 <code>Edit</code>。你倾向哪个?」</p><footer class=\"quote-attr\">—— 催生第十八个工具 <code>edit_docs_only</code> 的那段代理对话</footer>",
+            "<p>「<code>OBSERVED-FAILURES.md</code> 是文档文件,与十七个 <code>edit_*</code> 工具中的任何一个都不能严格匹配(这些说明文都假定目标是『生产代码』/『测试文件』/『策略 / 治理』)。<code>CLAUDE.md</code> §9 写的是『找不到合适的 <code>edit_*</code> 工具时停下来询问』。两个选项:(a) 借用 <code>edit_refactor_only</code> —— 它的 MUST-NOT 列表对纯散文天然不触发,『不改变可观察行为』的意图在文档场景下也成立;(b) <code>/plugin disable meta-edit</code> 后用原生 <code>Edit</code>。你倾向哪个?」</p><footer class=\"quote-attr\">—— 催生第十八个工具 <code>edit_docs_only</code> 的那段代理对话;<code>edit_docs_only</code> 后来在 v0.6.0 中被拆分为 5 个 workflow 轴种类(<code>edit_progress</code>、<code>edit_observation</code>、<code>edit_proposal</code>、<code>edit_decision</code>、<code>edit_explanation</code>)</footer>",
           "lifecycle.title": "一次类型化编辑实际上是怎么走完的",
           "lifecycle.lede":
             "meta-edit 不只是描述。代理的「选工具」这一步也被卡住——写入本身被绑定在那个选择上。下面是一次编辑的生命周期。",
@@ -925,13 +970,13 @@
             "声明这次改动:<code>target_file</code>、<code>rationale</code>、<code>test_files</code>,以及每个待修改文件改动前的 SHA-256。",
           "lifecycle.s3.t": "校验",
           "lifecycle.s3.b":
-            "meta-edit 检查声明。理由为空、缺失测试文件(非重构 / 非测试编辑)、目标位于保护路径——任一条都会被拒。编辑日志以 <code>phase: \"rejected\"</code> 记录原因。",
+            "meta-edit 检查声明。理由为空、缺少 <code>test_files</code>(<code>target: \"prod\"</code> 的实现工具,<code>edit_cosmetic</code> 除外)、目标位于保护路径、<code>(kind, target, provenance)</code> 矩阵中被拒的单元格——任一条都会被拒。编辑日志以 <code>phase: \"rejected\"</code> 记录原因。",
           "lifecycle.s4.t": "发放令牌",
           "lifecycle.s4.b":
             "通过校验后,meta-edit 返回一个绑定在声明文件上的短命令牌,并把 <code>phase: \"issued\"</code> 写入 <code>.meta-edit/state/edits.jsonl</code>。",
-          "lifecycle.s5.t": "写入 —— 在 hook 之下",
+          "lifecycle.s5.t": "写入 —— 在两个 hook 之下",
           "lifecycle.s5.b":
-            "代理调用内置 <code>Edit</code> 真正写字节。写入前的 hook 会检查:对应的令牌是否存在、是否过期、每个文件的哈希是否与绑定一致。任一不符,写入被拒。",
+            "代理调用内置 <code>Edit</code> 真正写字节。<code>deny-raw-edit</code> hook 会检查:对应的令牌是否存在、是否过期、每个文件的哈希是否与绑定一致。它的姐妹 hook <code>deny-bash-write-bypass</code> 关掉了显眼的 shell 迂回路径(<code>sed -i</code>、<code>cat &gt; file</code>、<code>git apply</code> 等),让类型化表面继续做「字节落入仓库的唯一通道」。任一不符,写入被拒。",
           "lifecycle.s6.t": "消费 + 审计",
           "lifecycle.s6.b":
             "写入成功后,hook 追加 <code>phase: \"consumed\"</code>。只有 <code>issued</code> 而没有 <code>consumed</code> 的记录,意味着声明被放弃或令牌已过期。",
@@ -989,6 +1034,9 @@
           "faq.q8": "spec-derivation matrix 是什么?",
           "faq.a8":
             "v0.8.0 加入(SPEC §3.3.5)。<code>provenance</code> 字段以前就用来声明「依据从哪儿来」。matrix 把它与 <code>target</code> 交叉。一条测试声明(<code>target: \"test\"</code>)如果依据是 <code>direct_observation</code>——也就是看着产品代码写出来的测试——就被认作<em>实现镜像(impl-mirror)</em>气味,审计里记一条 <code>target_spec_derivation_warn</code>。依据是 <code>inference</code> 或 <code>speculation</code> 的测试直接拒绝。目的是:测试钉住的应当是「规约定义的行为」,而不是「实现当下碰巧那么做」。",
+          "faq.q9": "审计日志里会留下什么?",
+          "faq.a9":
+            "每次声明都会向 <code>.meta-edit/state/edits.jsonl</code> 写入一条 <code>phase: \"issued\"</code> 或 <code>phase: \"rejected\"</code> 的记录;写入成功后再追加 <code>phase: \"consumed\"</code>。柔性信号以 <code>audit_warnings</code> 的形式出现,目前共 5 种——<code>kind_provenance_warn</code>(<code>(kind, provenance)</code> 单元格为 warn/reject)、<code>additional_files_warn</code>(工作流类工具对本应拒绝的单元格声明了 <code>additional_files</code>)、<code>citation_lint_missing</code>(选了 <code>accepted_artifact</code> 却没有附产物引用)、<code>execution_state_repeating_failure</code>(在「修→错」循环中没走规定的 <code>edit_observation</code> 退避,反而又用了实现工具)、<code>target_spec_derivation_warn</code>(测试以实现的 <code>direct_observation</code> 而非规约为依据)。硬拒绝以 <code>audit_error</code> 记录,不会发出令牌。<code>meta-edit summary</code> 会聚合这些——只有 <code>issued</code> 而没有 <code>consumed</code> 的记录,是被放弃或令牌过期的证据。",
           "limits.title": "不适用 meta-edit 的场景",
           "limits.lede":
             "meta-edit 是有立场的。下列场景下,它带来摩擦却没有价值:",
