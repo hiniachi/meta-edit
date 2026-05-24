@@ -64,7 +64,7 @@
             "applicationCategory": "DeveloperApplication",
             "applicationSubCategory": "AI coding agent plugin",
             "operatingSystem": "Linux, macOS",
-            "softwareVersion": "0.6.1",
+            "softwareVersion": "0.8.0",
             "url": "https://hiniachi.github.io/meta-edit/",
             "sameAs": [
               "https://github.com/hiniachi/meta-edit",
@@ -510,6 +510,38 @@
             project is the consequence of accepting that decay is structural —
             not the model's fault.
           </dd>
+
+          <dt data-i18n="faq.q7">
+            What does <code>execution_state</code> add?
+          </dt>
+          <dd data-i18n="faq.a7">
+            Since v0.7.0 every declaration carries
+            <code>execution_state</code>: <code>normal</code>,
+            <code>repeating_failure</code>, or <code>recovery</code>. When the
+            agent notices it's looping on the same file, declaring
+            <code>repeating_failure</code> prepends a reminder to re-read the
+            last log entries before writing again, and records an audit
+            warning. <code>meta-edit summary</code> then exposes a
+            <em>By execution state</em> breakdown. Still no detector — the
+            agent names the loop itself.
+          </dd>
+
+          <dt data-i18n="faq.q8">
+            What is the spec-derivation matrix?
+          </dt>
+          <dd data-i18n="faq.a8">
+            Added in v0.8.0 (SPEC §3.3.5). The <code>provenance</code> field
+            already declared where the rationale came from; the matrix
+            cross-references it with <code>target</code>. A test declaration
+            (<code>target: "test"</code>) whose rationale is
+            <code>direct_observation</code> of the production code is the
+            <em>impl-mirror</em> smell — it earns a
+            <code>target_spec_derivation_warn</code> in the audit log. Tests
+            grounded in <code>inference</code> or <code>speculation</code>
+            are rejected outright. The point: tests should pin
+            spec-defined behaviour, not whatever the implementation happens
+            to do today.
+          </dd>
         </dl>
       </section>
 
@@ -699,6 +731,12 @@
             "Why not just write a better <code>CLAUDE.md</code>?",
           "faq.a6":
             "We tried. The instructions decay during long sessions. The whole project is the consequence of accepting that decay is structural — not the model's fault.",
+          "faq.q7": "What does <code>execution_state</code> add?",
+          "faq.a7":
+            "Since v0.7.0 every declaration carries <code>execution_state</code>: <code>normal</code>, <code>repeating_failure</code>, or <code>recovery</code>. When the agent notices it's looping on the same file, declaring <code>repeating_failure</code> prepends a reminder to re-read the last log entries before writing again, and records an audit warning. <code>meta-edit summary</code> then exposes a <em>By execution state</em> breakdown. Still no detector — the agent names the loop itself.",
+          "faq.q8": "What is the spec-derivation matrix?",
+          "faq.a8":
+            "Added in v0.8.0 (SPEC §3.3.5). The <code>provenance</code> field already declared where the rationale came from; the matrix cross-references it with <code>target</code>. A test declaration (<code>target: \"test\"</code>) whose rationale is <code>direct_observation</code> of the production code is the <em>impl-mirror</em> smell — it earns a <code>target_spec_derivation_warn</code> in the audit log. Tests grounded in <code>inference</code> or <code>speculation</code> are rejected outright. The point: tests should pin spec-defined behaviour, not whatever the implementation happens to do today.",
           "limits.title": "When this isn't the right tool",
           "limits.lede":
             "meta-edit is opinionated. The honest list of cases where it adds friction without value:",
@@ -819,6 +857,12 @@
             "もっとしっかり<code>CLAUDE.md</code>を書くだけではダメ?",
           "faq.a6":
             "試した。長いセッションでは指示は薄れる。このプロジェクトは「指示の薄れは構造的な現象でモデルのせいではない」という認識を出発点にしている。",
+          "faq.q7": "<code>execution_state</code>って何のためのフラグ?",
+          "faq.a7":
+            "v0.7.0で追加。すべての宣言に<code>execution_state</code>が必須になった――値は<code>normal</code>・<code>repeating_failure</code>・<code>recovery</code>のいずれか。エージェントが「同じファイルで修正→失敗→修正のループに陥っている」と気づいたとき、<code>repeating_failure</code>を宣言すれば、書く前に直近のログを読み直せというリマインダが先頭に挿入され、監査警告がログに残る。<code>meta-edit summary</code>には<em>By execution state</em>の内訳が出る。これも検出器ではない――エージェント自身がループを名指す。",
+          "faq.q8": "spec-derivation matrixとは?",
+          "faq.a8":
+            "v0.8.0で追加(SPEC §3.3.5)。<code>provenance</code>フィールドは「根拠の出所」を宣言するために以前から存在していた。matrixはそれを<code>target</code>と掛け合わせる。テスト宣言(<code>target: \"test\"</code>)の根拠が<code>direct_observation</code>――つまりプロダクションコードを観察して書いたテスト――は<em>実装の鏡(impl-mirror)</em>の臭いとして<code>target_spec_derivation_warn</code>が立つ。<code>inference</code>や<code>speculation</code>を根拠にしたテストは却下する。狙いは、テストが「いま実装がたまたまそうなっている挙動」ではなく「仕様が定めた挙動」を固定することだ。",
           "limits.title": "meta-editが向かない場面",
           "limits.lede":
             "meta-editには立場がある。価値がなく摩擦だけ生む場面は次の通り。",
@@ -939,6 +983,12 @@
             "多花点功夫写 <code>CLAUDE.md</code> 不就行了?",
           "faq.a6":
             "试过了。在长会话里指令会褪色。整个项目正是承认了「褪色是结构性的,不是模型的错」之后才动手做的。",
+          "faq.q7": "<code>execution_state</code> 这个标记是干嘛的?",
+          "faq.a7":
+            "v0.7.0 加入。每次声明都必须带 <code>execution_state</code>——取值是 <code>normal</code>、<code>repeating_failure</code>、<code>recovery</code> 之一。当代理意识到自己在同一文件上陷入「修→错→修」死循环时,声明 <code>repeating_failure</code> 会先插入一条「写之前请回看最近几条日志」的提醒,并在审计中留下警告。<code>meta-edit summary</code> 会按 <em>By execution state</em> 给出分布。仍然没有检测器——是代理自己点名了死循环。",
+          "faq.q8": "spec-derivation matrix 是什么?",
+          "faq.a8":
+            "v0.8.0 加入(SPEC §3.3.5)。<code>provenance</code> 字段以前就用来声明「依据从哪儿来」。matrix 把它与 <code>target</code> 交叉。一条测试声明(<code>target: \"test\"</code>)如果依据是 <code>direct_observation</code>——也就是看着产品代码写出来的测试——就被认作<em>实现镜像(impl-mirror)</em>气味,审计里记一条 <code>target_spec_derivation_warn</code>。依据是 <code>inference</code> 或 <code>speculation</code> 的测试直接拒绝。目的是:测试钉住的应当是「规约定义的行为」,而不是「实现当下碰巧那么做」。",
           "limits.title": "不适用 meta-edit 的场景",
           "limits.lede":
             "meta-edit 是有立场的。下列场景下,它带来摩擦却没有价值:",
