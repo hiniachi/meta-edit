@@ -997,6 +997,54 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
     }
   });
 
+  it("rejects a workflow declaration that carries non-empty test_files (PR #96 codex review P2)", () => {
+    // Workflow kinds promise "Required tests: NONE" in their
+    // descriptions; the validator must enforce that the bytes match
+    // the contract so audit data does not silently record fake test
+    // obligations on prose / policy edits.
+    writeFile2("CLAUDE.md", "x\n");
+    const r = validateRequest("edit_policy_change", {
+      target_file: "CLAUDE.md",
+      rationale: "the user confirmed this in the current session",
+      risk_level: "medium",
+      provenance: "user_confirmed",
+      execution_state: "normal",
+      test_files: ["tests/policy.test.ts"],
+    }, ctx2());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(
+        r.warnings.some((w) => w.includes("test_files must be empty")),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects every workflow kind with non-empty test_files", () => {
+    // Drift guard mirroring the WORKFLOW_TOOLS membership: each one
+    // must reject test_files at validation time, regardless of which
+    // kind carries the test_files array.
+    const workflowKinds: ToolName[] = [
+      "edit_progress",
+      "edit_observation",
+      "edit_proposal",
+      "edit_decision",
+      "edit_explanation",
+      "edit_policy_change",
+    ];
+    writeFile2("docs/a.md", "x\n");
+    for (const kind of workflowKinds) {
+      const r = validateRequest(kind, {
+        target_file: "docs/a.md",
+        rationale: "per SPEC.md §4",
+        risk_level: "low",
+        provenance: "accepted_artifact",
+        execution_state: "normal",
+        test_files: ["tests/a.test.ts"],
+      }, ctx2());
+      expect(r.ok, `kind=${kind} silently accepted non-empty test_files`).toBe(false);
+    }
+  });
+
   it("rejects edit_progress with additional_files (every cell rejects)", () => {
     writeFile2("docs/log.md", "x\n");
     writeFile2("docs/log2.md", "y\n");

@@ -664,7 +664,13 @@ export function validateRequest(
   // target_file IS the test file, so test_files must be empty. When
   // target === "prod", impl tools (excluding edit_cosmetic) must
   // forward-declare the test files the paired target: test call(s)
-  // will modify.
+  // will modify. The 6 workflow-axis kinds carry no target and have
+  // no executable behavior to forward-declare tests against — their
+  // tool descriptions promise "Required tests: NONE. ... test_files
+  // must be empty"; enforce that here so the promise actually holds
+  // (a workflow declaration with test_files: ["..."] would otherwise
+  // silently record fake test obligations in audit data — PR #96
+  // codex review P2 on the policy_change reshape).
   if (request.target === "test") {
     if (request.test_files.length > 0) {
       warnings.push(
@@ -678,6 +684,14 @@ export function validateRequest(
     if (request.test_files.length === 0) {
       warnings.push(
         `test_files must be non-empty for ${toolName} with target "prod"`,
+      );
+    }
+  } else if (WORKFLOW_TOOLS.includes(toolName)) {
+    if (request.test_files.length > 0) {
+      warnings.push(
+        `test_files must be empty for ${toolName} (workflow-axis kinds ` +
+          `carry no executable behavior — Required tests: NONE per the ` +
+          `tool description)`,
       );
     }
   }

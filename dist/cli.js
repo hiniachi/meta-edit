@@ -3050,9 +3050,6 @@ var require_data = __commonJS((exports, module) => {
 var require_utils = __commonJS((exports, module) => {
   var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
   var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
-  var isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu);
-  var isUnreserved = RegExp.prototype.test.bind(/^[\da-z\-._~]$/iu);
-  var isPathCharacter = RegExp.prototype.test.bind(/^[\da-z\-._~!$&'()*+,;=:@/]$/iu);
   function stringArrayToHexStripped(input) {
     let acc = "";
     let code = 0;
@@ -3246,77 +3243,27 @@ var require_utils = __commonJS((exports, module) => {
     }
     return output.join("");
   }
-  var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
-  var HOST_DELIM_RE = /[@/?#:]/g;
-  var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
-  function reescapeHostDelimiters(host, isIP) {
-    const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
-    re.lastIndex = 0;
-    return host.replace(re, (ch) => HOST_DELIMS[ch]);
-  }
-  function normalizePercentEncoding(input, decodeUnreserved = false) {
-    if (input.indexOf("%") === -1) {
-      return input;
+  function normalizeComponentEncoding(component, esc2) {
+    const func = esc2 !== true ? escape : unescape;
+    if (component.scheme !== undefined) {
+      component.scheme = func(component.scheme);
     }
-    let output = "";
-    for (let i = 0;i < input.length; i++) {
-      if (input[i] === "%" && i + 2 < input.length) {
-        const hex = input.slice(i + 1, i + 3);
-        if (isHexPair(hex)) {
-          const normalizedHex = hex.toUpperCase();
-          const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
-          if (decodeUnreserved && isUnreserved(decoded)) {
-            output += decoded;
-          } else {
-            output += "%" + normalizedHex;
-          }
-          i += 2;
-          continue;
-        }
-      }
-      output += input[i];
+    if (component.userinfo !== undefined) {
+      component.userinfo = func(component.userinfo);
     }
-    return output;
-  }
-  function normalizePathEncoding(input) {
-    let output = "";
-    for (let i = 0;i < input.length; i++) {
-      if (input[i] === "%" && i + 2 < input.length) {
-        const hex = input.slice(i + 1, i + 3);
-        if (isHexPair(hex)) {
-          const normalizedHex = hex.toUpperCase();
-          const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
-          if (decoded !== "." && isUnreserved(decoded)) {
-            output += decoded;
-          } else {
-            output += "%" + normalizedHex;
-          }
-          i += 2;
-          continue;
-        }
-      }
-      if (isPathCharacter(input[i])) {
-        output += input[i];
-      } else {
-        output += escape(input[i]);
-      }
+    if (component.host !== undefined) {
+      component.host = func(component.host);
     }
-    return output;
-  }
-  function escapePreservingEscapes(input) {
-    let output = "";
-    for (let i = 0;i < input.length; i++) {
-      if (input[i] === "%" && i + 2 < input.length) {
-        const hex = input.slice(i + 1, i + 3);
-        if (isHexPair(hex)) {
-          output += "%" + hex.toUpperCase();
-          i += 2;
-          continue;
-        }
-      }
-      output += escape(input[i]);
+    if (component.path !== undefined) {
+      component.path = func(component.path);
     }
-    return output;
+    if (component.query !== undefined) {
+      component.query = func(component.query);
+    }
+    if (component.fragment !== undefined) {
+      component.fragment = func(component.fragment);
+    }
+    return component;
   }
   function recomposeAuthority(component) {
     const uriTokens = [];
@@ -3331,7 +3278,7 @@ var require_utils = __commonJS((exports, module) => {
         if (ipV6res.isIPV6 === true) {
           host = `[${ipV6res.escapedHost}]`;
         } else {
-          host = reescapeHostDelimiters(host, false);
+          host = component.host;
         }
       }
       uriTokens.push(host);
@@ -3345,10 +3292,7 @@ var require_utils = __commonJS((exports, module) => {
   module.exports = {
     nonSimpleDomain,
     recomposeAuthority,
-    reescapeHostDelimiters,
-    normalizePercentEncoding,
-    normalizePathEncoding,
-    escapePreservingEscapes,
+    normalizeComponentEncoding,
     removeDotSegments,
     isIPv4,
     isUUID,
@@ -3533,11 +3477,11 @@ var require_schemes = __commonJS((exports, module) => {
 
 // node_modules/fast-uri/index.js
 var require_fast_uri = __commonJS((exports, module) => {
-  var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
+  var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = require_utils();
   var { SCHEMES, getSchemeHandler } = require_schemes();
   function normalize(uri, options) {
     if (typeof uri === "string") {
-      uri = normalizeString(uri, options);
+      uri = serialize(parse5(uri, options), options);
     } else if (typeof uri === "object") {
       uri = parse5(serialize(uri, options), options);
     }
@@ -3603,9 +3547,19 @@ var require_fast_uri = __commonJS((exports, module) => {
     return target;
   }
   function equal(uriA, uriB, options) {
-    const normalizedA = normalizeComparableURI(uriA, options);
-    const normalizedB = normalizeComparableURI(uriB, options);
-    return normalizedA !== undefined && normalizedB !== undefined && normalizedA.toLowerCase() === normalizedB.toLowerCase();
+    if (typeof uriA === "string") {
+      uriA = unescape(uriA);
+      uriA = serialize(normalizeComponentEncoding(parse5(uriA, options), true), { ...options, skipEscape: true });
+    } else if (typeof uriA === "object") {
+      uriA = serialize(normalizeComponentEncoding(uriA, true), { ...options, skipEscape: true });
+    }
+    if (typeof uriB === "string") {
+      uriB = unescape(uriB);
+      uriB = serialize(normalizeComponentEncoding(parse5(uriB, options), true), { ...options, skipEscape: true });
+    } else if (typeof uriB === "object") {
+      uriB = serialize(normalizeComponentEncoding(uriB, true), { ...options, skipEscape: true });
+    }
+    return uriA.toLowerCase() === uriB.toLowerCase();
   }
   function serialize(cmpts, opts) {
     const component = {
@@ -3631,12 +3585,12 @@ var require_fast_uri = __commonJS((exports, module) => {
       schemeHandler.serialize(component, options);
     if (component.path !== undefined) {
       if (!options.skipEscape) {
-        component.path = escapePreservingEscapes(component.path);
+        component.path = escape(component.path);
         if (component.scheme !== undefined) {
           component.path = component.path.split("%3A").join(":");
         }
       } else {
-        component.path = normalizePercentEncoding(component.path);
+        component.path = unescape(component.path);
       }
     }
     if (options.reference !== "suffix" && component.scheme) {
@@ -3671,16 +3625,7 @@ var require_fast_uri = __commonJS((exports, module) => {
     return uriTokens.join("");
   }
   var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
-  function getParseError(parsed, matches) {
-    if (matches[2] !== undefined && parsed.path && parsed.path[0] !== "/") {
-      return 'URI path must start with "/" when authority is present.';
-    }
-    if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
-      return "URI port is malformed.";
-    }
-    return;
-  }
-  function parseWithStatus(uri, opts) {
+  function parse5(uri, opts) {
     const options = Object.assign({}, opts);
     const parsed = {
       scheme: undefined,
@@ -3691,7 +3636,6 @@ var require_fast_uri = __commonJS((exports, module) => {
       query: undefined,
       fragment: undefined
     };
-    let malformedAuthorityOrPort = false;
     let isIP = false;
     if (options.reference === "suffix") {
       if (options.scheme) {
@@ -3711,11 +3655,6 @@ var require_fast_uri = __commonJS((exports, module) => {
       parsed.fragment = matches[8];
       if (isNaN(parsed.port)) {
         parsed.port = matches[5];
-      }
-      const parseError = getParseError(parsed, matches);
-      if (parseError !== undefined) {
-        parsed.error = parsed.error || parseError;
-        malformedAuthorityOrPort = true;
       }
       if (parsed.host) {
         const ipv4result = isIPv4(parsed.host);
@@ -3755,18 +3694,14 @@ var require_fast_uri = __commonJS((exports, module) => {
             parsed.scheme = unescape(parsed.scheme);
           }
           if (parsed.host !== undefined) {
-            parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP);
+            parsed.host = unescape(parsed.host);
           }
         }
         if (parsed.path) {
-          parsed.path = normalizePathEncoding(parsed.path);
+          parsed.path = escape(unescape(parsed.path));
         }
         if (parsed.fragment) {
-          try {
-            parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
-          } catch {
-            parsed.error = parsed.error || "URI malformed";
-          }
+          parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
         }
       }
       if (schemeHandler && schemeHandler.parse) {
@@ -3775,29 +3710,7 @@ var require_fast_uri = __commonJS((exports, module) => {
     } else {
       parsed.error = parsed.error || "URI can not be parsed.";
     }
-    return { parsed, malformedAuthorityOrPort };
-  }
-  function parse5(uri, opts) {
-    return parseWithStatus(uri, opts).parsed;
-  }
-  function normalizeString(uri, opts) {
-    return normalizeStringWithStatus(uri, opts).normalized;
-  }
-  function normalizeStringWithStatus(uri, opts) {
-    const { parsed, malformedAuthorityOrPort } = parseWithStatus(uri, opts);
-    return {
-      normalized: malformedAuthorityOrPort ? uri : serialize(parsed, opts),
-      malformedAuthorityOrPort
-    };
-  }
-  function normalizeComparableURI(uri, opts) {
-    if (typeof uri === "string") {
-      const { normalized, malformedAuthorityOrPort } = normalizeStringWithStatus(uri, opts);
-      return malformedAuthorityOrPort ? undefined : normalized;
-    }
-    if (typeof uri === "object") {
-      return serialize(uri, opts);
-    }
+    return parsed;
   }
   var fastUri = {
     SCHEMES,
@@ -18269,6 +18182,10 @@ function validateRequest(toolName, request, ctx) {
     if (request.test_files.length === 0) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
+  } else if (WORKFLOW_TOOLS.includes(toolName)) {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty for ${toolName} (workflow-axis kinds ` + `carry no executable behavior — Required tests: NONE per the ` + `tool description)`);
+    }
   }
   if (request.additional_files !== undefined) {
     if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
@@ -18716,7 +18633,8 @@ var WORKFLOW_KINDS = new Set([
   "edit_observation",
   "edit_proposal",
   "edit_decision",
-  "edit_explanation"
+  "edit_explanation",
+  "edit_policy_change"
 ]);
 var ESCAPE_KINDS = new Set([
   "edit_observation",
@@ -20904,4 +20822,4 @@ export {
   main
 };
 
-//# debugId=F5E2D0FD668FF94364756E2164756E21
+//# debugId=23C9B2F5DC062FB464756E2164756E21

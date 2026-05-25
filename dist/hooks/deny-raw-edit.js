@@ -271,7 +271,8 @@ var WORKFLOW_KINDS = new Set([
   "edit_observation",
   "edit_proposal",
   "edit_decision",
-  "edit_explanation"
+  "edit_explanation",
+  "edit_policy_change"
 ]);
 var ESCAPE_KINDS = new Set([
   "edit_observation",
@@ -5977,6 +5978,10 @@ function validateRequest(toolName, request, ctx) {
     if (request.test_files.length === 0) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
+  } else if (WORKFLOW_TOOLS.includes(toolName)) {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty for ${toolName} (workflow-axis kinds ` + `carry no executable behavior — Required tests: NONE per the ` + `tool description)`);
+    }
   }
   if (request.additional_files !== undefined) {
     if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
@@ -7113,4 +7118,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=55502E110EB1C75764756E2164756E21
+//# debugId=1C83FEF03A86E57F64756E2164756E21

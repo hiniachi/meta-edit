@@ -215,7 +215,8 @@ var WORKFLOW_KINDS = new Set([
   "edit_observation",
   "edit_proposal",
   "edit_decision",
-  "edit_explanation"
+  "edit_explanation",
+  "edit_policy_change"
 ]);
 var ESCAPE_KINDS = new Set([
   "edit_observation",
@@ -5921,6 +5922,10 @@ function validateRequest(toolName, request, ctx) {
     if (request.test_files.length === 0) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
+  } else if (WORKFLOW_TOOLS.includes(toolName)) {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty for ${toolName} (workflow-axis kinds ` + `carry no executable behavior — Required tests: NONE per the ` + `tool description)`);
+    }
   }
   if (request.additional_files !== undefined) {
     if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
@@ -8716,4 +8721,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=2827BDB84AF18C2664756E2164756E21
+//# debugId=4FD0CADFA77F0F1D64756E2164756E21

@@ -236,6 +236,7 @@ const WORKFLOW_KINDS: ReadonlySet<string> = new Set([
   "edit_proposal",
   "edit_decision",
   "edit_explanation",
+  "edit_policy_change",
 ]);
 const ESCAPE_KINDS: ReadonlySet<string> = new Set([
   "edit_observation",

@@ -172,6 +172,20 @@ describe("buildReminderContext", () => {
     expect(out).not.toContain("escape procedure");
     expect(out).not.toContain("this is the right move");
   });
+  it("repeating_failure on edit_policy_change adds no execution_state text (workflow-axis kind, not a fix attempt — PR #96 codex review P2)", () => {
+    // After the v0.7.x reshape edit_policy_change is a workflow-axis
+    // kind. A workflow declaration is not a fix attempt, so the
+    // impl-flavored "before stacking another fix" escape text would
+    // be misleading. Mirrors the edit_progress assertion above.
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_policy_change",
+      executionState: "repeating_failure",
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("stacking another fix");
+    expect(out).not.toContain("this is the right move");
+  });
   it("recovery gives supportive recovery text", () => {
     const out = buildReminderContext({
       phase: "declaration_accepted",
