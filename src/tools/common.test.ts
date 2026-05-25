@@ -652,7 +652,7 @@ describe("evaluateKindProvenanceValidity (RFC §3.3.1 / §3.3.3)", () => {
     }
   });
 
-  it("all 15 impl SQLite-derived tools accept every provenance (no rejects, no warns)", () => {
+  it("all 14 impl SQLite-derived tools accept every provenance (no rejects, no warns)", () => {
     const impl: ToolName[] = [
       "edit_boundary_condition",
       "edit_boolean_condition",
@@ -668,13 +668,24 @@ describe("evaluateKindProvenanceValidity (RFC §3.3.1 / §3.3.3)", () => {
       "edit_cache_invalidation",
       "edit_permission_logic",
       "edit_dependency_config",
-      "edit_policy_change",
     ];
     for (const kind of impl) {
       for (const prov of ALL_PROVENANCES) {
         expect(evaluateKindProvenanceValidity(kind, prov)).toBe("accept");
       }
     }
+  });
+
+  it("edit_policy_change accepts confirmed sources and rejects inference / speculation", () => {
+    // policy bytes must trace back to a confirmed source; an
+    // inference- or speculation-grade policy change is a contradiction
+    // in terms (and would let unverified opinion become operating
+    // procedure for the next session).
+    expect(evaluateKindProvenanceValidity("edit_policy_change", "user_confirmed")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_policy_change", "accepted_artifact")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_policy_change", "direct_observation")).toBe("accept");
+    expect(evaluateKindProvenanceValidity("edit_policy_change", "inference")).toBe("reject");
+    expect(evaluateKindProvenanceValidity("edit_policy_change", "speculation")).toBe("reject");
   });
 });
 
@@ -734,11 +745,19 @@ describe("evaluateAdditionalFiles (RFC §3.3.2)", () => {
       "edit_boundary_condition",
       "edit_state_transition",
       "edit_api_contract",
-      "edit_policy_change",
     ];
     for (const kind of impls) {
       expect(evaluateAdditionalFiles(kind, "direct_observation")).toBe("reject");
     }
+  });
+
+  it("edit_policy_change accepts user_confirmed / accepted_artifact and warns on direct_observation (CLAUDE.md verbatim-mirror batch pattern)", () => {
+    expect(evaluateAdditionalFiles("edit_policy_change", "user_confirmed")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_policy_change", "accepted_artifact")).toBe("accept");
+    expect(evaluateAdditionalFiles("edit_policy_change", "direct_observation")).toBe("warn");
+    // inference / speculation are unreachable by §3.3.1 reject; defensive reject here.
+    expect(evaluateAdditionalFiles("edit_policy_change", "inference")).toBe("reject");
+    expect(evaluateAdditionalFiles("edit_policy_change", "speculation")).toBe("reject");
   });
 });
 

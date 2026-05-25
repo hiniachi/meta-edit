@@ -50,19 +50,23 @@ export const TOOL_NAMES = [
   "edit_cache_invalidation",
   "edit_permission_logic",
   "edit_dependency_config",
-  "edit_policy_change",
-  // 5 workflow-axis kinds (v0.6.0) that replace edit_docs_only.
+  // 6 workflow-axis kinds — v0.6.0 introduced 5 (replacing edit_docs_only);
+  // v0.7.x added edit_policy_change as the 6th after the observation that
+  // policy bytes are prose, not impl: the spec / policy text changes here,
+  // the code that implements the new policy routes through the matching
+  // impl kind (e.g. edit_permission_logic for hook logic changes).
   // axis: not "which path is this file under" but "what is this edit
   // doing in the current session moment" (intent). The same Markdown
   // file may go through different tools across sessions depending on
   // whether it is a progress note, an observation, a proposal, a
-  // decision, or an explanation.
+  // decision, an explanation, or a policy change.
   "edit_progress",
   "edit_observation",
   "edit_proposal",
   "edit_decision",
   "edit_explanation",
-  // 15 SQLite-derived impl tools + edit_cosmetic + 5 workflow tools = 21.
+  "edit_policy_change",
+  // 14 SQLite-derived impl tools + edit_cosmetic + 6 workflow tools = 21.
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -76,19 +80,21 @@ export const TOOL_TITLES = Object.freeze(
   ),
 ) as Readonly<Record<ToolName, string>>;
 
-// Workflow kinds — the five v0.6.0 kinds that replace edit_docs_only.
-// Workflow kinds carry no `target` field (the prod/test axis does not
-// apply to documentation / workflow artifacts) and require no
-// `test_files` (workflow content is not tested in the impl-tool sense).
-// They MAY accept `additional_files`, but acceptance is decided cell-wise
-// by (kind, provenance) per docs/SPEC.md §3 (see common.ts
-// evaluateAdditionalFiles).
+// Workflow kinds — v0.6.0 introduced 5 (replacing edit_docs_only);
+// v0.7.x added edit_policy_change as the 6th after recognizing that
+// policy bytes are prose, not impl. Workflow kinds carry no `target`
+// field (the prod/test axis does not apply to documentation / workflow
+// artifacts) and require no `test_files` (workflow content is not
+// tested in the impl-tool sense). They MAY accept `additional_files`,
+// but acceptance is decided cell-wise by (kind, provenance) per
+// docs/SPEC.md §3 (see common.ts evaluateAdditionalFiles).
 export const WORKFLOW_TOOLS: readonly ToolName[] = [
   "edit_progress",
   "edit_observation",
   "edit_proposal",
   "edit_decision",
   "edit_explanation",
+  "edit_policy_change",
 ];
 
 export const TOOLS_REQUIRING_TEST_FILES: readonly ToolName[] = TOOL_NAMES.filter(
@@ -97,11 +103,11 @@ export const TOOLS_REQUIRING_TEST_FILES: readonly ToolName[] = TOOL_NAMES.filter
     !WORKFLOW_TOOLS.includes(name),
 );
 
-// Tools that carry a required `target: "prod" | "test"` field. The 15
+// Tools that carry a required `target: "prod" | "test"` field. The 14
 // SQLite-derived impl tools plus edit_cosmetic — every tool that can edit
-// either production or test code. The 5 workflow kinds are exempt
-// (documentation / workflow content has its own surface and the
-// prod/test split does not apply).
+// either production or test code. The 6 workflow kinds are exempt
+// (documentation / workflow / policy content has its own surface and
+// the prod/test split does not apply).
 export const TOOLS_REQUIRING_TARGET: readonly ToolName[] = TOOL_NAMES.filter(
   (name) => !WORKFLOW_TOOLS.includes(name),
 );
@@ -811,61 +817,116 @@ General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
 
-  edit_policy_change: `Modify the meta-edit configuration itself: hooks, Claude permissions,
-CI configuration, this server's behavior, or the tool descriptions of
-edit_* tools.
+  edit_policy_change: `Modify the policy itself — the bytes that DEFINE how this project
+expects code and configuration to be written: hooks' policy text,
+Claude permissions, CI configuration affecting meta-edit, this
+server's tool descriptions, the SPEC sections that the server
+enforces, or the AI-instruction documents (CLAUDE.md, AGENTS.md,
+\`.cursor/rules\`, etc.) that future sessions read first.
+
+This tool addresses the *declaration* of a policy change — the prose
+/ configuration text that future sessions will read as authoritative.
+The code that *implements* the new policy (e.g. hook logic for a new
+deny rule, schema additions for a new field, CI scripts that
+materialize the new gate) routes through the matching impl kind —
+typically \`edit_permission_logic\` for hook behavior,
+\`edit_api_contract\` for argument schemas, \`edit_dependency_config\`
+for build-tooling pieces — because the spec / policy comes first and
+the implementation follows.
 
 The policy line being moved is defined by the policy text / ADR /
 compliance requirement, not by what the current configuration
 happens to allow.
 
-Use this tool when:
-- Modifying .claude/ configuration
-- Modifying .github/workflows/ files that affect meta-edit
-- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
-- Modifying tool descriptions of edit_* tools themselves
-- Modifying argument schemas or hook behavior
+Use this tool when, and ONLY when, the patch is one of the following:
+- Modifying \`.claude/\` configuration (the policy text itself)
+- Modifying \`.github/workflows/\` files that affect meta-edit
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md,
+  \`.cursor/rules\`, etc.)
+- Modifying tool descriptions of \`edit_*\` tools themselves
+- Modifying SPEC.md / ADR / RFC sections that define behavior the
+  server enforces
 - Modifying build / release profile flags in package manifests
   (\`[profile.release]\` in Cargo.toml, \`[tool.poetry.build]\` in
   pyproject.toml, \`scripts\` / \`engines\` mutations in package.json
   that change how the project builds or releases) — see the boundary
   note in edit_dependency_config
 
-Per-target obligations (configuration validity, existing edit log
-backward compatibility, clean-checkout applicability) are delivered
-in the declaration result.
+This tool MUST NOT be used for:
+- Code that *implements* a policy (hook handler logic, schema
+  validators, CI scripts) — those go through the matching impl kind.
+  The policy *text* changes here; the policy *implementation*
+  changes elsewhere
+- Recording that a policy change was decided in this session — that
+  is \`edit_decision\`, written before the policy bytes change
+- Editing executable production code or test code — use the
+  kind-specific impl tool
 
 Policy changes that LOOSEN restrictions (allowing previously-denied
-operations, reducing test obligations, removing obligations from edit_*
-tool descriptions) require an explicit justification in rationale that
-explains why the loosening is safe. "Convenience" is not an acceptable
-rationale.
+operations, reducing test obligations, removing obligations from
+\`edit_*\` tool descriptions, removing or weakening hook deny rules)
+require an explicit justification in rationale that explains why the
+loosening is safe. "Convenience" is not an acceptable rationale.
 
-If your change loosens a restriction without a strong justification, do
-not use this tool. Reconsider whether the restriction was correct in the
-first place.
+If your change loosens a restriction without a strong justification,
+do not use this tool. Reconsider whether the restriction was correct
+in the first place.
 
 Fallback obligation:
-Before applying this tool, ask the user a clarifying question
-about the intended scope of the policy change, even when the
-change feels obvious. A single confirmation message is the cost
-of the safer path. Loosening restrictions, modifying hook
-behavior, and editing tool descriptions all carry implications
-the user has the standing to weigh; do not assume.
+Before applying this tool, ask the user a clarifying question about
+the intended scope of the policy change, even when the change feels
+obvious. A single confirmation message is the cost of the safer path.
+Loosening restrictions, modifying hook behavior, and editing tool
+descriptions all carry implications the user has the standing to
+weigh; do not assume.
 
-Target (required):
-Declare \`target: "prod"\` for the production-side edit (policy /
-configuration / description files) and \`target: "test"\` for tests
-that exercise the new policy. The two declarations may land in
-either order — red-first (\`target: "test"\` first, then
-\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
-\`target: "test"\`) — and both may land in the same commit. When
-\`target: "test"\`, \`target_file\` IS the test file and
-\`test_files\` must be empty.
+Required tests: NONE. Policy bytes are prose / configuration — not
+executable; \`test_files\` must be empty. Tests for the *code that
+implements* a policy are forward-declared by that impl kind's own
+paired declaration (e.g. the paired \`edit_permission_logic\` /
+\`target: "prod"\` call that adds the hook handler).
+
+This tool does NOT carry a \`target\` field: policy / configuration
+content does not belong to the prod/test axis. The prod/test target
+flag is required only on the 15 impl tools (14 SQLite-derived +
+\`edit_cosmetic\`).
+
+\`additional_files\` cardinality:
+This tool accepts \`additional_files\` for \`user_confirmed\` and
+\`accepted_artifact\` (the common pattern: a single policy line is
+mirrored across CLAUDE.md, SPEC.md, and \`descriptions.ts\` in one
+declaration — CLAUDE.md §4's verbatim-mirror rule makes this a
+natural batch) and warns for \`direct_observation\` (which usually
+means you are recording what was already there, not asserting a new
+policy line). The \`inference\` and \`speculation\` cells are
+unreachable because the declaration itself is rejected at the (kind,
+provenance) level — policy bytes cannot be moved on the basis of
+inference or speculation.
+
+Rationale: policy bytes are what future sessions read as "this is how
+we work." Conflating policy with inference or speculation lets
+unverified opinion become operating procedure for the next session.
+The workflow is: decisions are made first (\`edit_decision\`); the
+policy bytes are then changed here (\`edit_policy_change\`); code that
+implements the new policy follows in its matching impl kind.
 
 ${PROVENANCE_FOOTER}
 
 ${EXECUTION_STATE_FOOTER}
+
+Provenance combinations (edit_policy_change-specific):
+This tool rejects \`inference\` and \`speculation\` — policy bytes
+must trace back to a confirmed source. The typical provenance is
+\`user_confirmed\` (a policy change confirmed by the user in the
+current session; quote or summarize the confirming statement in the
+rationale) or \`accepted_artifact\` (codifying a previously-accepted
+ADR / RFC / spec section into the policy artifact). \`direct_observation\`
+is accepted when the edit is mechanical mirroring of an
+already-existing policy line between artifacts (e.g. propagating a
+CLAUDE.md change into \`descriptions.ts\` per the verbatim-mirror
+rule), and lands with an audit_warnings note because "observing" a
+policy usually means recording an existing one rather than asserting
+a new one.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -907,7 +968,7 @@ must be empty.
 
 This tool does NOT carry a \`target\` field: workflow / progress
 content does not belong to the prod/test axis. The prod/test target
-flag is required only on the 16 impl tools (15 SQLite-derived +
+flag is required only on the 15 impl tools (14 SQLite-derived +
 \`edit_cosmetic\`).
 
 \`additional_files\` cardinality:
@@ -976,7 +1037,7 @@ Required tests: NONE. Observations are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool rejects \`additional_files\` for \`user_confirmed\` and warns
@@ -1056,7 +1117,7 @@ Required tests: NONE. Proposals are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`accepted_artifact\` and
@@ -1122,7 +1183,7 @@ Required tests: NONE. Decision records are not executable;
 \`test_files\` must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`user_confirmed\` and
@@ -1203,7 +1264,7 @@ Required tests: NONE. Explanations are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`user_confirmed\`,

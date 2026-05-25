@@ -269,7 +269,6 @@ describe("buildReminderContext", () => {
       ["edit_cache_invalidation", "freshness invariant"],
       ["edit_permission_logic", "authorization matrix"],
       ["edit_dependency_config", "build matrix"],
-      ["edit_policy_change", "both sides of the policy line"],
     ];
     for (const [kind, phrase] of cases) {
       const text = buildReminderContext({
@@ -299,7 +298,6 @@ describe("buildReminderContext", () => {
       ["edit_cache_invalidation", "cached answer == authoritative answer"],
       ["edit_permission_logic", "every cell's allow/deny decision"],
       ["edit_dependency_config", "same answer across all supported build variants"],
-      ["edit_policy_change", "documented refusal on the forbidden side"],
     ];
     for (const [kind, phrase] of cases) {
       const text = buildReminderContext({
@@ -342,6 +340,7 @@ describe("buildReminderContext", () => {
       "edit_proposal",
       "edit_decision",
       "edit_explanation",
+      "edit_policy_change",
     ];
     const hallmarks = [
       "defined limits",
@@ -389,7 +388,7 @@ describe("buildReminderContext", () => {
       ["edit_boundary_condition", "prod"],
       ["edit_data_migration", "test"],
       ["edit_external_side_effect", "prod"],
-      ["edit_policy_change", "test"],
+      ["edit_permission_logic", "test"],
     ];
     const forbidden = /§[0-9]+(\.[0-9]+)*( retention| compound| -style)?/;
     for (const [kind, t] of samples) {

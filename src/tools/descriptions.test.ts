@@ -24,6 +24,7 @@ const EXPLICIT_EXEMPT: ReadonlySet<ToolName> = new Set<ToolName>([
   "edit_proposal",
   "edit_decision",
   "edit_explanation",
+  "edit_policy_change",
 ]);
 
 describe("TOOLS_REQUIRING_TEST_FILES coverage", () => {

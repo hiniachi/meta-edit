@@ -123,6 +123,7 @@ describe("twenty-one tools", () => {
       "edit_proposal",
       "edit_decision",
       "edit_explanation",
+      "edit_policy_change",
     ];
     for (const name of exempt) {
       expect(TOOLS_REQUIRING_TEST_FILES).not.toContain(name);
@@ -137,6 +138,7 @@ describe("twenty-one tools", () => {
       "edit_proposal",
       "edit_decision",
       "edit_explanation",
+      "edit_policy_change",
     ]);
     for (const name of TOOL_NAMES) {
       const required = TOOLS_REQUIRING_TEST_FILES.includes(name);
@@ -153,6 +155,7 @@ describe("twenty-one tools", () => {
       "edit_proposal",
       "edit_decision",
       "edit_explanation",
+      "edit_policy_change",
     ];
     for (const name of exempt) {
       expect(TOOL_NAMES).toContain(name);
@@ -160,7 +163,7 @@ describe("twenty-one tools", () => {
   });
 
   it("TOOL_NAMES length equals TOOLS_REQUIRING_TEST_FILES length plus exempt set size", () => {
-    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 6);
+    expect<number>(TOOL_NAMES.length).toBe(TOOLS_REQUIRING_TEST_FILES.length + 7);
   });
 
   it("every description carries the Execution state block", () => {

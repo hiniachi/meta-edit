@@ -77,8 +77,8 @@ export type AdditionalFile = z.infer<typeof AdditionalFileSchema>;
 // honest workflow tool cannot accidentally swamp the audit log with one call.
 export const MAX_ADDITIONAL_FILES = 32;
 
-// Schema-level whitelist for `additional_files`: the 5 workflow-axis
-// kinds may declare the field; the 15 SQLite-derived impl tools and
+// Schema-level whitelist for `additional_files`: the 6 workflow-axis
+// kinds may declare the field; the 14 SQLite-derived impl tools and
 // edit_cosmetic MUST omit it. Acceptance of a particular declaration is
 // then decided cell-wise by `evaluateAdditionalFiles(kind, provenance)`
 // per RFC §3.3.2 — the workflow-axis-rfc replaces v0.5.x's kind-binary
@@ -112,7 +112,9 @@ export type MatrixVerdict = "accept" | "warn" | "reject";
  *     edit_decision + speculation         -> reject
  *     edit_explanation + inference        -> warn
  *     edit_explanation + speculation      -> reject
- *   impl 15 SQLite kinds — all OK (no rejects, no warns; prose
+ *     edit_policy_change + inference      -> reject
+ *     edit_policy_change + speculation    -> reject
+ *   impl 14 SQLite kinds — all OK (no rejects, no warns; prose
  *   obligation is in the description footer)
  *   edit_cosmetic (§3.3.3) —
  *     accept: user_confirmed, accepted_artifact, direct_observation
@@ -134,6 +136,17 @@ export function evaluateKindProvenanceValidity(
     }
     return "accept";
   }
+  if (kind === "edit_policy_change") {
+    // Policy bytes cannot be moved on the basis of inference or
+    // speculation — a policy change must trace back to a confirmed
+    // source (user_confirmed / accepted_artifact) or be the mechanical
+    // mirroring of an existing policy line (direct_observation, which
+    // carries a soft warn via evaluateAdditionalFiles when batched).
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
   if (kind === "edit_explanation") {
     if (provenance === "speculation") return "reject";
     if (provenance === "inference") return "warn";
@@ -143,7 +156,7 @@ export function evaluateKindProvenanceValidity(
     if (provenance === "inference") return "warn";
     return "accept";
   }
-  // edit_progress, edit_proposal, and all 15 impl tools: all combinations OK.
+  // edit_progress, edit_proposal, and all 14 impl tools: all combinations OK.
   return "accept";
 }
 
@@ -157,6 +170,7 @@ export function evaluateKindProvenanceValidity(
  * edit_proposal         warn   acc    warn   warn   acc
  * edit_decision         acc    acc    warn   n/a    n/a
  * edit_explanation      acc    acc    acc    warn   n/a
+ * edit_policy_change    acc    acc    warn   n/a    n/a
  *
  * The n/a cells are unreachable here because §3.3.1 already rejects
  * the (kind, provenance) pair; the caller checks validity first.
@@ -190,6 +204,15 @@ export function evaluateAdditionalFiles(
     if (provenance === "direct_observation") return "accept";
     if (provenance === "inference") return "warn";
     return "reject"; // n/a guard (speculation already rejected by §3.3.1)
+  }
+  if (kind === "edit_policy_change") {
+    // Mirrors edit_decision: the common batch pattern is a single
+    // policy line propagated across CLAUDE.md / SPEC.md /
+    // descriptions.ts (the verbatim-mirror rule).
+    if (provenance === "user_confirmed") return "accept";
+    if (provenance === "accepted_artifact") return "accept";
+    if (provenance === "direct_observation") return "warn";
+    return "reject"; // n/a guard (inference / speculation already rejected by §3.3.1)
   }
   // Impl tools / edit_cosmetic do not accept additional_files at all —
   // they are not in TOOLS_ACCEPTING_ADDITIONAL_FILES. Defensive reject
@@ -306,8 +329,8 @@ export const EditToolRequestSchema = z
     target_file: z.string().min(1),
     rationale: z.string(),
     risk_level: RiskLevelSchema,
-    // `target` is required on the 16 impl tools (15 SQLite-derived +
-    // edit_cosmetic) and absent on the 5 workflow kinds. The schema
+    // `target` is required on the 15 impl tools (14 SQLite-derived +
+    // edit_cosmetic) and absent on the 6 workflow kinds. The schema
     // accepts it as optional; validateRequest enforces presence-on-impl
     // and absence-on-workflow per TOOLS_REQUIRING_TARGET (see
     // descriptions.ts).
@@ -612,11 +635,11 @@ export function validateRequest(
   }
 
   // ---- 3. additional_files acceptance gate -----------------------------
-  // Schema-level: only the 5 workflow-axis kinds (WORKFLOW_TOOLS, mirrored
+  // Schema-level: only the 6 workflow-axis kinds (WORKFLOW_TOOLS, mirrored
   // into TOOLS_ACCEPTING_ADDITIONAL_FILES) may carry `additional_files`.
-  // The 15 SQLite-derived impl tools and edit_cosmetic MUST omit it.
+  // The 14 SQLite-derived impl tools and edit_cosmetic MUST omit it.
   //
-  // Cell-level (RFC §3.3.2): for the 5 workflow kinds, acceptance is
+  // Cell-level (RFC §3.3.2): for the 6 workflow kinds, acceptance is
   // decided by `evaluateAdditionalFiles(kind, provenance)`. The matrix
   // returns "accept" / "warn" / "reject". A reject here fails the whole
   // declaration; a warn records an audit signal and lands.
@@ -625,7 +648,8 @@ export function validateRequest(
       warnings.push(
         `${toolName} does not accept additional_files; this field is reserved ` +
           `for the workflow-axis kinds (edit_observation, edit_proposal, ` +
-          `edit_decision, edit_explanation; edit_progress always rejects). ` +
+          `edit_decision, edit_explanation, edit_policy_change; ` +
+          `edit_progress always rejects). ` +
           `Submit each file as its own typed_edit call.`,
       );
     } else {
@@ -688,7 +712,7 @@ export function validateRequest(
   }
 
   // ---- 6. additional_files path-safety + disk read --------------------
-  // v0.6.0: the 5 workflow-axis kinds may carry additional_files.
+  // v0.6.0 / v0.7.x: the 6 workflow-axis kinds may carry additional_files.
   // Acceptance was decided cell-wise in step 3; this step just resolves
   // the bindings.
   const additionalBindings: ValidatedBinding[] = [];

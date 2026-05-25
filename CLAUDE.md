@@ -24,11 +24,15 @@ edit_dependency_config        edit_policy_change
 edit_docs_only
 ```
 
-The 15 SQLite-derived impl tools plus `edit_cosmetic` (16 total) each
+The 14 SQLite-derived impl tools plus `edit_cosmetic` (15 total) each
 carry a required `target: "prod" | "test"` flag — a single declaration
 covers exactly one target, and prod/test pairs land as two declarations
-of the same tool. The 5 workflow-axis kinds are the exception (documentation / planning content
-has its own surface and the prod/test split does not apply).
+of the same tool. The 6 workflow-axis kinds are the exception
+(documentation / planning / policy content has its own surface and the
+prod/test split does not apply). `edit_policy_change` is the 6th
+workflow-axis kind (v0.7.x reshape, after recognizing that policy bytes
+are prose, not impl — the code that *implements* a new policy routes
+through the matching impl kind, typically `edit_permission_logic`).
 
 > **v0.5.0 reshape**: `edit_test_only_change` was removed and
 > `edit_refactor_only` was narrowed to `edit_cosmetic` (whitespace /
@@ -133,7 +137,7 @@ Five phases. Each phase must work end-to-end before the next.
 
 - `src/tools/descriptions.ts` with all twenty-one descriptions verbatim from `SPEC.md` §4
 - `src/tools/common.ts` with the shared `EditToolRequest` schema using zod (including the required `target: "prod" | "test"` field for the 16 impl tools)
-- Argument validation: non-empty rationale, `target` declared on impl tools and absent on the 5 workflow-axis kinds, non-empty test_files for impl tools (excluding `edit_cosmetic`) when `target: "prod"`, empty test_files when `target: "test"`, target_file inside repo, target_file not in protected paths
+- Argument validation: non-empty rationale, `target` declared on impl tools and absent on the 6 workflow-axis kinds, non-empty test_files for impl tools (excluding `edit_cosmetic`) when `target: "prod"`, empty test_files when `target: "test"`, target_file inside repo, target_file not in protected paths
 - Tests for validation rejection on each rule
 - Verify by connecting Claude Code: all twenty-one tools appear in the tool list with their full descriptions visible
 
