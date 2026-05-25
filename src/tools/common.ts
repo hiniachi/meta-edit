@@ -382,7 +382,7 @@ export type AuditWarning = {
   message: string;
 };
 
-// v0.7.x: the 10 kinds whose blast radius justifies an unconditional
+// v0.9.0: the 10 kinds whose blast radius justifies an unconditional
 // audit warn — every declaration of one of these surfaces in audit
 // summaries for separate review, regardless of provenance / target /
 // execution_state. The warn is a soft signal (no rejection); the
@@ -774,7 +774,7 @@ export function validateRequest(
   }
 
   // ---- 6. additional_files path-safety + disk read --------------------
-  // v0.6.0 / v0.7.x: the 6 workflow-axis kinds may carry additional_files.
+  // v0.6.0 / v0.9.0: the 6 workflow-axis kinds may carry additional_files.
   // Acceptance was decided cell-wise in step 3; this step just resolves
   // the bindings.
   const additionalBindings: ValidatedBinding[] = [];

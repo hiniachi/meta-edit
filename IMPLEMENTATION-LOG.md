@@ -1768,7 +1768,7 @@ mis-marshals non-empty string arrays.
 - PR: feature/spec-derivation-matrix → main, single bundled PR
   per user fiat D14.
 
-## v0.7.x: edit_policy_change → workflow-axis + high_impact_kind_warn
+## v0.9.0: edit_policy_change → workflow-axis + high_impact_kind_warn
 
 (Branch: `claude/policy-change-docs-Ml1JJ`. Two-commit reshape: the
 policy_change reclassification, then the unconditional high-impact

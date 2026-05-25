@@ -1262,7 +1262,7 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
 });
 
 // =====================================================================
-// SPEC §3.5 — high-impact kind unconditional audit warn (v0.7.x)
+// SPEC §3.5 — high-impact kind unconditional audit warn (v0.9.0)
 // =====================================================================
 
 describe("validateRequest — high_impact_kind_warn (SPEC §3.5)", () => {

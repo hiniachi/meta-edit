@@ -47,7 +47,7 @@ rather than treating past-chat artifacts as confirmed decisions.
   dead-code removal, comments that ADD information — none of those are
   cosmetic. Stop and ask if no kind-specific tool fits.
 
-**Workflow-axis (intent-based; v0.6.0 introduced five, v0.7.x added the sixth):**
+**Workflow-axis (intent-based; v0.6.0 introduced five, v0.9.0 added the sixth):**
 - `edit_progress` — session work-log entries: "I implemented X, tried Y,
   Z worked" (typical target: IMPLEMENTATION-LOG.md). Rejects
   `additional_files`.
