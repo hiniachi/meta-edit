@@ -172,6 +172,20 @@ describe("buildReminderContext", () => {
     expect(out).not.toContain("escape procedure");
     expect(out).not.toContain("this is the right move");
   });
+  it("repeating_failure on edit_policy_change adds no execution_state text (workflow-axis kind, not a fix attempt — PR #96 codex review P2)", () => {
+    // After the v0.7.x reshape edit_policy_change is a workflow-axis
+    // kind. A workflow declaration is not a fix attempt, so the
+    // impl-flavored "before stacking another fix" escape text would
+    // be misleading. Mirrors the edit_progress assertion above.
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      kind: "edit_policy_change",
+      executionState: "repeating_failure",
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("stacking another fix");
+    expect(out).not.toContain("this is the right move");
+  });
   it("recovery gives supportive recovery text", () => {
     const out = buildReminderContext({
       phase: "declaration_accepted",
@@ -269,7 +283,6 @@ describe("buildReminderContext", () => {
       ["edit_cache_invalidation", "freshness invariant"],
       ["edit_permission_logic", "authorization matrix"],
       ["edit_dependency_config", "build matrix"],
-      ["edit_policy_change", "both sides of the policy line"],
     ];
     for (const [kind, phrase] of cases) {
       const text = buildReminderContext({
@@ -299,7 +312,6 @@ describe("buildReminderContext", () => {
       ["edit_cache_invalidation", "cached answer == authoritative answer"],
       ["edit_permission_logic", "every cell's allow/deny decision"],
       ["edit_dependency_config", "same answer across all supported build variants"],
-      ["edit_policy_change", "documented refusal on the forbidden side"],
     ];
     for (const [kind, phrase] of cases) {
       const text = buildReminderContext({
@@ -342,6 +354,7 @@ describe("buildReminderContext", () => {
       "edit_proposal",
       "edit_decision",
       "edit_explanation",
+      "edit_policy_change",
     ];
     const hallmarks = [
       "defined limits",
@@ -389,7 +402,7 @@ describe("buildReminderContext", () => {
       ["edit_boundary_condition", "prod"],
       ["edit_data_migration", "test"],
       ["edit_external_side_effect", "prod"],
-      ["edit_policy_change", "test"],
+      ["edit_permission_logic", "test"],
     ];
     const forbidden = /§[0-9]+(\.[0-9]+)*( retention| compound| -style)?/;
     for (const [kind, t] of samples) {

@@ -10,7 +10,7 @@ as an MCP server. It replaces the agent's raw `Edit` / `Write` /
 `MultiEdit` / `NotebookEdit` calls with **twenty-one kind-specific MCP
 tools**. Each tool's description encodes when to use it, when not to
 use it, and what tests must accompany the edit — every typed_edit
-declaration (except `edit_cosmetic` and the five workflow-axis kinds)
+declaration (except `edit_cosmetic` and the six workflow-axis kinds)
 requires non-empty `test_files` when `target = "prod"`, so writing or
 updating tests is a first-class step of every change, not an
 afterthought. The bet is that a structured tool surface plus testing
@@ -23,7 +23,7 @@ direct_observation / inference / speculation) so that a future session
 reading the file picks up the uncertainty directly from the prose,
 rather than treating past-chat artifacts as confirmed decisions.
 
-## Catalog (15 SQLite-derived + edit_cosmetic + 5 workflow)
+## Catalog (14 SQLite-derived + edit_cosmetic + 6 workflow)
 
 **SQLite-derived (kind-specific, modify-mode):**
 - `edit_boundary_condition` — comparison / threshold / limit / range bound changes
@@ -40,7 +40,6 @@ rather than treating past-chat artifacts as confirmed decisions.
 - `edit_cache_invalidation` — cache keys, TTLs, invalidation triggers
 - `edit_permission_logic` — authz, roles, ownership, tenancy, feature flags
 - `edit_dependency_config` — package deps, runtime config, env vars
-- `edit_policy_change` — meta-edit / hooks / CI / build profile flags
 
 **Cosmetic (narrow, non-behavioral):**
 - `edit_cosmetic` — whitespace / formatter output / **information-invariant**
@@ -48,7 +47,7 @@ rather than treating past-chat artifacts as confirmed decisions.
   dead-code removal, comments that ADD information — none of those are
   cosmetic. Stop and ask if no kind-specific tool fits.
 
-**Workflow-axis (intent-based, replaces v0.5.x `edit_docs_only`):**
+**Workflow-axis (intent-based; v0.6.0 introduced five, v0.7.x added the sixth):**
 - `edit_progress` — session work-log entries: "I implemented X, tried Y,
   Z worked" (typical target: IMPLEMENTATION-LOG.md). Rejects
   `additional_files`.
@@ -63,10 +62,15 @@ rather than treating past-chat artifacts as confirmed decisions.
 - `edit_explanation` — reader-facing explanation of shipped behavior
   (README, JSDoc, docs/). Rejects `speculation` provenance. Typical
   target for multilingual README sync via `additional_files`.
+- `edit_policy_change` — the policy bytes themselves: CLAUDE.md, SPEC.md,
+  `src/tools/descriptions.ts`, `.github/workflows/**`, hook policy text,
+  build / release profile flags. The code that *implements* a new policy
+  (hook handler logic, schema validators) routes through the matching
+  impl kind. Rejects `inference` / `speculation` provenance.
 
-## `target: "prod" | "test"` — required on every tool except the 5 workflow kinds
+## `target: "prod" | "test"` — required on every tool except the 6 workflow kinds
 
-Every impl tool (the 15 SQLite-derived + `edit_cosmetic`) carries a
+Every impl tool (the 14 SQLite-derived + `edit_cosmetic`) carries a
 required `target` field:
 
 - `target: "prod"` — the edit lands in production code. `test_files`
@@ -82,9 +86,10 @@ tool** — one with `target: "prod"`, then one with `target: "test"`
 test edit visible inside this kind's audit surface, rather than
 disappearing into a generic test bucket.
 
-The five workflow-axis kinds do NOT carry a `target` field. Workflow
-content (progress / observation / proposal / decision / explanation)
-has its own surface and the prod/test split does not apply.
+The six workflow-axis kinds do NOT carry a `target` field. Workflow
+content (progress / observation / proposal / decision / explanation /
+policy_change) has its own surface and the prod/test split does not
+apply.
 
 ## `provenance` — required on every tool
 
@@ -221,8 +226,9 @@ tool list.
 
 ## `additional_files` (workflow-axis batches)
 
-The five workflow-axis kinds (`edit_progress` / `edit_observation` /
-`edit_proposal` / `edit_decision` / `edit_explanation`) may accept
+The six workflow-axis kinds (`edit_progress` / `edit_observation` /
+`edit_proposal` / `edit_decision` / `edit_explanation` /
+`edit_policy_change`) may accept
 `additional_files` for sweeping multi-file edits (e.g. renaming a
 deprecated API across 10 README references in one declaration). Cap
 is 32 entries. SQLite-derived tools and `edit_cosmetic` MUST NOT

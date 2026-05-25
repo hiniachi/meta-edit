@@ -128,12 +128,13 @@ const KIND_TARGET_OBLIGATIONS: Readonly<Record<string, KindTargetObligations>> =
     prod:
       "You committed to build-matrix tests; this production edit must keep the equivalence \"same answer across all supported build variants\" intact. Tightening a version range is edit_policy_change; widening it requires fresh evidence from each new supported point — do not extrapolate.",
   },
-  edit_policy_change: {
-    test:
-      "This test pins both sides of the policy line — the case just inside the new policy (must be allowed) and the case just outside (must be refused with the documented signal). This is the boundary-value pattern applied to a rule rather than a numeric limit. The impl-mirror smell is exercising only the side of the line that changed (loosening: only the newly-allowed case; tightening: only the newly-forbidden case): that demonstrates the code did the thing, not that the line is in the right place. Cite an accepted_artifact stating the new line.",
-    prod:
-      "You forward-declared both-sides-of-the-line tests; this production edit must keep the documented refusal on the forbidden side and the documented acceptance on the allowed side. The LOOSEN-restriction obligation stays in this tool's description — a loosening without a strong rationale citation means this is the wrong tool. Quiet threshold drift without updating the cited artifact is the canonical failure this kind exists to prevent.",
-  },
+  // edit_policy_change is now a workflow-axis kind (v0.7.x): no
+  // target field, no test_files, no kindObligationsLine. Its reminders
+  // come from kindCueLine (the "confirm user-facing scope" cue) and
+  // the description's load-bearing Fallback-obligation paragraph
+  // ("ask the user before applying"). The reminder that policy-impl
+  // code routes through edit_permission_logic / edit_dependency_config
+  // / edit_api_contract lives in those tools' obligations, not here.
 };
 
 function kindObligationsLine(input: ReminderInput): string | undefined {
@@ -235,6 +236,7 @@ const WORKFLOW_KINDS: ReadonlySet<string> = new Set([
   "edit_proposal",
   "edit_decision",
   "edit_explanation",
+  "edit_policy_change",
 ]);
 const ESCAPE_KINDS: ReadonlySet<string> = new Set([
   "edit_observation",

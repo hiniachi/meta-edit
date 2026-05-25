@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty-one kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 16 impl tools (15 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The 5 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation`) replace v0.5.x's single `edit_docs_only` and classify documentation / planning edits by the intent of the current session moment. Every declaration also carries a required `provenance` field naming the epistemic source of the edit (user_confirmed / accepted_artifact / direct_observation / inference / speculation), so a future session reading the file picks up uncertainty directly from the prose rather than treating past-chat artifacts as confirmed decisions. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty-one kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 15 impl tools (14 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The 6 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` / `edit_policy_change`) classify documentation, planning, and policy edits by the intent of the current session moment — v0.6.0 introduced five replacing v0.5.x's single `edit_docs_only`, and v0.7.x added `edit_policy_change` as the sixth after recognizing that policy bytes are prose, not impl. Every declaration also carries a required `provenance` field naming the epistemic source of the edit (user_confirmed / accepted_artifact / direct_observation / inference / speculation), so a future session reading the file picks up uncertainty directly from the prose rather than treating past-chat artifacts as confirmed decisions. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -90,7 +90,7 @@ Article 7 forbids in MVP. Under the non-adversarial assumption, these
 are honest classification mistakes, not deception, and the cure is
 description-tuning (not detection).
 
-### Article 4 — Surface: twenty-one tools (15 SQLite + edit_cosmetic + 5 workflow)
+### Article 4 — Surface: twenty-one tools (14 SQLite + edit_cosmetic + 6 workflow)
 
 **Fifteen SQLite-derived tools.** Each is one element of a bug-class
 classification grounded in SQLite's testing strategy
@@ -126,17 +126,17 @@ refactor". (See §4 for the verbatim description and the rationale.)
 edit_cosmetic
 ```
 
-**Five workflow-axis tools.** Documentation and planning edits divide
-naturally along an *intent axis*, not a path axis: the same Markdown
-file may pass through different tools across sessions depending on
-whether the current moment is recording work done, observing a
-gotcha, raising a proposal, recording a confirmed decision, or
-explaining shipped behavior to a reader. The five workflow tools
-classify those moments:
+**Six workflow-axis tools.** Documentation, planning, and policy
+edits divide naturally along an *intent axis*, not a path axis: the
+same Markdown file may pass through different tools across sessions
+depending on whether the current moment is recording work done,
+observing a gotcha, raising a proposal, recording a confirmed
+decision, explaining shipped behavior to a reader, or moving a
+policy line. The six workflow tools classify those moments:
 
 ```
 edit_progress      edit_observation      edit_proposal
-edit_decision      edit_explanation
+edit_decision      edit_explanation      edit_policy_change
 ```
 
 `edit_progress` records what was done in this session (typical target:
@@ -146,8 +146,12 @@ outlive the session (typical target: `OBSERVED-FAILURES.md`, in-code
 drafts, and open questions (typical target: `issues/`,
 `docs/plan/**`). `edit_decision` records confirmed decisions (cut
 CHANGELOG, accepted ADR). `edit_explanation` explains shipped
-behavior for a reader (typical target: README, JSDoc, docs/). Acceptance
-of multi-file batching via `additional_files` is cell-wise by
+behavior for a reader (typical target: README, JSDoc, docs/).
+`edit_policy_change` moves the policy bytes themselves (typical
+targets: CLAUDE.md, SPEC.md, `src/tools/descriptions.ts`,
+`.github/workflows/**`, hook policy text); the code that *implements*
+the new policy routes through the matching impl kind. Acceptance of
+multi-file batching via `additional_files` is cell-wise by
 (workflow kind × provenance) per §3.3.2.
 
 (v0.3.1 dropped `edit_create_file` and `edit_create_planning_artifact`:
@@ -169,13 +173,13 @@ read path still surfaces legacy v0.5.x entries in a dedicated
 "legacy: edit_docs_only" bucket in `meta-edit summary` so audit
 continuity is preserved.)
 
-**prod/test target flag.** The 16 impl tools (15 SQLite-derived +
+**prod/test target flag.** The 15 impl tools (14 SQLite-derived +
 `edit_cosmetic`) each require a `target: "prod" | "test"` field on
 every declaration. One declaration covers exactly one target. Pairing
 implementation with its tests is two declarations of the same tool
 (target: "prod" then target: "test"); both may land in the same commit.
 When `target: "test"`, `target_file` IS the test file and `test_files`
-must be empty. The 5 workflow-axis tools do NOT carry `target` —
+must be empty. The 6 workflow-axis tools do NOT carry `target` —
 documentation / workflow content has its own surface and the prod/test
 split does not apply.
 
@@ -302,7 +306,7 @@ the token mechanism without re-opening the constitution.
 
 The granularity follows directly from the surface split in Article 4.
 
-**Sixteen impl tools (15 SQLite-derived + edit_cosmetic) — 1 declaration ≡ 1 target_file.**
+**Fifteen impl tools (14 SQLite-derived + edit_cosmetic) — 1 declaration ≡ 1 target_file.**
 Each call binds exactly one file. A change that spans multiple
 production files is multiple typed_edit calls, each producing its own
 binding. Per-file kind selection IS the unit of cognitive intervention
@@ -311,8 +315,8 @@ weaken the bet. Atomic multi-file rename (today's `apply.ts`
 invariant) is **not** preserved; partial application is recoverable in
 the friendly-AI threat model.
 
-**Five workflow-axis kinds — 1 declaration ≡ 1 or N target_files.**
-The 5 workflow-axis kinds (`edit_progress`, `edit_observation`,
+**Six workflow-axis kinds — 1 declaration ≡ 1 or N target_files.**
+The 6 workflow-axis kinds (`edit_progress`, `edit_observation`,
 `edit_proposal`, `edit_decision`, `edit_explanation`) MAY accept a
 batch of files in one declaration, with acceptance decided cell-wise
 by (kind, provenance) per §3.3.2. When `additional_files` is accepted
@@ -326,7 +330,7 @@ agent toward shell-redirect bypass. `edit_progress` is the lone
 workflow kind that rejects `additional_files` in every cell — a
 progress entry is per-moment and per-place by nature.
 
-**prod/test target flag.** Every impl tool (the 15 SQLite-derived +
+**prod/test target flag.** Every impl tool (the 14 SQLite-derived +
 `edit_cosmetic`) carries a required `target: "prod" | "test"` field.
 One declaration covers exactly one target. The granularity is
 per-declaration: pairing implementation with its tests is two
@@ -426,9 +430,9 @@ Independently:
 PreToolUse hook: deny-bash-write-bypass — blocks shell-route writes (§5.2)
 
 MCP server: meta-edit-mcp
-  ├─ 15 SQLite-discipline-derived impl tools (single-file declarations, prod/test target flag)
+  ├─ 14 SQLite-discipline-derived impl tools (single-file declarations, prod/test target flag)
   ├─ 1 cosmetic tool (single-file declarations, prod/test target flag, narrow scope)
-  ├─ 5 workflow-axis tools (batch declarations of N files cell-wise by (kind, provenance), no target flag)
+  ├─ 6 workflow-axis tools (batch declarations of N files cell-wise by (kind, provenance), no target flag)
   ├─ Every declaration carries a required provenance field (v0.6.0)
   └─ Issues tokens; never writes files
 
@@ -454,11 +458,12 @@ type EditToolRequest = {
   rationale: string;              // 1-3 sentences, non-empty after trim
   risk_level: "low" | "medium" | "high" | "critical";
 
-  // REQUIRED on every impl tool (15 SQLite-derived + edit_cosmetic).
-  // Forbidden on the 5 workflow-axis kinds (edit_progress /
+  // REQUIRED on every impl tool (14 SQLite-derived + edit_cosmetic).
+  // Forbidden on the 6 workflow-axis kinds (edit_progress /
   // edit_observation / edit_proposal / edit_decision /
-  // edit_explanation; documentation / workflow content has its own
-  // surface and the prod/test split does not apply). One declaration
+  // edit_explanation / edit_policy_change; documentation / workflow
+  // / policy content has its own surface and the prod/test split
+  // does not apply). One declaration
   // covers exactly one target. Pair impl with tests via two
   // declarations of the same tool — target: "prod" then target:
   // "test"; both land in the same commit. See §4.
@@ -483,7 +488,7 @@ type EditToolRequest = {
 
   test_files: string[];           // forward declaration; not bound by token
 
-  // ONLY accepted by the 5 workflow-axis kinds (v0.6.0). The 15
+  // ONLY accepted by the 6 workflow-axis kinds (v0.6.0 / v0.7.x). The 14
   // SQLite-derived impl tools and edit_cosmetic MUST omit this field;
   // validation rejects its presence elsewhere. Acceptance of a
   // particular workflow-kind declaration is further refined cell-wise
@@ -562,14 +567,14 @@ The MCP server enforces:
 
 - `target_file` is inside the repo (after `realpath`) and not in protected paths (`.meta-edit/state/**`, `.meta-edit/tmp/**`).
 - `rationale` is non-empty after trim.
-- `target` field presence: required (`"prod"` or `"test"`) on every impl tool (15 SQLite-derived + `edit_cosmetic`); forbidden on the 5 workflow-axis kinds. Validation rejects both omissions and misplacements.
+- `target` field presence: required (`"prod"` or `"test"`) on every impl tool (14 SQLite-derived + `edit_cosmetic`); forbidden on the 6 workflow-axis kinds. Validation rejects both omissions and misplacements.
 - `provenance` field presence: required on every declaration (v0.6.0). The schema is strict (no default). Cell-level acceptance by (kind, provenance) is then decided per §3.3.
 - `execution_state` presence: required on every declaration (v0.7.0). The schema is strict (no default). Cell-level audit by (kind, execution_state) is then decided per §3.4.
-- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 5 workflow-axis kinds regardless.
+- `test_files` cardinality follows the per-tool rule encoded in §4: non-empty for SQLite-derived impl tools when `target: "prod"`; empty when `target: "test"` (target_file IS the test file in that case); empty for `edit_cosmetic` and the 6 workflow-axis kinds regardless.
 - `test_files` entries are **forward declarations**: each path names a test file the agent commits to populating via a paired declaration of the same impl tool with `target: "test"`. The two declarations may land in either order — red-first (`target: "test"` first, declaring the test that must fail; `target: "prod"` second, declaring the production change that turns it green) or green-first (`target: "prod"` first, forward-declaring the test files; `target: "test"` second, populating them). Paths MAY name files that do not yet exist on disk — `test_files` is recorded in the audit log but is NOT bound by the issued token, and the server does not require the path to be a current file. (Issue 0105-test-files-burden / Article 6: the cognitive intervention is the commitment, not the file existence.)
 - The server reads `target_file` from disk and binds `before_sha256 := sha256(disk_content_utf8)`. If the file does not exist yet, the binding is `before_sha256 := sha256("")` — a declaration against a not-yet-created file is valid (v0.4.2). The subsequent native Write creates the file (auto-mkdir-ing parents) and the binding resolves; the hook reads an absent file as `""` so the digests agree.
 - v0.4.2 removed the v0.3.1 "create the empty file first via a `content === ""` Write, THEN declare" requirement. That ordering-sensitive dance was a primary cause of binding failures (issues/2026-05-17-grant-binding-canonicalization-parity.md). The free empty-`content` Write to a non-existent in-repo path is still authorized at the hook (it remains a convenient scaffold), but it is no longer a prerequisite for declaring against a new file.
-- `additional_files` is accepted only for the 5 workflow-axis kinds, with cardinality ≤ 32 (operational hygiene; not a constitutional value). Per-cell acceptance / warning / rejection is further decided by §3.3.2.
+- `additional_files` is accepted only for the 6 workflow-axis kinds, with cardinality ≤ 32 (operational hygiene; not a constitutional value). Per-cell acceptance / warning / rejection is further decided by §3.3.2.
 - Each `file` in `additional_files` is validated under the same path-safety rules as `target_file`.
 - Legacy `edit_docs_only` (v0.5.x and earlier): write path rejects on v0.6.0 as an unknown tool; read path surfaces past entries in a dedicated `legacy:` bucket — see `meta-edit summary` and §6.
 
@@ -625,7 +630,7 @@ validation rule. §3.3.1 is the base cell matrix; §3.3.2 adds an
 `additional_files`-presence axis for workflow kinds; §3.3.3 carves
 out `edit_cosmetic`'s provenance rules; §3.3.4 lints
 `accepted_artifact` citations; §3.3.5 (v0.8.0) adds a `target` axis
-for the 16 impl tools so test-side declarations land in a
+for the 15 impl tools so test-side declarations land in a
 spec-derivation matrix distinct from prod-side.
 
 #### 3.3.1. Base validity of a (kind, provenance) declaration
@@ -637,9 +642,9 @@ edit_observation     OK     OK     OK◎    warn   OK
 edit_proposal        OK     OK     OK     OK     OK◎
 edit_decision        OK◎    OK     OK     REJ    REJ
 edit_explanation     OK     OK◎    OK     warn   REJ
+edit_policy_change   OK◎    OK     OK     REJ    REJ
 
-(15 SQLite-derived + edit_policy_change impl tools): all OK for every
-provenance.
+(14 SQLite-derived impl tools): all OK for every provenance.
 edit_cosmetic: see §3.3.3.
 ```
 
@@ -651,7 +656,7 @@ the declaration outright with a non-empty `warnings` array.
 #### 3.3.2. `additional_files` acceptance matrix
 
 Invoked only when the declaration carries `additional_files` AND the
-kind is one of the 5 workflow-axis kinds:
+kind is one of the 6 workflow-axis kinds:
 
 ```
                      u_c    a_a    d_o    inf    spec
@@ -660,6 +665,7 @@ edit_observation     REJ    warn   warn   warn   warn
 edit_proposal        warn   ACC    warn   warn   ACC
 edit_decision        ACC    ACC    warn   n/a    n/a
 edit_explanation     ACC    ACC    ACC    warn   n/a
+edit_policy_change   ACC    ACC    warn   n/a    n/a
 ```
 
 `ACC` = land without warning; `warn` = land with an `additional_files_warn`
@@ -699,8 +705,8 @@ the declaration.
 
 #### 3.3.5. Kind × target × provenance (test-obligation) matrix (v0.8.0)
 
-The `target` axis is added as a third dimension to §3.3 for the 16
-impl tools (15 SQLite-derived + `edit_cosmetic`). The 5 workflow-axis
+The `target` axis is added as a third dimension to §3.3 for the 15
+impl tools (14 SQLite-derived + `edit_cosmetic`). The 6 workflow-axis
 kinds do not carry `target` and are not affected by this matrix.
 
 The matrix encodes the principle that tests should pin **spec-defined**
@@ -788,7 +794,7 @@ any step ends evaluation immediately; the declaration's `warnings`
 field is populated and no grant is issued.
 
 **Workflow-target guard.** The §3.3.5 evaluation runs only when the
-kind is in `TOOLS_REQUIRING_TARGET` (the 16 impl tools). The MCP
+kind is in `TOOLS_REQUIRING_TARGET` (the 15 impl tools). The MCP
 input schema already excludes `target` from workflow-tool input
 (`registry.ts`'s `workflowToolInputSchema`), but the validator's own
 allow-list check is defense-in-depth: a future schema regression that
@@ -806,15 +812,16 @@ punish honest declaration and incentivize under-declaration (Article 3
 
 ```
                                        normal   repeating_failure   recovery
-15 SQLite-derived impl + edit_cosmetic    OK           warn             OK
+14 SQLite-derived impl + edit_cosmetic    OK           warn             OK
 edit_observation                          OK           OK               OK
 edit_proposal                             OK           OK               OK
 edit_progress                             OK           OK               OK
 edit_decision                             OK           OK               OK
 edit_explanation                          OK           OK               OK
+edit_policy_change                        OK           OK               OK
 ```
 
-The single `warn` group is the 16 impl tools × `repeating_failure`.
+The single `warn` group is the 15 impl tools × `repeating_failure`.
 An impl tool is a *fix attempt*; stacking another fix while the loop
 is acknowledged is the thing to flag. A `warn` records an
 `AuditWarning` with code `execution_state_repeating_failure` into the
@@ -843,6 +850,52 @@ declaration that is a *self-flagged loop signal*. All ride the same
 `audit_warnings` field, but consumers (e.g. a future `meta-edit
 summary` warnings breakdown) MUST group by warning *code*, not pool a
 single warn count across the two meanings.
+
+### 3.5. High-impact kind unconditional audit warn (v0.7.x)
+
+A small set of high-impact kinds carries an *unconditional* audit
+warning on every accepted declaration. Unlike the §3.3 and §3.4
+warnings (which describe mismatches or self-flagged loops), the
+high-impact warn fires regardless of provenance, target, or
+execution_state — it is a fixed surfacing rule, not a judgment about
+the declaration. The point is that every declaration of one of these
+kinds shows up in audit summaries for separate review, because the
+blast radius of getting one wrong is large enough to justify routine
+re-reading.
+
+The set:
+
+```
+edit_policy_change          (policy bytes)
+edit_db_schema              (DDL: tables, columns, constraints)
+edit_data_migration         (production data transforms)
+edit_api_contract           (request/response, status codes)
+edit_permission_logic       (authz / roles / tenancy)
+edit_dependency_config      (package deps, runtime config)
+edit_concurrency            (locks, transactions, async)
+edit_external_side_effect   (emails, billing, events)
+edit_cache_invalidation     (keys, TTLs, invalidation triggers)
+edit_retry_timeout          (retry / backoff / timeout budgets)
+```
+
+The warn records `AuditWarning { code: "high_impact_kind_warn", message: ... }`
+into the edit log's `audit_warnings` field. The message is a single
+generic line referencing the kind; per-kind prose is intentionally
+absent so the set can grow without per-kind maintenance.
+
+**Channel semantics.** The warn lands on accepted declarations only
+(the `audit_warnings` channel is part of `ValidationSuccess`). A
+rejected declaration already carries the rejection signal in
+`warnings`; double-warning it as high-impact would add noise. The
+audit value of the high-impact warn is "a declaration of this kind
+went through" — for rejected attempts, that information is already
+captured by the `RejectedEntry` itself.
+
+**Modifying the set is itself an `edit_policy_change`.** The set is
+small by design and only grows when there is durable evidence (a
+documented failure pattern, an ADR, or a user direction) that an
+additional kind warrants the routine re-read surface. "Convenience"
+is not an acceptable reason to remove a kind.
 
 ### Multi-kind precedence
 
@@ -2274,57 +2327,98 @@ General principles (apply to every edit):
 ### `edit_policy_change`
 
 ```
-Modify the meta-edit configuration itself: hooks, Claude permissions,
-CI configuration, this server's behavior, or the tool descriptions of
-edit_* tools.
+Modify the policy itself — the bytes that DEFINE how this project
+expects code and configuration to be written: hooks' policy text,
+Claude permissions, CI configuration affecting meta-edit, this
+server's tool descriptions, the SPEC sections that the server
+enforces, or the AI-instruction documents (CLAUDE.md, AGENTS.md,
+`.cursor/rules`, etc.) that future sessions read first.
+
+This tool addresses the *declaration* of a policy change — the prose
+/ configuration text that future sessions will read as authoritative.
+The code that *implements* the new policy (e.g. hook logic for a new
+deny rule, schema additions for a new field, CI scripts that
+materialize the new gate) routes through the matching impl kind —
+typically `edit_permission_logic` for hook behavior,
+`edit_api_contract` for argument schemas, `edit_dependency_config`
+for build-tooling pieces — because the spec / policy comes first and
+the implementation follows.
 
 The policy line being moved is defined by the policy text / ADR /
 compliance requirement, not by what the current configuration
 happens to allow.
 
-Use this tool when:
-- Modifying .claude/ configuration
-- Modifying .github/workflows/ files that affect meta-edit
-- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
-- Modifying tool descriptions of edit_* tools themselves
-- Modifying argument schemas or hook behavior
+Use this tool when, and ONLY when, the patch is one of the following:
+- Modifying `.claude/` configuration (the policy text itself)
+- Modifying `.github/workflows/` files that affect meta-edit
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md,
+  `.cursor/rules`, etc.)
+- Modifying tool descriptions of `edit_*` tools themselves
+- Modifying SPEC.md / ADR / RFC sections that define behavior the
+  server enforces
 - Modifying build / release profile flags in package manifests
   (`[profile.release]` in Cargo.toml, `[tool.poetry.build]` in
   pyproject.toml, `scripts` / `engines` mutations in package.json
   that change how the project builds or releases) — see the boundary
   note in edit_dependency_config
 
-Per-target obligations (configuration validity, existing edit log
-backward compatibility, clean-checkout applicability) are delivered
-in the declaration result.
+This tool MUST NOT be used for:
+- Code that *implements* a policy (hook handler logic, schema
+  validators, CI scripts) — those go through the matching impl kind.
+  The policy *text* changes here; the policy *implementation*
+  changes elsewhere
+- Recording that a policy change was decided in this session — that
+  is `edit_decision`, written before the policy bytes change
+- Editing executable production code or test code — use the
+  kind-specific impl tool
 
 Policy changes that LOOSEN restrictions (allowing previously-denied
-operations, reducing test obligations, removing obligations from edit_*
-tool descriptions) require an explicit justification in rationale that
-explains why the loosening is safe. "Convenience" is not an acceptable
-rationale.
+operations, reducing test obligations, removing obligations from
+`edit_*` tool descriptions, removing or weakening hook deny rules)
+require an explicit justification in rationale that explains why the
+loosening is safe. "Convenience" is not an acceptable rationale.
 
-If your change loosens a restriction without a strong justification, do
-not use this tool. Reconsider whether the restriction was correct in the
-first place.
+If your change loosens a restriction without a strong justification,
+do not use this tool. Reconsider whether the restriction was correct
+in the first place.
 
 Fallback obligation:
-Before applying this tool, ask the user a clarifying question
-about the intended scope of the policy change, even when the
-change feels obvious. A single confirmation message is the cost
-of the safer path. Loosening restrictions, modifying hook
-behavior, and editing tool descriptions all carry implications
-the user has the standing to weigh; do not assume.
+Before applying this tool, ask the user a clarifying question about
+the intended scope of the policy change, even when the change feels
+obvious. A single confirmation message is the cost of the safer path.
+Loosening restrictions, modifying hook behavior, and editing tool
+descriptions all carry implications the user has the standing to
+weigh; do not assume.
 
-Target (required):
-Declare `target: "prod"` for the production-side edit (policy /
-configuration / description files) and `target: "test"` for tests
-that exercise the new policy. The two declarations may land in
-either order — red-first (`target: "test"` first, then
-`target: "prod"`) or green-first (`target: "prod"` first, then
-`target: "test"`) — and both may land in the same commit. When
-`target: "test"`, `target_file` IS the test file and
-`test_files` must be empty.
+Required tests: NONE. Policy bytes are prose / configuration — not
+executable; `test_files` must be empty. Tests for the *code that
+implements* a policy are forward-declared by that impl kind's own
+paired declaration (e.g. the paired `edit_permission_logic` /
+`target: "prod"` call that adds the hook handler).
+
+This tool does NOT carry a `target` field: policy / configuration
+content does not belong to the prod/test axis. The prod/test target
+flag is required only on the 15 impl tools (14 SQLite-derived +
+`edit_cosmetic`).
+
+`additional_files` cardinality:
+This tool accepts `additional_files` for `user_confirmed` and
+`accepted_artifact` (the common pattern: a single policy line is
+mirrored across CLAUDE.md, SPEC.md, and `descriptions.ts` in one
+declaration — CLAUDE.md §4's verbatim-mirror rule makes this a
+natural batch) and warns for `direct_observation` (which usually
+means you are recording what was already there, not asserting a new
+policy line). The `inference` and `speculation` cells are
+unreachable because the declaration itself is rejected at the (kind,
+provenance) level — policy bytes cannot be moved on the basis of
+inference or speculation.
+
+Rationale: policy bytes are what future sessions read as "this is how
+we work." Conflating policy with inference or speculation lets
+unverified opinion become operating procedure for the next session.
+The workflow is: decisions are made first (`edit_decision`); the
+policy bytes are then changed here (`edit_policy_change`); code that
+implements the new policy follows in its matching impl kind.
 
 Provenance (required):
 Declare the epistemic source of this edit. Pick exactly one of:
@@ -2374,6 +2468,20 @@ recovery may be skipped if the escape observation immediately resolves
 the failure; repeating_failure is never skipped on the path into
 recovery.
 
+Provenance combinations (edit_policy_change-specific):
+This tool rejects `inference` and `speculation` — policy bytes
+must trace back to a confirmed source. The typical provenance is
+`user_confirmed` (a policy change confirmed by the user in the
+current session; quote or summarize the confirming statement in the
+rationale) or `accepted_artifact` (codifying a previously-accepted
+ADR / RFC / spec section into the policy artifact). `direct_observation`
+is accepted when the edit is mechanical mirroring of an
+already-existing policy line between artifacts (e.g. propagating a
+CLAUDE.md change into `descriptions.ts` per the verbatim-mirror
+rule), and lands with an audit_warnings note because "observing" a
+policy usually means recording an existing one rather than asserting
+a new one.
+
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.
@@ -2381,13 +2489,22 @@ General principles (apply to every edit):
 
 ---
 
-### Five workflow-axis kinds (v0.6.0)
+### Six workflow-axis kinds (v0.6.0 / v0.7.x)
 
-The five workflow-axis kinds replace v0.5.x's single `edit_docs_only`.
-They classify documentation / planning edits by the intent of the
-current session moment, not by file path. Verbatim text mirrors
-`src/tools/descriptions.ts` per CLAUDE.md §4; here we summarize the
-shapes and route to that file for the full bodies.
+v0.6.0 introduced five workflow-axis kinds that replaced v0.5.x's
+single `edit_docs_only` — `edit_progress`, `edit_observation`,
+`edit_proposal`, `edit_decision`, `edit_explanation`. v0.7.x added
+`edit_policy_change` as the sixth after recognizing that policy
+bytes are prose (CLAUDE.md / SPEC / `descriptions.ts` / hooks'
+policy text), not impl: the code that *implements* a new policy
+routes through the matching impl kind (e.g. `edit_permission_logic`
+for a new hook deny rule). The reshaped `edit_policy_change` (full
+body just above) joins the five v0.6.0 kinds in this section.
+
+They classify documentation / planning / policy edits by the intent
+of the current session moment, not by file path. Verbatim text
+mirrors `src/tools/descriptions.ts` per CLAUDE.md §4; here we
+summarize the shapes and route to that file for the full bodies.
 
 Every workflow-axis tool:
 
@@ -2748,7 +2865,7 @@ Each declaration produces two records:
  "token":"met_20260502_a3f9b2..."}
 ```
 
-The `target` field is `"prod"` or `"test"` on every impl tool (15 SQLite-derived + `edit_cosmetic`) and is omitted on the 5 workflow-axis kinds (workflow content has its own surface; the prod/test split does not apply). Persisting it on the issued record is what lets audit analysis split a kind's edits into prod vs test rather than collapsing them into a single bucket. The paired `target: "test"` declaration appears as its own `issued` record with the same `kind` and a different `target_file`.
+The `target` field is `"prod"` or `"test"` on every impl tool (14 SQLite-derived + `edit_cosmetic`) and is omitted on the 6 workflow-axis kinds (workflow content has its own surface; the prod/test split does not apply). Persisting it on the issued record is what lets audit analysis split a kind's edits into prod vs test rather than collapsing them into a single bucket. The paired `target: "test"` declaration appears as its own `issued` record with the same `kind` and a different `target_file`.
 
 v0.6.0 additions: the issued record carries a required `provenance`
 field naming the epistemic source of the edit (one of `user_confirmed`
@@ -2766,10 +2883,21 @@ v0.7.0 additions: the issued record also carries an optional
 `"recovery"`). The field is optional on read — pre-0.7.0 entries omit
 it and are bucketed as `(pre-0.7.0)` in `meta-edit summary`'s
 execution_state breakdown. When `execution_state: "repeating_failure"`
-is declared on any of the 16 impl tools, the `audit_warnings` array
+is declared on any of the 15 impl tools, the `audit_warnings` array
 gains the code `execution_state_repeating_failure` (see §3.4). This
 code is semantically distinct from the §3.3 mismatch codes —
 consumers MUST group by warning code, not pool a single warn count.
+
+v0.7.x additions: the `audit_warnings` array can also carry the code
+`high_impact_kind_warn` (see §3.5). This warn fires unconditionally
+on every accepted declaration of a high-impact kind
+(`edit_policy_change`, `edit_db_schema`, `edit_data_migration`,
+`edit_api_contract`, `edit_permission_logic`,
+`edit_dependency_config`, `edit_concurrency`,
+`edit_external_side_effect`, `edit_cache_invalidation`,
+`edit_retry_timeout`). It is a fixed surfacing rule, not a judgment;
+consumers MUST keep it in its own group, separate from the §3.3
+mismatch codes and the §3.4 loop signal.
 
 The CLI exposes a `--provenance` filter on `meta-edit log` (e.g.
 `meta-edit log --provenance speculation,inference` to inspect every
