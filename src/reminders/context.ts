@@ -128,7 +128,7 @@ const KIND_TARGET_OBLIGATIONS: Readonly<Record<string, KindTargetObligations>> =
     prod:
       "You committed to build-matrix tests; this production edit must keep the equivalence \"same answer across all supported build variants\" intact. Tightening a version range is edit_policy_change; widening it requires fresh evidence from each new supported point — do not extrapolate.",
   },
-  // edit_policy_change is now a workflow-axis kind (v0.7.x): no
+  // edit_policy_change is now a workflow-axis kind (v0.9.0): no
   // target field, no test_files, no kindObligationsLine. Its reminders
   // come from kindCueLine (the "confirm user-facing scope" cue) and
   // the description's load-bearing Fallback-obligation paragraph

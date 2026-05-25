@@ -1,6 +1,6 @@
 # meta-edit Specification
 
-`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty-one kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 15 impl tools (14 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The 6 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` / `edit_policy_change`) classify documentation, planning, and policy edits by the intent of the current session moment — v0.6.0 introduced five replacing v0.5.x's single `edit_docs_only`, and v0.7.x added `edit_policy_change` as the sixth after recognizing that policy bytes are prose, not impl. Every declaration also carries a required `provenance` field naming the epistemic source of the edit (user_confirmed / accepted_artifact / direct_observation / inference / speculation), so a future session reading the file picks up uncertainty directly from the prose rather than treating past-chat artifacts as confirmed decisions. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
+`meta-edit` is an MCP server that replaces the AI coding agent's raw file editing tools (`Edit` / `Write` / `MultiEdit`) with a family of twenty-one kind-specific edit tools. Each tool's description encodes when to use it, when not to use it, and what tests must accompany the edit. The 15 impl tools (14 SQLite-derived + `edit_cosmetic`) additionally carry a required `target: "prod" | "test"` flag — prod/test pairs land as two declarations of the same tool, keeping test edits visible inside their kind's audit surface. The 6 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation` / `edit_policy_change`) classify documentation, planning, and policy edits by the intent of the current session moment — v0.6.0 introduced five replacing v0.5.x's single `edit_docs_only`, and v0.9.0 added `edit_policy_change` as the sixth after recognizing that policy bytes are prose, not impl. Every declaration also carries a required `provenance` field naming the epistemic source of the edit (user_confirmed / accepted_artifact / direct_observation / inference / speculation), so a future session reading the file picks up uncertainty directly from the prose rather than treating past-chat artifacts as confirmed decisions. The bet is that **a deliberately structured tool surface, with testing obligations encoded in tool descriptions, is enough to change AI editing behavior** — without diff classification, mutation testing, or any verification machinery.
 
 This document is the complete specification of `meta-edit`.
 
@@ -488,7 +488,7 @@ type EditToolRequest = {
 
   test_files: string[];           // forward declaration; not bound by token
 
-  // ONLY accepted by the 6 workflow-axis kinds (v0.6.0 / v0.7.x). The 14
+  // ONLY accepted by the 6 workflow-axis kinds (v0.6.0 / v0.9.0). The 14
   // SQLite-derived impl tools and edit_cosmetic MUST omit this field;
   // validation rejects its presence elsewhere. Acceptance of a
   // particular workflow-kind declaration is further refined cell-wise
@@ -851,7 +851,7 @@ declaration that is a *self-flagged loop signal*. All ride the same
 summary` warnings breakdown) MUST group by warning *code*, not pool a
 single warn count across the two meanings.
 
-### 3.5. High-impact kind unconditional audit warn (v0.7.x)
+### 3.5. High-impact kind unconditional audit warn (v0.9.0)
 
 A small set of high-impact kinds carries an *unconditional* audit
 warning on every accepted declaration. Unlike the §3.3 and §3.4
@@ -2489,11 +2489,11 @@ General principles (apply to every edit):
 
 ---
 
-### Six workflow-axis kinds (v0.6.0 / v0.7.x)
+### Six workflow-axis kinds (v0.6.0 / v0.9.0)
 
 v0.6.0 introduced five workflow-axis kinds that replaced v0.5.x's
 single `edit_docs_only` — `edit_progress`, `edit_observation`,
-`edit_proposal`, `edit_decision`, `edit_explanation`. v0.7.x added
+`edit_proposal`, `edit_decision`, `edit_explanation`. v0.9.0 added
 `edit_policy_change` as the sixth after recognizing that policy
 bytes are prose (CLAUDE.md / SPEC / `descriptions.ts` / hooks'
 policy text), not impl: the code that *implements* a new policy
@@ -2888,7 +2888,7 @@ gains the code `execution_state_repeating_failure` (see §3.4). This
 code is semantically distinct from the §3.3 mismatch codes —
 consumers MUST group by warning code, not pool a single warn count.
 
-v0.7.x additions: the `audit_warnings` array can also carry the code
+v0.9.0 additions: the `audit_warnings` array can also carry the code
 `high_impact_kind_warn` (see §3.5). This warn fires unconditionally
 on every accepted declaration of a high-impact kind
 (`edit_policy_change`, `edit_db_schema`, `edit_data_migration`,

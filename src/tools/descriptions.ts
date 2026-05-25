@@ -51,7 +51,7 @@ export const TOOL_NAMES = [
   "edit_permission_logic",
   "edit_dependency_config",
   // 6 workflow-axis kinds — v0.6.0 introduced 5 (replacing edit_docs_only);
-  // v0.7.x added edit_policy_change as the 6th after the observation that
+  // v0.9.0 added edit_policy_change as the 6th after the observation that
   // policy bytes are prose, not impl: the spec / policy text changes here,
   // the code that implements the new policy routes through the matching
   // impl kind (e.g. edit_permission_logic for hook logic changes).
@@ -81,7 +81,7 @@ export const TOOL_TITLES = Object.freeze(
 ) as Readonly<Record<ToolName, string>>;
 
 // Workflow kinds — v0.6.0 introduced 5 (replacing edit_docs_only);
-// v0.7.x added edit_policy_change as the 6th after recognizing that
+// v0.9.0 added edit_policy_change as the 6th after recognizing that
 // policy bytes are prose, not impl. Workflow kinds carry no `target`
 // field (the prod/test axis does not apply to documentation / workflow
 // artifacts) and require no `test_files` (workflow content is not

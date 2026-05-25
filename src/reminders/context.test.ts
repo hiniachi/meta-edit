@@ -173,7 +173,7 @@ describe("buildReminderContext", () => {
     expect(out).not.toContain("this is the right move");
   });
   it("repeating_failure on edit_policy_change adds no execution_state text (workflow-axis kind, not a fix attempt — PR #96 codex review P2)", () => {
-    // After the v0.7.x reshape edit_policy_change is a workflow-axis
+    // After the v0.9.0 reshape edit_policy_change is a workflow-axis
     // kind. A workflow declaration is not a fix attempt, so the
     // impl-flavored "before stacking another fix" escape text would
     // be misleading. Mirrors the edit_progress assertion above.
