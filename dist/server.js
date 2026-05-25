@@ -3049,6 +3049,9 @@ var require_data = __commonJS((exports, module) => {
 var require_utils = __commonJS((exports, module) => {
   var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
   var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
+  var isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu);
+  var isUnreserved = RegExp.prototype.test.bind(/^[\da-z\-._~]$/iu);
+  var isPathCharacter = RegExp.prototype.test.bind(/^[\da-z\-._~!$&'()*+,;=:@/]$/iu);
   function stringArrayToHexStripped(input) {
     let acc = "";
     let code = 0;
@@ -3242,27 +3245,77 @@ var require_utils = __commonJS((exports, module) => {
     }
     return output.join("");
   }
-  function normalizeComponentEncoding(component, esc2) {
-    const func = esc2 !== true ? escape : unescape;
-    if (component.scheme !== undefined) {
-      component.scheme = func(component.scheme);
+  var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
+  var HOST_DELIM_RE = /[@/?#:]/g;
+  var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
+  function reescapeHostDelimiters(host, isIP) {
+    const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
+    re.lastIndex = 0;
+    return host.replace(re, (ch) => HOST_DELIMS[ch]);
+  }
+  function normalizePercentEncoding(input, decodeUnreserved = false) {
+    if (input.indexOf("%") === -1) {
+      return input;
     }
-    if (component.userinfo !== undefined) {
-      component.userinfo = func(component.userinfo);
+    let output = "";
+    for (let i = 0;i < input.length; i++) {
+      if (input[i] === "%" && i + 2 < input.length) {
+        const hex = input.slice(i + 1, i + 3);
+        if (isHexPair(hex)) {
+          const normalizedHex = hex.toUpperCase();
+          const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
+          if (decodeUnreserved && isUnreserved(decoded)) {
+            output += decoded;
+          } else {
+            output += "%" + normalizedHex;
+          }
+          i += 2;
+          continue;
+        }
+      }
+      output += input[i];
     }
-    if (component.host !== undefined) {
-      component.host = func(component.host);
+    return output;
+  }
+  function normalizePathEncoding(input) {
+    let output = "";
+    for (let i = 0;i < input.length; i++) {
+      if (input[i] === "%" && i + 2 < input.length) {
+        const hex = input.slice(i + 1, i + 3);
+        if (isHexPair(hex)) {
+          const normalizedHex = hex.toUpperCase();
+          const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
+          if (decoded !== "." && isUnreserved(decoded)) {
+            output += decoded;
+          } else {
+            output += "%" + normalizedHex;
+          }
+          i += 2;
+          continue;
+        }
+      }
+      if (isPathCharacter(input[i])) {
+        output += input[i];
+      } else {
+        output += escape(input[i]);
+      }
     }
-    if (component.path !== undefined) {
-      component.path = func(component.path);
+    return output;
+  }
+  function escapePreservingEscapes(input) {
+    let output = "";
+    for (let i = 0;i < input.length; i++) {
+      if (input[i] === "%" && i + 2 < input.length) {
+        const hex = input.slice(i + 1, i + 3);
+        if (isHexPair(hex)) {
+          output += "%" + hex.toUpperCase();
+          i += 2;
+          continue;
+        }
+      }
+      output += escape(input[i]);
     }
-    if (component.query !== undefined) {
-      component.query = func(component.query);
-    }
-    if (component.fragment !== undefined) {
-      component.fragment = func(component.fragment);
-    }
-    return component;
+    return output;
   }
   function recomposeAuthority(component) {
     const uriTokens = [];
@@ -3277,7 +3330,7 @@ var require_utils = __commonJS((exports, module) => {
         if (ipV6res.isIPV6 === true) {
           host = `[${ipV6res.escapedHost}]`;
         } else {
-          host = component.host;
+          host = reescapeHostDelimiters(host, false);
         }
       }
       uriTokens.push(host);
@@ -3291,7 +3344,10 @@ var require_utils = __commonJS((exports, module) => {
   module.exports = {
     nonSimpleDomain,
     recomposeAuthority,
-    normalizeComponentEncoding,
+    reescapeHostDelimiters,
+    normalizePercentEncoding,
+    normalizePathEncoding,
+    escapePreservingEscapes,
     removeDotSegments,
     isIPv4,
     isUUID,
@@ -3476,11 +3532,11 @@ var require_schemes = __commonJS((exports, module) => {
 
 // node_modules/fast-uri/index.js
 var require_fast_uri = __commonJS((exports, module) => {
-  var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = require_utils();
+  var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
   var { SCHEMES, getSchemeHandler } = require_schemes();
   function normalize(uri, options) {
     if (typeof uri === "string") {
-      uri = serialize(parse5(uri, options), options);
+      uri = normalizeString(uri, options);
     } else if (typeof uri === "object") {
       uri = parse5(serialize(uri, options), options);
     }
@@ -3546,19 +3602,9 @@ var require_fast_uri = __commonJS((exports, module) => {
     return target;
   }
   function equal(uriA, uriB, options) {
-    if (typeof uriA === "string") {
-      uriA = unescape(uriA);
-      uriA = serialize(normalizeComponentEncoding(parse5(uriA, options), true), { ...options, skipEscape: true });
-    } else if (typeof uriA === "object") {
-      uriA = serialize(normalizeComponentEncoding(uriA, true), { ...options, skipEscape: true });
-    }
-    if (typeof uriB === "string") {
-      uriB = unescape(uriB);
-      uriB = serialize(normalizeComponentEncoding(parse5(uriB, options), true), { ...options, skipEscape: true });
-    } else if (typeof uriB === "object") {
-      uriB = serialize(normalizeComponentEncoding(uriB, true), { ...options, skipEscape: true });
-    }
-    return uriA.toLowerCase() === uriB.toLowerCase();
+    const normalizedA = normalizeComparableURI(uriA, options);
+    const normalizedB = normalizeComparableURI(uriB, options);
+    return normalizedA !== undefined && normalizedB !== undefined && normalizedA.toLowerCase() === normalizedB.toLowerCase();
   }
   function serialize(cmpts, opts) {
     const component = {
@@ -3584,12 +3630,12 @@ var require_fast_uri = __commonJS((exports, module) => {
       schemeHandler.serialize(component, options);
     if (component.path !== undefined) {
       if (!options.skipEscape) {
-        component.path = escape(component.path);
+        component.path = escapePreservingEscapes(component.path);
         if (component.scheme !== undefined) {
           component.path = component.path.split("%3A").join(":");
         }
       } else {
-        component.path = unescape(component.path);
+        component.path = normalizePercentEncoding(component.path);
       }
     }
     if (options.reference !== "suffix" && component.scheme) {
@@ -3624,7 +3670,16 @@ var require_fast_uri = __commonJS((exports, module) => {
     return uriTokens.join("");
   }
   var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
-  function parse5(uri, opts) {
+  function getParseError(parsed, matches) {
+    if (matches[2] !== undefined && parsed.path && parsed.path[0] !== "/") {
+      return 'URI path must start with "/" when authority is present.';
+    }
+    if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
+      return "URI port is malformed.";
+    }
+    return;
+  }
+  function parseWithStatus(uri, opts) {
     const options = Object.assign({}, opts);
     const parsed = {
       scheme: undefined,
@@ -3635,6 +3690,7 @@ var require_fast_uri = __commonJS((exports, module) => {
       query: undefined,
       fragment: undefined
     };
+    let malformedAuthorityOrPort = false;
     let isIP = false;
     if (options.reference === "suffix") {
       if (options.scheme) {
@@ -3654,6 +3710,11 @@ var require_fast_uri = __commonJS((exports, module) => {
       parsed.fragment = matches[8];
       if (isNaN(parsed.port)) {
         parsed.port = matches[5];
+      }
+      const parseError = getParseError(parsed, matches);
+      if (parseError !== undefined) {
+        parsed.error = parsed.error || parseError;
+        malformedAuthorityOrPort = true;
       }
       if (parsed.host) {
         const ipv4result = isIPv4(parsed.host);
@@ -3693,14 +3754,18 @@ var require_fast_uri = __commonJS((exports, module) => {
             parsed.scheme = unescape(parsed.scheme);
           }
           if (parsed.host !== undefined) {
-            parsed.host = unescape(parsed.host);
+            parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP);
           }
         }
         if (parsed.path) {
-          parsed.path = escape(unescape(parsed.path));
+          parsed.path = normalizePathEncoding(parsed.path);
         }
         if (parsed.fragment) {
-          parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
+          try {
+            parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
+          } catch {
+            parsed.error = parsed.error || "URI malformed";
+          }
         }
       }
       if (schemeHandler && schemeHandler.parse) {
@@ -3709,7 +3774,29 @@ var require_fast_uri = __commonJS((exports, module) => {
     } else {
       parsed.error = parsed.error || "URI can not be parsed.";
     }
-    return parsed;
+    return { parsed, malformedAuthorityOrPort };
+  }
+  function parse5(uri, opts) {
+    return parseWithStatus(uri, opts).parsed;
+  }
+  function normalizeString(uri, opts) {
+    return normalizeStringWithStatus(uri, opts).normalized;
+  }
+  function normalizeStringWithStatus(uri, opts) {
+    const { parsed, malformedAuthorityOrPort } = parseWithStatus(uri, opts);
+    return {
+      normalized: malformedAuthorityOrPort ? uri : serialize(parsed, opts),
+      malformedAuthorityOrPort
+    };
+  }
+  function normalizeComparableURI(uri, opts) {
+    if (typeof uri === "string") {
+      const { normalized, malformedAuthorityOrPort } = normalizeStringWithStatus(uri, opts);
+      return malformedAuthorityOrPort ? undefined : normalized;
+    }
+    if (typeof uri === "object") {
+      return serialize(uri, opts);
+    }
   }
   var fastUri = {
     SCHEMES,
@@ -16551,12 +16638,12 @@ var TOOL_NAMES = [
   "edit_cache_invalidation",
   "edit_permission_logic",
   "edit_dependency_config",
-  "edit_policy_change",
   "edit_progress",
   "edit_observation",
   "edit_proposal",
   "edit_decision",
-  "edit_explanation"
+  "edit_explanation",
+  "edit_policy_change"
 ];
 var TOOL_TITLES = Object.freeze(Object.fromEntries(TOOL_NAMES.map((name) => [
   name,
@@ -16567,7 +16654,8 @@ var WORKFLOW_TOOLS = [
   "edit_observation",
   "edit_proposal",
   "edit_decision",
-  "edit_explanation"
+  "edit_explanation",
+  "edit_policy_change"
 ];
 var TOOLS_REQUIRING_TEST_FILES = TOOL_NAMES.filter((name) => name !== "edit_cosmetic" && !WORKFLOW_TOOLS.includes(name));
 var TOOLS_REQUIRING_TARGET = TOOL_NAMES.filter((name) => !WORKFLOW_TOOLS.includes(name));
@@ -17238,61 +17326,116 @@ ${EXECUTION_STATE_FOOTER}
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
 - When the intent or boundary is unclear, stop and ask the user — do not invent a workaround.`,
-  edit_policy_change: `Modify the meta-edit configuration itself: hooks, Claude permissions,
-CI configuration, this server's behavior, or the tool descriptions of
-edit_* tools.
+  edit_policy_change: `Modify the policy itself — the bytes that DEFINE how this project
+expects code and configuration to be written: hooks' policy text,
+Claude permissions, CI configuration affecting meta-edit, this
+server's tool descriptions, the SPEC sections that the server
+enforces, or the AI-instruction documents (CLAUDE.md, AGENTS.md,
+\`.cursor/rules\`, etc.) that future sessions read first.
+
+This tool addresses the *declaration* of a policy change — the prose
+/ configuration text that future sessions will read as authoritative.
+The code that *implements* the new policy (e.g. hook logic for a new
+deny rule, schema additions for a new field, CI scripts that
+materialize the new gate) routes through the matching impl kind —
+typically \`edit_permission_logic\` for hook behavior,
+\`edit_api_contract\` for argument schemas, \`edit_dependency_config\`
+for build-tooling pieces — because the spec / policy comes first and
+the implementation follows.
 
 The policy line being moved is defined by the policy text / ADR /
 compliance requirement, not by what the current configuration
 happens to allow.
 
-Use this tool when:
-- Modifying .claude/ configuration
-- Modifying .github/workflows/ files that affect meta-edit
-- Modifying AI-instruction files (CLAUDE.md, AGENTS.md, .cursor/rules, etc.)
-- Modifying tool descriptions of edit_* tools themselves
-- Modifying argument schemas or hook behavior
+Use this tool when, and ONLY when, the patch is one of the following:
+- Modifying \`.claude/\` configuration (the policy text itself)
+- Modifying \`.github/workflows/\` files that affect meta-edit
+- Modifying AI-instruction files (CLAUDE.md, AGENTS.md,
+  \`.cursor/rules\`, etc.)
+- Modifying tool descriptions of \`edit_*\` tools themselves
+- Modifying SPEC.md / ADR / RFC sections that define behavior the
+  server enforces
 - Modifying build / release profile flags in package manifests
   (\`[profile.release]\` in Cargo.toml, \`[tool.poetry.build]\` in
   pyproject.toml, \`scripts\` / \`engines\` mutations in package.json
   that change how the project builds or releases) — see the boundary
   note in edit_dependency_config
 
-Per-target obligations (configuration validity, existing edit log
-backward compatibility, clean-checkout applicability) are delivered
-in the declaration result.
+This tool MUST NOT be used for:
+- Code that *implements* a policy (hook handler logic, schema
+  validators, CI scripts) — those go through the matching impl kind.
+  The policy *text* changes here; the policy *implementation*
+  changes elsewhere
+- Recording that a policy change was decided in this session — that
+  is \`edit_decision\`, written before the policy bytes change
+- Editing executable production code or test code — use the
+  kind-specific impl tool
 
 Policy changes that LOOSEN restrictions (allowing previously-denied
-operations, reducing test obligations, removing obligations from edit_*
-tool descriptions) require an explicit justification in rationale that
-explains why the loosening is safe. "Convenience" is not an acceptable
-rationale.
+operations, reducing test obligations, removing obligations from
+\`edit_*\` tool descriptions, removing or weakening hook deny rules)
+require an explicit justification in rationale that explains why the
+loosening is safe. "Convenience" is not an acceptable rationale.
 
-If your change loosens a restriction without a strong justification, do
-not use this tool. Reconsider whether the restriction was correct in the
-first place.
+If your change loosens a restriction without a strong justification,
+do not use this tool. Reconsider whether the restriction was correct
+in the first place.
 
 Fallback obligation:
-Before applying this tool, ask the user a clarifying question
-about the intended scope of the policy change, even when the
-change feels obvious. A single confirmation message is the cost
-of the safer path. Loosening restrictions, modifying hook
-behavior, and editing tool descriptions all carry implications
-the user has the standing to weigh; do not assume.
+Before applying this tool, ask the user a clarifying question about
+the intended scope of the policy change, even when the change feels
+obvious. A single confirmation message is the cost of the safer path.
+Loosening restrictions, modifying hook behavior, and editing tool
+descriptions all carry implications the user has the standing to
+weigh; do not assume.
 
-Target (required):
-Declare \`target: "prod"\` for the production-side edit (policy /
-configuration / description files) and \`target: "test"\` for tests
-that exercise the new policy. The two declarations may land in
-either order — red-first (\`target: "test"\` first, then
-\`target: "prod"\`) or green-first (\`target: "prod"\` first, then
-\`target: "test"\`) — and both may land in the same commit. When
-\`target: "test"\`, \`target_file\` IS the test file and
-\`test_files\` must be empty.
+Required tests: NONE. Policy bytes are prose / configuration — not
+executable; \`test_files\` must be empty. Tests for the *code that
+implements* a policy are forward-declared by that impl kind's own
+paired declaration (e.g. the paired \`edit_permission_logic\` /
+\`target: "prod"\` call that adds the hook handler).
+
+This tool does NOT carry a \`target\` field: policy / configuration
+content does not belong to the prod/test axis. The prod/test target
+flag is required only on the 15 impl tools (14 SQLite-derived +
+\`edit_cosmetic\`).
+
+\`additional_files\` cardinality:
+This tool accepts \`additional_files\` for \`user_confirmed\` and
+\`accepted_artifact\` (the common pattern: a single policy line is
+mirrored across CLAUDE.md, SPEC.md, and \`descriptions.ts\` in one
+declaration — CLAUDE.md §4's verbatim-mirror rule makes this a
+natural batch) and warns for \`direct_observation\` (which usually
+means you are recording what was already there, not asserting a new
+policy line). The \`inference\` and \`speculation\` cells are
+unreachable because the declaration itself is rejected at the (kind,
+provenance) level — policy bytes cannot be moved on the basis of
+inference or speculation.
+
+Rationale: policy bytes are what future sessions read as "this is how
+we work." Conflating policy with inference or speculation lets
+unverified opinion become operating procedure for the next session.
+The workflow is: decisions are made first (\`edit_decision\`); the
+policy bytes are then changed here (\`edit_policy_change\`); code that
+implements the new policy follows in its matching impl kind.
 
 ${PROVENANCE_FOOTER}
 
 ${EXECUTION_STATE_FOOTER}
+
+Provenance combinations (edit_policy_change-specific):
+This tool rejects \`inference\` and \`speculation\` — policy bytes
+must trace back to a confirmed source. The typical provenance is
+\`user_confirmed\` (a policy change confirmed by the user in the
+current session; quote or summarize the confirming statement in the
+rationale) or \`accepted_artifact\` (codifying a previously-accepted
+ADR / RFC / spec section into the policy artifact). \`direct_observation\`
+is accepted when the edit is mechanical mirroring of an
+already-existing policy line between artifacts (e.g. propagating a
+CLAUDE.md change into \`descriptions.ts\` per the verbatim-mirror
+rule), and lands with an audit_warnings note because "observing" a
+policy usually means recording an existing one rather than asserting
+a new one.
 
 General principles (apply to every edit):
 - Keep the code simple. Prefer three similar lines over a premature abstraction.
@@ -17333,7 +17476,7 @@ must be empty.
 
 This tool does NOT carry a \`target\` field: workflow / progress
 content does not belong to the prod/test axis. The prod/test target
-flag is required only on the 16 impl tools (15 SQLite-derived +
+flag is required only on the 15 impl tools (14 SQLite-derived +
 \`edit_cosmetic\`).
 
 \`additional_files\` cardinality:
@@ -17401,7 +17544,7 @@ Required tests: NONE. Observations are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool rejects \`additional_files\` for \`user_confirmed\` and warns
@@ -17480,7 +17623,7 @@ Required tests: NONE. Proposals are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`accepted_artifact\` and
@@ -17545,7 +17688,7 @@ Required tests: NONE. Decision records are not executable;
 \`test_files\` must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`user_confirmed\` and
@@ -17625,7 +17768,7 @@ Required tests: NONE. Explanations are not executable; \`test_files\`
 must be empty.
 
 This tool does NOT carry a \`target\` field. The prod/test target flag
-is required only on the 16 impl tools.
+is required only on the 15 impl tools.
 
 \`additional_files\` cardinality:
 This tool accepts \`additional_files\` for \`user_confirmed\`,
@@ -17922,6 +18065,12 @@ function evaluateKindProvenanceValidity(kind, provenance) {
     }
     return "accept";
   }
+  if (kind === "edit_policy_change") {
+    if (provenance === "inference" || provenance === "speculation") {
+      return "reject";
+    }
+    return "accept";
+  }
   if (kind === "edit_explanation") {
     if (provenance === "speculation")
       return "reject";
@@ -17968,6 +18117,15 @@ function evaluateAdditionalFiles(kind, provenance) {
     if (provenance === "direct_observation")
       return "accept";
     if (provenance === "inference")
+      return "warn";
+    return "reject";
+  }
+  if (kind === "edit_policy_change") {
+    if (provenance === "user_confirmed")
+      return "accept";
+    if (provenance === "accepted_artifact")
+      return "accept";
+    if (provenance === "direct_observation")
       return "warn";
     return "reject";
   }
@@ -18028,6 +18186,18 @@ var EditToolRequestSchema = exports_external.object({
   test_files: exports_external.preprocess(coerceJsonStringToArray("test_files"), exports_external.array(exports_external.string())),
   additional_files: exports_external.preprocess(coerceJsonStringToArray("additional_files"), exports_external.array(AdditionalFileSchema).max(MAX_ADDITIONAL_FILES)).optional()
 }).strict();
+var HIGH_IMPACT_KINDS = [
+  "edit_policy_change",
+  "edit_db_schema",
+  "edit_data_migration",
+  "edit_api_contract",
+  "edit_permission_logic",
+  "edit_dependency_config",
+  "edit_concurrency",
+  "edit_external_side_effect",
+  "edit_cache_invalidation",
+  "edit_retry_timeout"
+];
 function sha256Hex(content) {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
@@ -18063,6 +18233,12 @@ function validateRequest(toolName, request, ctx) {
       message: `execution_state="repeating_failure" was declared on ${toolName}, ` + `an implementation fix attempt. This is a self-flagged loop signal, ` + `not a mismatch — group it by code, separate from §3.3 warnings. ` + `The escape move is edit_observation or edit_proposal: record the ` + `failure (reproduction conditions, recent changes, hypotheses) ` + `before stacking another fix.`
     });
   }
+  if (HIGH_IMPACT_KINDS.includes(toolName)) {
+    auditWarnings.push({
+      code: "high_impact_kind_warn",
+      message: `kind=${toolName} is high-impact: the warn is unconditional so ` + `every declaration of this kind surfaces in audit summaries for ` + `separate review. No action required; the declaration lands ` + `(this signal does not block). Re-read the rationale, the ` + `obligation footer, and any LOOSEN-restriction implications ` + `once before the paired hook applies the patch.`
+    });
+  }
   if (TOOLS_REQUIRING_TARGET.includes(toolName) && request.target !== undefined) {
     const tsVerdict = evaluateTargetSpecDerivation(toolName, request.target, request.provenance);
     if (tsVerdict === "reject") {
@@ -18095,7 +18271,7 @@ function validateRequest(toolName, request, ctx) {
   }
   if (request.additional_files !== undefined) {
     if (!TOOLS_ACCEPTING_ADDITIONAL_FILES.includes(toolName)) {
-      warnings.push(`${toolName} does not accept additional_files; this field is reserved ` + `for the workflow-axis kinds (edit_observation, edit_proposal, ` + `edit_decision, edit_explanation; edit_progress always rejects). ` + `Submit each file as its own typed_edit call.`);
+      warnings.push(`${toolName} does not accept additional_files; this field is reserved ` + `for the workflow-axis kinds (edit_observation, edit_proposal, ` + `edit_decision, edit_explanation, edit_policy_change; ` + `edit_progress always rejects). ` + `Submit each file as its own typed_edit call.`);
     } else {
       const afVerdict = evaluateAdditionalFiles(toolName, request.provenance);
       if (afVerdict === "reject") {
@@ -18451,10 +18627,6 @@ var KIND_TARGET_OBLIGATIONS = {
   edit_dependency_config: {
     test: "This test pins behavior across the dependency / build matrix — the same answer must come out regardless of optimization level, signed-char default, endianness, or word size. The impl-mirror smell is a test that succeeds on the developer's exact toolchain version and silently depends on it: that pins the dev environment, not the supported environment. Cite an accepted_artifact (supported-versions table, MSRV / engines policy, build-matrix CI config); for a pinned dependency version, include at least the boundary versions of the supported range.",
     prod: 'You committed to build-matrix tests; this production edit must keep the equivalence "same answer across all supported build variants" intact. Tightening a version range is edit_policy_change; widening it requires fresh evidence from each new supported point — do not extrapolate.'
-  },
-  edit_policy_change: {
-    test: "This test pins both sides of the policy line — the case just inside the new policy (must be allowed) and the case just outside (must be refused with the documented signal). This is the boundary-value pattern applied to a rule rather than a numeric limit. The impl-mirror smell is exercising only the side of the line that changed (loosening: only the newly-allowed case; tightening: only the newly-forbidden case): that demonstrates the code did the thing, not that the line is in the right place. Cite an accepted_artifact stating the new line.",
-    prod: "You forward-declared both-sides-of-the-line tests; this production edit must keep the documented refusal on the forbidden side and the documented acceptance on the allowed side. The LOOSEN-restriction obligation stays in this tool's description — a loosening without a strong rationale citation means this is the wrong tool. Quiet threshold drift without updating the cited artifact is the canonical failure this kind exists to prevent."
   }
 };
 function kindObligationsLine(input) {
@@ -18637,7 +18809,8 @@ var AuditWarningEntrySchema = exports_external.object({
     "additional_files_warn",
     "citation_lint_missing",
     "execution_state_repeating_failure",
-    "target_spec_derivation_warn"
+    "target_spec_derivation_warn",
+    "high_impact_kind_warn"
   ]),
   message: exports_external.string()
 });
@@ -19665,4 +19838,4 @@ export {
   createServer
 };
 
-//# debugId=C66744E7A9A7974764756E2164756E21
+//# debugId=EDF5B4BD8970771164756E2164756E21
