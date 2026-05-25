@@ -377,9 +377,34 @@ export type AuditWarning = {
     | "additional_files_warn"
     | "citation_lint_missing"
     | "execution_state_repeating_failure"
-    | "target_spec_derivation_warn";
+    | "target_spec_derivation_warn"
+    | "high_impact_kind_warn";
   message: string;
 };
+
+// v0.7.x: the 10 kinds whose blast radius justifies an unconditional
+// audit warn — every declaration of one of these surfaces in audit
+// summaries for separate review, regardless of provenance / target /
+// execution_state. The warn is a soft signal (no rejection); the
+// declaration still issues a grant. The set covers edit_policy_change
+// (policy bytes) plus the SQLite-derived kinds whose failure modes are
+// hardest to undo: schema changes, data migrations, API contracts,
+// authz logic, runtime dependency / build config, concurrency,
+// external side effects, cache invalidation, retry / timeout budgets.
+// Per SPEC §3.5 (high-impact kind audit). Adding a kind to this set
+// is itself an edit_policy_change.
+export const HIGH_IMPACT_KINDS: readonly ToolName[] = [
+  "edit_policy_change",
+  "edit_db_schema",
+  "edit_data_migration",
+  "edit_api_contract",
+  "edit_permission_logic",
+  "edit_dependency_config",
+  "edit_concurrency",
+  "edit_external_side_effect",
+  "edit_cache_invalidation",
+  "edit_retry_timeout",
+];
 
 export type EditToolResult = {
   /**
@@ -552,6 +577,29 @@ export function validateRequest(
         `The escape move is edit_observation or edit_proposal: record the ` +
         `failure (reproduction conditions, recent changes, hypotheses) ` +
         `before stacking another fix.`,
+    });
+  }
+
+  // ---- 1d-bis. high-impact kind unconditional warn (SPEC §3.5) --------
+  // Every accepted declaration of a high-impact kind (HIGH_IMPACT_KINDS)
+  // carries an unconditional audit warning so the declaration surfaces
+  // in audit summaries for separate review. The warn is independent of
+  // provenance / target / execution_state — it fires on every accepted
+  // declaration of one of the listed kinds. (Rejected declarations
+  // already carry the rejection signal in `warnings`; this channel
+  // drops on rejection per the ValidationSuccess-only auditWarnings
+  // contract.) The message is a single generic line so the set can
+  // grow without per-kind prose maintenance.
+  if (HIGH_IMPACT_KINDS.includes(toolName)) {
+    auditWarnings.push({
+      code: "high_impact_kind_warn",
+      message:
+        `kind=${toolName} is high-impact: the warn is unconditional so ` +
+        `every declaration of this kind surfaces in audit summaries for ` +
+        `separate review. No action required; the declaration lands ` +
+        `(this signal does not block). Re-read the rationale, the ` +
+        `obligation footer, and any LOOSEN-restriction implications ` +
+        `once before the paired hook applies the patch.`,
     });
   }
 

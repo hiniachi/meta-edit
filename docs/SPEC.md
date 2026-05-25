@@ -851,6 +851,52 @@ declaration that is a *self-flagged loop signal*. All ride the same
 summary` warnings breakdown) MUST group by warning *code*, not pool a
 single warn count across the two meanings.
 
+### 3.5. High-impact kind unconditional audit warn (v0.7.x)
+
+A small set of high-impact kinds carries an *unconditional* audit
+warning on every accepted declaration. Unlike the §3.3 and §3.4
+warnings (which describe mismatches or self-flagged loops), the
+high-impact warn fires regardless of provenance, target, or
+execution_state — it is a fixed surfacing rule, not a judgment about
+the declaration. The point is that every declaration of one of these
+kinds shows up in audit summaries for separate review, because the
+blast radius of getting one wrong is large enough to justify routine
+re-reading.
+
+The set:
+
+```
+edit_policy_change          (policy bytes)
+edit_db_schema              (DDL: tables, columns, constraints)
+edit_data_migration         (production data transforms)
+edit_api_contract           (request/response, status codes)
+edit_permission_logic       (authz / roles / tenancy)
+edit_dependency_config      (package deps, runtime config)
+edit_concurrency            (locks, transactions, async)
+edit_external_side_effect   (emails, billing, events)
+edit_cache_invalidation     (keys, TTLs, invalidation triggers)
+edit_retry_timeout          (retry / backoff / timeout budgets)
+```
+
+The warn records `AuditWarning { code: "high_impact_kind_warn", message: ... }`
+into the edit log's `audit_warnings` field. The message is a single
+generic line referencing the kind; per-kind prose is intentionally
+absent so the set can grow without per-kind maintenance.
+
+**Channel semantics.** The warn lands on accepted declarations only
+(the `audit_warnings` channel is part of `ValidationSuccess`). A
+rejected declaration already carries the rejection signal in
+`warnings`; double-warning it as high-impact would add noise. The
+audit value of the high-impact warn is "a declaration of this kind
+went through" — for rejected attempts, that information is already
+captured by the `RejectedEntry` itself.
+
+**Modifying the set is itself an `edit_policy_change`.** The set is
+small by design and only grows when there is durable evidence (a
+documented failure pattern, an ADR, or a user direction) that an
+additional kind warrants the routine re-read surface. "Convenience"
+is not an acceptable reason to remove a kind.
+
 ### Multi-kind precedence
 
 If a single change might fit multiple tools, prefer the more specific:
@@ -2841,6 +2887,17 @@ is declared on any of the 15 impl tools, the `audit_warnings` array
 gains the code `execution_state_repeating_failure` (see §3.4). This
 code is semantically distinct from the §3.3 mismatch codes —
 consumers MUST group by warning code, not pool a single warn count.
+
+v0.7.x additions: the `audit_warnings` array can also carry the code
+`high_impact_kind_warn` (see §3.5). This warn fires unconditionally
+on every accepted declaration of a high-impact kind
+(`edit_policy_change`, `edit_db_schema`, `edit_data_migration`,
+`edit_api_contract`, `edit_permission_logic`,
+`edit_dependency_config`, `edit_concurrency`,
+`edit_external_side_effect`, `edit_cache_invalidation`,
+`edit_retry_timeout`). It is a fixed surfacing rule, not a judgment;
+consumers MUST keep it in its own group, separate from the §3.3
+mismatch codes and the §3.4 loop signal.
 
 The CLI exposes a `--provenance` filter on `meta-edit log` (e.g.
 `meta-edit log --provenance speculation,inference` to inspect every

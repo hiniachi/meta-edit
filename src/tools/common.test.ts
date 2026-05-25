@@ -1212,3 +1212,152 @@ describe("validateRequest — kind × provenance integration (v0.6.0)", () => {
     }
   });
 });
+
+// =====================================================================
+// SPEC §3.5 — high-impact kind unconditional audit warn (v0.7.x)
+// =====================================================================
+
+describe("validateRequest — high_impact_kind_warn (SPEC §3.5)", () => {
+  let tmpRoot3: string;
+  let ctx3: () => ValidationContext;
+
+  beforeEach(() => {
+    tmpRoot3 = makeTmpRoot("hik");
+    fs.mkdirSync(path.join(tmpRoot3, ".git"));
+    ctx3 = () => ({ repoRoot: tmpRoot3 });
+  });
+
+  afterEach(() => {
+    cleanTmpRoot(tmpRoot3);
+  });
+
+  it("fires on every accepted declaration of a high-impact impl kind", () => {
+    // Use edit_permission_logic as a representative impl kind in the set.
+    writeFileIn(tmpRoot3, "src/authz.ts", "x\n");
+    const r = validateRequest("edit_permission_logic", {
+      target_file: "src/authz.ts",
+      rationale: "tighten role deny per ADR-007",
+      risk_level: "high",
+      target: "prod",
+      provenance: "accepted_artifact",
+      execution_state: "normal",
+      test_files: ["src/authz.test.ts"],
+    }, ctx3());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const warns = r.auditWarnings.filter((w) => w.code === "high_impact_kind_warn");
+      expect(warns.length).toBe(1);
+      const message = warns[0]?.message ?? "";
+      expect(message).toContain("edit_permission_logic");
+      expect(message).toContain("high-impact");
+    }
+  });
+
+  it("fires on edit_policy_change (the workflow-axis high-impact kind)", () => {
+    writeFileIn(tmpRoot3, "CLAUDE.md", "x\n");
+    const r = validateRequest("edit_policy_change", {
+      target_file: "CLAUDE.md",
+      rationale: "the user confirmed this in the current session: <quote>",
+      risk_level: "medium",
+      provenance: "user_confirmed",
+      execution_state: "normal",
+      test_files: [],
+    }, ctx3());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "high_impact_kind_warn"),
+      ).toBe(true);
+    }
+  });
+
+  it("does NOT fire on a non-high-impact kind (e.g. edit_boundary_condition)", () => {
+    writeFileIn(tmpRoot3, "src/foo.ts", "x\n");
+    const r = validateRequest("edit_boundary_condition", {
+      target_file: "src/foo.ts",
+      rationale: "tighten upper bound per SPEC.md §4",
+      risk_level: "low",
+      target: "prod",
+      provenance: "accepted_artifact",
+      execution_state: "normal",
+      test_files: ["src/foo.test.ts"],
+    }, ctx3());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(
+        r.auditWarnings.some((w) => w.code === "high_impact_kind_warn"),
+      ).toBe(false);
+    }
+  });
+
+  it("fires regardless of provenance / target / execution_state for a high-impact kind", () => {
+    // Same kind, three different (provenance, execution_state, target)
+    // shapes — the warn fires on each. The point of "unconditional" is
+    // that the audit surface does not depend on the other axes.
+    writeFileIn(tmpRoot3, "src/schema.sql", "x\n");
+    writeFileIn(tmpRoot3, "src/schema.test.ts", "x\n");
+    const shapes: Array<Partial<EditToolRequest>> = [
+      { provenance: "user_confirmed", execution_state: "normal", target: "prod" },
+      { provenance: "accepted_artifact", execution_state: "recovery", target: "prod" },
+      { provenance: "direct_observation", execution_state: "normal", target: "test", target_file: "src/schema.test.ts", test_files: [] },
+    ];
+    for (const shape of shapes) {
+      const r = validateRequest("edit_db_schema", {
+        target_file: "src/schema.sql",
+        rationale: "add NOT NULL column with backfill per ADR-009",
+        risk_level: "high",
+        provenance: "user_confirmed",
+        execution_state: "normal",
+        target: "prod",
+        test_files: ["src/schema.test.ts"],
+        ...shape,
+      } as EditToolRequest, ctx3());
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(
+          r.auditWarnings.some((w) => w.code === "high_impact_kind_warn"),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("the full high-impact set: each kind fires the warn on at least one accepted declaration", () => {
+    // Drift guard: if HIGH_IMPACT_KINDS gains or loses a member, this
+    // test surfaces it. The (target_file, target, test_files, prov)
+    // shape is the simplest acceptance for each kind.
+    const cases: Array<[ToolName, "prod" | undefined]> = [
+      ["edit_policy_change", undefined],
+      ["edit_db_schema", "prod"],
+      ["edit_data_migration", "prod"],
+      ["edit_api_contract", "prod"],
+      ["edit_permission_logic", "prod"],
+      ["edit_dependency_config", "prod"],
+      ["edit_concurrency", "prod"],
+      ["edit_external_side_effect", "prod"],
+      ["edit_cache_invalidation", "prod"],
+      ["edit_retry_timeout", "prod"],
+    ];
+    writeFileIn(tmpRoot3, "src/a.ts", "x\n");
+    writeFileIn(tmpRoot3, "src/a.test.ts", "x\n");
+    writeFileIn(tmpRoot3, "CLAUDE.md", "x\n");
+    for (const [kind, target] of cases) {
+      const isPolicy = kind === "edit_policy_change";
+      const r = validateRequest(kind, {
+        target_file: isPolicy ? "CLAUDE.md" : "src/a.ts",
+        rationale: "tighten/extend per ADR-001",
+        risk_level: "high",
+        provenance: "accepted_artifact",
+        execution_state: "normal",
+        ...(target !== undefined ? { target } : {}),
+        test_files: isPolicy ? [] : ["src/a.test.ts"],
+      } as EditToolRequest, ctx3());
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(
+          r.auditWarnings.some((w) => w.code === "high_impact_kind_warn"),
+          `kind=${kind} did not emit high_impact_kind_warn`,
+        ).toBe(true);
+      }
+    }
+  });
+});

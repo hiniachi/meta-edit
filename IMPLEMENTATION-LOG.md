@@ -1767,3 +1767,76 @@ mis-marshals non-empty string arrays.
   code addition; description and reminder reshape).
 - PR: feature/spec-derivation-matrix → main, single bundled PR
   per user fiat D14.
+
+## v0.7.x: edit_policy_change → workflow-axis + high_impact_kind_warn
+
+(Branch: `claude/policy-change-docs-Ml1JJ`. Two-commit reshape: the
+policy_change reclassification, then the unconditional high-impact
+audit warn.)
+
+- Completed: 2026-05-25
+- What works:
+  - `edit_policy_change` moved from the 15 SQLite-derived impl group
+    into WORKFLOW_TOOLS as the sixth workflow-axis kind. The category
+    mistake addressed: policy bytes (CLAUDE.md / SPEC.md / `descriptions.ts`
+    / hook policy text / AI-instruction files) are prose, not impl;
+    code that *implements* a new policy (hook handler logic, schema
+    validators, CI scripts) already routes through the matching impl
+    kind (`edit_permission_logic`, `edit_api_contract`,
+    `edit_dependency_config`). Two-target prod/test obligation removed
+    along with `test_files` requirement; load-bearing prose preserved
+    (Fallback obligation, LOOSEN-restrictions rationale, provenance
+    rejection on inference/speculation).
+  - `additional_files` matrix cell added for `edit_policy_change`,
+    mirroring `edit_decision`: `user_confirmed` / `accepted_artifact`
+    accept (the CLAUDE.md ↔ SPEC.md ↔ `descriptions.ts` verbatim-mirror
+    batch pattern); `direct_observation` warn; `inference` /
+    `speculation` unreachable.
+  - SPEC §4 verbatim mirror of the reshaped description body per
+    CLAUDE.md §4. Numerology cascaded: 16 → 15 impl tools, 5 → 6
+    workflow-axis kinds, total stays at 21 (Article 4 header, §3.3.1
+    matrix, §3.3.2 matrix, §3.3.5 scope, §3.4 audit table, §6
+    persistence note, architecture diagram, schema comment block,
+    Five-workflow-axis section heading and prose). Skill onboarding
+    `skills/typed-edit-onboarding/SKILL.md` updated with the new
+    catalog.
+  - SPEC §3.5 added: `high_impact_kind_warn`. Unconditional audit
+    warning on every accepted declaration of the 10 high-impact
+    kinds — `edit_policy_change` plus 9 SQLite-derived
+    (`edit_db_schema`, `edit_data_migration`, `edit_api_contract`,
+    `edit_permission_logic`, `edit_dependency_config`,
+    `edit_concurrency`, `edit_external_side_effect`,
+    `edit_cache_invalidation`, `edit_retry_timeout`). Generic
+    message text; rationale: the audit surface should not depend on
+    provenance / target / execution_state for kinds whose blast
+    radius is large enough to justify routine re-reading. Channel:
+    `audit_warnings` on accepted declarations only; rejected
+    declarations already carry the rejection signal in `warnings`.
+    Modifying the set is itself an `edit_policy_change`.
+  - `AuditWarning` union extended with `"high_impact_kind_warn"`
+    code in both `src/tools/common.ts` and the runtime zod schema
+    `AuditWarningEntrySchema` in `src/state/edit-log.ts`.
+- Known issues: none observed. The high-impact warn lands on every
+  declaration of the listed kinds, so audit log volume in those kinds
+  is +1 entry per declaration — by design.
+- Tests added:
+  - `common.test.ts`: 2 evaluateKindProvenanceValidity cells
+    (`edit_policy_change` accept/reject), 1 evaluateAdditionalFiles
+    cell coverage (`edit_policy_change` 5 provenances), 5
+    high_impact_kind_warn tests (representative impl, policy_change,
+    negative case, shape-independence, full-set drift guard).
+  - `descriptions.test.ts`, `registry.test.ts`, `context.test.ts`:
+    classification arrays and assertion lists updated to mirror the
+    new workflow-axis membership.
+  - Total new: 7. Suite: 935/935 green; `tsc --noEmit` clean.
+- Spec deviations: none. The reshape is purely about which group
+  policy_change sits in; no validation logic changed shape, and the
+  unconditional warn rides the existing `audit_warnings` channel
+  (no new return-path plumbing).
+- Dogfood: this work was implemented in a cloud Claude Code session
+  where the meta-edit MCP server is not registered; edits went
+  through raw Edit per session necessity. Honoring the typed-surface
+  invariant in spirit by mirroring the verbatim spec-and-source
+  change, splitting the work into two commits per logical concern,
+  and asking the user before applying (the policy_change fallback
+  obligation) is the load-bearing mitigation per CLAUDE.md §9.
