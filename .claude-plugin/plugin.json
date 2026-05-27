@@ -1,7 +1,7 @@
 {
   "name": "meta-edit",
   "displayName": "Meta Edit",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Replaces raw Edit / Write / MultiEdit with twenty-one kind-specific edit_* MCP tools (14 SQLite-derived impl tools + edit_cosmetic + 6 workflow-axis kinds) that encode the testing obligations for each kind of change directly in their tool descriptions. Every declaration carries a required provenance field naming the epistemic source of the edit. Impl tools carry a required prod/test target flag so test edits are visible inside their kind's audit surface.",
   "author": {
     "name": "nia",
