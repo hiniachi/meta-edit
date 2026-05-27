@@ -839,6 +839,14 @@ describe("tool.execute.after write-allowed reminder", () => {
     // The target="prod" wording must NOT appear — would indicate target
     // was dropped or hard-coded.
     expect(afterOutput.output).not.toContain("production-code");
+    // Codex review PR #99 (LOW): also pin that targetFollowupLine — the
+    // multi-sentence "This test edit should exercise this same kind of
+    // change..." prose — does NOT appear on write_allowed. Without this
+    // assertion, reintroducing the targetFollowupLine on write_allowed
+    // for target="test" would slip through the trim regression net.
+    expect(afterOutput.output).not.toContain(
+      "This test edit should exercise this same kind of change",
+    );
   });
 
   it("emits the execution_state=\"recovery\" cue (distinct from repeating_failure)", async () => {

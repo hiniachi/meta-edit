@@ -438,4 +438,46 @@ describe("buildReminderContext", () => {
       expect(text).not.toMatch(forbidden);
     }
   });
+
+  // Codex review PR #99 (LOW): the write_allowed trim suppresses the
+  // positive provenance branches (user_confirmed / accepted_artifact /
+  // direct_observation), so the existing tests only assert their absence
+  // at write_allowed. Pin that they STILL appear on declaration_accepted
+  // — otherwise a future regression dropping declaration-time provenance
+  // would pass undetected.
+  it("declaration_accepted retains the positive provenance restate for user_confirmed / accepted_artifact / direct_observation", () => {
+    const cases: Array<[string, string]> = [
+      ["user_confirmed", "Because the provenance is user-confirmed"],
+      ["accepted_artifact", "Because the provenance is accepted artifact"],
+      ["direct_observation", "Because the provenance is direct observation"],
+    ];
+    for (const [provenance, phrase] of cases) {
+      const text = buildReminderContext({
+        phase: "declaration_accepted",
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance,
+        targetFile: "src/range.ts",
+        declaredTestFiles: ["tests/range.test.ts"],
+      });
+      expect(text).toContain(phrase);
+    }
+  });
+
+  // Codex review PR #99 (LOW): defensive branch coverage for
+  // executionStateLine — repeating_failure with kind=undefined returns
+  // undefined (src/reminders/context.ts ~line 260-262). Existing tests
+  // cover unknown state and impl write_allowed paths but not this
+  // early-return.
+  it("repeating_failure with no kind emits no execution_state text (defensive early-return)", () => {
+    const out = buildReminderContext({
+      phase: "declaration_accepted",
+      executionState: "repeating_failure",
+      // kind omitted on purpose
+      targetFile: "src/x.ts",
+    });
+    expect(out).not.toContain("escape procedure");
+    expect(out).not.toContain("this is the right move");
+    expect(out).not.toContain("landed while");
+  });
 });

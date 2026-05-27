@@ -597,12 +597,13 @@ metadata remain valid and consumable; `execution_state` is optional on
 read (pre-0.7.0 grant files simply omit it).
 
 The result also carries a `next_action` field whenever a token is
-issued. It first reminds the agent that the next native `Edit` /
-`Write` / `MultiEdit` call against the bound file(s) will be authorized
-automatically by the deny-raw-edit hook; the agent passes no extra
-parameters. It then appends a `meta-edit reminder:` block generated
+issued. The field opens with a `meta-edit reminder:` block generated
 from the declaration's `kind`, `target`, `provenance`, and
-forward-declared `test_files`. The block is intentionally written as a
+forward-declared `test_files`, and closes with a short parenthetical
+reminding the agent that the next native `Edit` / `Write` /
+`MultiEdit` call against the bound file(s) will be authorized
+automatically by the deny-raw-edit hook (the agent passes no extra
+parameters). The block is intentionally written as a
 short action cue rather than a policy lecture: kind-specific lines seed
 the next likely action (`test`, `check`, `run`, `compare`,
 `distinguish`, ...), `target: "test"` reminds the agent that a TDD red
