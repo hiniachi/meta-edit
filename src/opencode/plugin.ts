@@ -17,7 +17,7 @@
 //     "plugin": ["@hiniachi/meta-edit/opencode"]
 //   }
 //
-// The MCP entry brings the seventeen typed_edit tool descriptions into
+// The MCP entry brings the twenty-one typed_edit tool descriptions into
 // the agent's context (unchanged from Claude Code). The plugin entry is
 // THIS file — its job is to deny opencode's raw `edit` / `write` /
 // `apply_patch` and dangerous `bash` while the typed surface lights up.
