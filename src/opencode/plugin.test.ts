@@ -783,4 +783,141 @@ describe("tool.execute.after write-allowed reminder", () => {
 
     expect(afterOutput.output).toContain("landed while");
   });
+
+  it("emits the target=\"test\" kindObligationsLine wording, distinct from target=\"prod\"", async () => {
+    // src/reminders/context.ts:48-49 (test) vs :50-51 (prod): the same
+    // kind has different obligation text by target. This pins that the
+    // opencode forwarding path passes `target` through to the reminder
+    // builder, not just `kind` — without it, both targets would render
+    // identical text.
+    writeFile("src/boundary.test.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260527_0010",
+      binding: [{ file: "src/boundary.test.ts", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "test",
+        provenance: "accepted_artifact",
+        target_file: "src/boundary.test.ts",
+        test_files: [],
+      },
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-test-target" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/boundary.test.ts"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-test-target" },
+      afterOutput,
+    );
+
+    // Test-side obligation text (context.ts:48-49).
+    expect(afterOutput.output).toContain("pins the defined limits of the boundary");
+    // Prod-side obligation text (context.ts:50-51) must NOT appear — would
+    // indicate target was dropped or hard-coded to "prod".
+    expect(afterOutput.output).not.toContain(
+      "must keep the defined limits stable on both sides",
+    );
+  });
+
+  it("emits the execution_state=\"recovery\" cue (distinct from repeating_failure)", async () => {
+    // src/reminders/context.ts:249-256 — the recovery branch is kind-
+    // agnostic and produces its own cue, separate from repeating_failure
+    // (already covered above). Pins that opencode forwards every value
+    // of execution_state, not only repeating_failure.
+    writeFile("src/recover.ts", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260527_0011",
+      binding: [{ file: "src/recover.ts", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_boundary_condition",
+        target: "prod",
+        provenance: "accepted_artifact",
+        execution_state: "recovery",
+        target_file: "src/recover.ts",
+        test_files: ["src/recover.test.ts"],
+      },
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-recover" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "src/recover.ts"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-recover" },
+      afterOutput,
+    );
+
+    expect(afterOutput.output).toContain("I am in recovery");
+    // The repeating_failure branch's distinguishing phrase must NOT appear.
+    expect(afterOutput.output).not.toContain("landed while");
+  });
+
+  it("skips kindObligationsLine for workflow-axis kinds (edit_policy_change)", async () => {
+    // src/reminders/context.ts:140-146 — workflow-axis kinds have no
+    // entry in KIND_TARGET_OBLIGATIONS and kindObligationsLine returns
+    // undefined for them. The phase line still names the kind so the
+    // reader knows what was declared.
+    writeFile("docs/policy-note.md", "before\n");
+    const grants = createGrantsStore(tmpRoot);
+    await grants.issue({
+      edit_id: "edit_20260527_0012",
+      binding: [{ file: "docs/policy-note.md", before_sha256: sha256("before\n") }],
+      declaration: {
+        kind: "edit_policy_change",
+        provenance: "user_confirmed",
+        target_file: "docs/policy-note.md",
+        test_files: [],
+      },
+    });
+
+    const hooks = await makeHooks();
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", callID: "call-policy" },
+      {
+        args: {
+          filePath: path.join(tmpRoot, "docs/policy-note.md"),
+          oldString: "before",
+          newString: "after",
+        },
+      },
+    );
+
+    const afterOutput = { output: "File edited successfully" };
+    await hooks["tool.execute.after"]?.(
+      { tool: "edit", callID: "call-policy" },
+      afterOutput,
+    );
+
+    expect(afterOutput.output).toContain("edit_policy_change");
+    // No KIND_TARGET_OBLIGATIONS lookup for workflow-axis kinds — the
+    // boundary obligation must not bleed through.
+    expect(afterOutput.output).not.toContain(
+      "pin just below, at, and just above the boundary",
+    );
+    expect(afterOutput.output).not.toContain(
+      "pins the defined limits of the boundary",
+    );
+  });
 });
