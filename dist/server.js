@@ -18472,19 +18472,20 @@ function registerTools(server, options) {
 
 // src/reminders/context.ts
 function buildReminderContext(input) {
+  const isWriteAllowed = input.phase === "write_allowed";
   const lines = [
     phaseLine(input),
     scopeReviewLine(input.phase),
-    kindCueLine(input.kind),
-    kindObligationsLine(input),
+    ...isWriteAllowed ? [] : [kindCueLine(input.kind), kindObligationsLine(input)],
     provenanceLine(input.provenance, input.phase),
     executionStateLine(input),
-    targetFollowupLine(input),
+    ...isWriteAllowed ? [] : [targetFollowupLine(input)],
     auditWarningsLine(input.auditWarnings, input.phase)
-  ].filter((line) => line !== undefined && line.length > 0);
+  ];
+  const kept = lines.filter((line) => line !== undefined && line.length > 0);
   return `meta-edit reminder:
 
-${lines.join(`
+${kept.join(`
 
 `)}`;
 }
@@ -18562,7 +18563,7 @@ function phaseLine(input) {
   const target = targetPhrase(input.target, input.phase);
   const file = input.targetFile ? ` for ${sanitize(input.targetFile)}` : "";
   if (input.phase === "write_allowed") {
-    return `This native write matched my ${kind}${target} declaration${file}. The tool result tells me whether the bytes actually landed.`;
+    return `This native write matched my ${kind}${target} declaration${file}.`;
   }
   return `I declared this as ${kind}${target}${file}. The next native Edit / Write / MultiEdit should stay inside that declaration.`;
 }
@@ -18665,10 +18666,16 @@ function executionStateLine(input) {
 function provenanceLine(provenance, phase) {
   switch (provenance) {
     case "user_confirmed":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is user-confirmed, the prose should stay inside the confirmed user intent.";
     case "accepted_artifact":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is accepted artifact, the prose should keep the accepted artifact or citation visible.";
     case "direct_observation":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is direct observation, the prose should keep the observation source visible.";
     case "inference":
       if (phase === "write_allowed") {
@@ -19149,7 +19156,7 @@ async function issueOnce(toolName, args, ctx, log, grants, ts) {
   });
   const nextAction = `${declarationReminder}` + batchNote + `
 
-(On your next native Edit / Write / MultiEdit against ${fileList}, ` + `the deny-raw-edit hook resolves this declaration automatically; ` + `expires ${grant.expires_at}.)`;
+(On your next native Edit / Write / MultiEdit against ${fileList}, ` + `the deny-raw-edit hook resolves this declaration automatically.)`;
   return {
     summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,
@@ -19640,7 +19647,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.9.1",
+  version: "0.9.2",
   description: "MCP server with twenty-one kind-specific edit tools (14 SQLite-derived + edit_cosmetic + 6 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19756,4 +19763,4 @@ export {
   createServer
 };
 
-//# debugId=3DECED91B60615A364756E2164756E21
+//# debugId=1FE90D510D5FA71F64756E2164756E21

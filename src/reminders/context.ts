@@ -21,18 +21,30 @@ export type ReminderInput = {
  * and "wrong tool" language rather than blame.
  */
 export function buildReminderContext(input: ReminderInput): string {
-  const lines: string[] = [
+  // write_allowed reminders are intentionally minimal. kindCueLine /
+  // kindObligationsLine / targetFollowupLine and the non-repair branches
+  // of provenanceLine are direct repeats of declaration_accepted content
+  // and dilute the post-write-unique lines (scopeReviewLine,
+  // executionStateLine, auditWarningsLine). The full obligation surface
+  // lives on declaration_accepted; write_allowed keeps only the lines
+  // that carry information the agent did not already see at declaration.
+  const isWriteAllowed = input.phase === "write_allowed";
+  const lines: (string | undefined)[] = [
     phaseLine(input),
     scopeReviewLine(input.phase),
-    kindCueLine(input.kind),
-    kindObligationsLine(input),
+    ...(isWriteAllowed
+      ? []
+      : [kindCueLine(input.kind), kindObligationsLine(input)]),
     provenanceLine(input.provenance, input.phase),
     executionStateLine(input),
-    targetFollowupLine(input),
+    ...(isWriteAllowed ? [] : [targetFollowupLine(input)]),
     auditWarningsLine(input.auditWarnings, input.phase),
-  ].filter((line): line is string => line !== undefined && line.length > 0);
+  ];
 
-  return `meta-edit reminder:\n\n${lines.join("\n\n")}`;
+  const kept = lines.filter(
+    (line): line is string => line !== undefined && line.length > 0,
+  );
+  return `meta-edit reminder:\n\n${kept.join("\n\n")}`;
 }
 
 // SPEC §3.3.5 per-kind × per-target obligations relocated from
@@ -152,7 +164,7 @@ function phaseLine(input: ReminderInput): string {
   const file = input.targetFile ? ` for ${sanitize(input.targetFile)}` : "";
 
   if (input.phase === "write_allowed") {
-    return `This native write matched my ${kind}${target} declaration${file}. The tool result tells me whether the bytes actually landed.`;
+    return `This native write matched my ${kind}${target} declaration${file}.`;
   }
 
   return `I declared this as ${kind}${target}${file}. The next native Edit / Write / MultiEdit should stay inside that declaration.`;
@@ -300,12 +312,21 @@ function provenanceLine(
   provenance: string | undefined,
   phase: ReminderPhase,
 ): string | undefined {
+  // write_allowed drops the user_confirmed / accepted_artifact /
+  // direct_observation restatements (the agent just chose them; repeating
+  // them at write-time adds no information). inference and speculation
+  // keep their write-time repair branches because that text is unique to
+  // write_allowed — it tells the agent how to fix landed prose that lost
+  // its hedging.
   switch (provenance) {
     case "user_confirmed":
+      if (phase === "write_allowed") return undefined;
       return "Because the provenance is user-confirmed, the prose should stay inside the confirmed user intent.";
     case "accepted_artifact":
+      if (phase === "write_allowed") return undefined;
       return "Because the provenance is accepted artifact, the prose should keep the accepted artifact or citation visible.";
     case "direct_observation":
+      if (phase === "write_allowed") return undefined;
       return "Because the provenance is direct observation, the prose should keep the observation source visible.";
     case "inference":
       if (phase === "write_allowed") {

@@ -575,10 +575,17 @@ describe("tool.execute.after write-allowed reminder", () => {
     expect(afterOutput.output).toContain("File edited successfully");
     // ...and the write-allowed reminder is appended for the agent to read.
     expect(afterOutput.output).toContain("meta-edit reminder:");
-    // The appended text is the real buildReminderContext output — the
-    // boundary-kind cue proves the grant's declaration metadata flowed
-    // through evaluateTokenedEdit into the after-hook.
+    // The appended text is the real buildReminderContext output. The
+    // write_allowed reminder is minimal post-trim — phaseLine names the
+    // kind / target / file, scopeReviewLine nudges a kind-scope check,
+    // and nothing else fires for this grant. That phaseLine substring
+    // is enough to prove the grant's declaration metadata flowed through
+    // evaluateTokenedEdit into the after-hook.
     expect(afterOutput.output).toContain(
+      "edit_boundary_condition production-code declaration for src/foo.ts",
+    );
+    // Sanity: the trimmed write_allowed should NOT carry kindObligationsLine.
+    expect(afterOutput.output).not.toContain(
       "pin just below, at, and just above the boundary",
     );
   });
@@ -660,8 +667,11 @@ describe("tool.execute.after write-allowed reminder", () => {
       );
     });
     expect(stderr).toContain("meta-edit");
+    // Post-trim, write_allowed reminders no longer carry the
+    // kindObligationsLine cue; the phaseLine substring is the kind-
+    // bearing distinguisher.
     expect(stderr).toContain(
-      "pin just below, at, and just above the boundary",
+      "edit_boundary_condition production-code declaration for src/foo.ts",
     );
   });
 
@@ -669,7 +679,9 @@ describe("tool.execute.after write-allowed reminder", () => {
     // Two edits are gated before either after-event fires. A degenerate
     // single-slot implementation would mis-deliver; this proves the
     // callID-keyed Map isolates them. The two grants use different
-    // kinds so the reminders are unambiguously distinguishable.
+    // kinds so the reminders are unambiguously distinguishable —
+    // phaseLine substrings, since the write_allowed reminder trims out
+    // kindObligationsLine.
     writeFile("src/foo.ts", "foo-before\n");
     writeFile("src/bar.ts", "bar-before\n");
     const grants = createGrantsStore(tmpRoot);
@@ -731,16 +743,16 @@ describe("tool.execute.after write-allowed reminder", () => {
       fooOut,
     );
 
-    // call-bar received the error-handling reminder — not boundary's.
-    expect(barOut.output).toContain("drive the intended failure path");
-    expect(barOut.output).not.toContain(
-      "pin just below, at, and just above the boundary",
+    // call-bar received the error-handling phaseLine — not boundary's.
+    expect(barOut.output).toContain(
+      "edit_error_handling production-code declaration for src/bar.ts",
     );
-    // call-foo received the boundary reminder — not error-handling's.
+    expect(barOut.output).not.toContain("edit_boundary_condition");
+    // call-foo received the boundary phaseLine — not error-handling's.
     expect(fooOut.output).toContain(
-      "pin just below, at, and just above the boundary",
+      "edit_boundary_condition production-code declaration for src/foo.ts",
     );
-    expect(fooOut.output).not.toContain("drive the intended failure path");
+    expect(fooOut.output).not.toContain("edit_error_handling");
   });
 
   it("appends the execution_state repeating_failure cue when grant carries execution_state", async () => {
@@ -784,12 +796,12 @@ describe("tool.execute.after write-allowed reminder", () => {
     expect(afterOutput.output).toContain("landed while");
   });
 
-  it("emits the target=\"test\" kindObligationsLine wording, distinct from target=\"prod\"", async () => {
-    // src/reminders/context.ts:48-49 (test) vs :50-51 (prod): the same
-    // kind has different obligation text by target. This pins that the
-    // opencode forwarding path passes `target` through to the reminder
-    // builder, not just `kind` — without it, both targets would render
-    // identical text.
+  it("forwards the target field to phaseLine (target=\"test\" rendered distinct from target=\"prod\")", async () => {
+    // Post-trim, write_allowed reminders no longer carry kindObligationsLine,
+    // so the per-target wording distinction lives only in phaseLine. This
+    // still pins what we want: opencode passes the target field through
+    // to the reminder builder, not just kind. target="test" produces a
+    // `target="test"` substring; target="prod" produces `production-code`.
     writeFile("src/boundary.test.ts", "before\n");
     const grants = createGrantsStore(tmpRoot);
     await grants.issue({
@@ -822,12 +834,18 @@ describe("tool.execute.after write-allowed reminder", () => {
       afterOutput,
     );
 
-    // Test-side obligation text (context.ts:48-49).
-    expect(afterOutput.output).toContain("pins the defined limits of the boundary");
-    // Prod-side obligation text (context.ts:50-51) must NOT appear — would
-    // indicate target was dropped or hard-coded to "prod".
+    // target="test" phaseLine wording (src/reminders/context.ts targetPhrase).
+    expect(afterOutput.output).toContain('target="test"');
+    // The target="prod" wording must NOT appear — would indicate target
+    // was dropped or hard-coded.
+    expect(afterOutput.output).not.toContain("production-code");
+    // Codex review PR #99 (LOW): also pin that targetFollowupLine — the
+    // multi-sentence "This test edit should exercise this same kind of
+    // change..." prose — does NOT appear on write_allowed. Without this
+    // assertion, reintroducing the targetFollowupLine on write_allowed
+    // for target="test" would slip through the trim regression net.
     expect(afterOutput.output).not.toContain(
-      "must keep the defined limits stable on both sides",
+      "This test edit should exercise this same kind of change",
     );
   });
 

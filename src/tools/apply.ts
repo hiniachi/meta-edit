@@ -238,8 +238,7 @@ async function issueOnce(
     `${declarationReminder}` +
     batchNote +
     `\n\n(On your next native Edit / Write / MultiEdit against ${fileList}, ` +
-    `the deny-raw-edit hook resolves this declaration automatically; ` +
-    `expires ${grant.expires_at}.)`;
+    `the deny-raw-edit hook resolves this declaration automatically.)`;
   return {
     summary: declaredSummary(toolName, args, nFiles),
     token: grant.token_id,
