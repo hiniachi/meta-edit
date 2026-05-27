@@ -576,13 +576,18 @@ describe("evaluateTokenedEdit — happy path", () => {
 
     expect(r.decision).toBe("allow");
     expect(r.additionalContext).toContain("meta-edit reminder:");
+    // phaseLine — anchors what the write was for.
     expect(r.additionalContext).toContain("This native write matched my edit_api_contract");
+    // scopeReviewLine — the post-write-unique nudge.
     expect(r.additionalContext).toContain("chosen kind and file scope still match");
-    expect(r.additionalContext).toContain("edit_api_contract");
-    expect(r.additionalContext).toContain(
+    // Dropped on write_allowed (now declaration-only): kindCueLine,
+    // provenanceLine restate, targetFollowupLine. They repeat the
+    // declaration-time content and dilute the lines above.
+    expect(r.additionalContext).not.toContain(
       "expose the compatibility, status-code, or missing/extra-field contract",
     );
-    expect(r.additionalContext).toContain('target="test"');
+    expect(r.additionalContext).not.toContain("Because the provenance is accepted artifact");
+    expect(r.additionalContext).not.toContain('target="test" declaration');
   });
 
   it("write_allowed additionalContext branches on execution_state", async () => {

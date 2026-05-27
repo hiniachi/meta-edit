@@ -24,7 +24,12 @@ describe("buildReminderContext", () => {
     expect(text).not.toContain("Do not");
   });
 
-  it("builds a write-allowed reminder in self-reminder wording", () => {
+  it("builds a minimal write-allowed reminder (only post-write-unique lines)", () => {
+    // write_allowed reminders drop kindCueLine, kindObligationsLine,
+    // targetFollowupLine, and the non-repair provenanceLine restatements:
+    // those repeat declaration_accepted content and dilute the
+    // post-write-unique lines (scopeReviewLine, executionStateLine,
+    // auditWarningsLine, inference/speculation repair text).
     const text = buildReminderContext({
       phase: "write_allowed",
       kind: "edit_api_contract",
@@ -35,14 +40,22 @@ describe("buildReminderContext", () => {
     });
 
     expect(text).toContain("meta-edit reminder:");
+    // phaseLine (trimmed: no "The tool result tells me..." tautology)
     expect(text).toContain("This native write matched my edit_api_contract");
-    expect(text).toContain("Before moving on, I should check whether the chosen kind and file scope still match the actual edit");
+    expect(text).not.toContain("The tool result tells me");
+    // scopeReviewLine — the load-bearing post-write nudge, KEEP
+    expect(text).toContain(
+      "Before moving on, I should check whether the chosen kind and file scope still match the actual edit",
+    );
     expect(text).toContain("fresh typed declaration");
-    expect(text).toContain("edit_api_contract");
-    expect(text).toContain("expose the compatibility, status-code, or missing/extra-field contract");
-    expect(text).toContain("accepted artifact");
-    expect(text).toContain('target="test"');
-    expect(text).not.toContain("Forbidden");
+    // Dropped on write_allowed: kindCueLine
+    expect(text).not.toContain(
+      "expose the compatibility, status-code, or missing/extra-field contract",
+    );
+    // Dropped on write_allowed: provenanceLine (accepted_artifact restate)
+    expect(text).not.toContain("Because the provenance is accepted artifact");
+    // Dropped on write_allowed: targetFollowupLine
+    expect(text).not.toContain('target="test" declaration');
   });
 
   it("injects TDD red-step cues for target=test declarations", () => {
@@ -62,7 +75,7 @@ describe("buildReminderContext", () => {
     expect(text).toContain("distinguish allowed and denied actors or states");
   });
 
-  it("keeps workflow decision wording tied to accepted project intent", () => {
+  it("write_allowed for edit_decision + user_confirmed keeps phaseLine only (kindCue + provenance restate dropped)", () => {
     const text = buildReminderContext({
       phase: "write_allowed",
       kind: "edit_decision",
@@ -70,9 +83,12 @@ describe("buildReminderContext", () => {
       targetFile: "docs/adr.md",
     });
 
+    // phaseLine still names the kind so the reader knows what landed.
     expect(text).toContain("edit_decision");
-    expect(text).toContain("accepted project intent");
-    expect(text).toContain("user-confirmed");
+    // Dropped on write_allowed: kindCueLine ("accepted project intent" cue)
+    expect(text).not.toContain("accepted project intent");
+    // Dropped on write_allowed: provenanceLine user_confirmed restatement
+    expect(text).not.toContain("user-confirmed");
   });
 
   it("keeps explanation wording tied to shipped behavior and observation source", () => {
@@ -253,8 +269,13 @@ describe("buildReminderContext", () => {
     ];
 
     for (const [kind, cue] of cases) {
+      // kindCueLine fires on declaration_accepted only (write_allowed
+      // drops kindCueLine / kindObligationsLine / targetFollowupLine to
+      // keep its post-write reminder minimal). The cue text itself does
+      // not branch on phase, so declaration_accepted still validates the
+      // cue catalog.
       const text = buildReminderContext({
-        phase: "write_allowed",
+        phase: "declaration_accepted",
         kind,
         provenance: "direct_observation",
         targetFile: "x",

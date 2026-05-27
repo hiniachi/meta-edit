@@ -615,6 +615,23 @@ agent should only have to declare intent; the server takes care of the
 bookkeeping (and of telling the agent what comes next). On rejection,
 `next_action` is omitted.
 
+When the paired native `Edit` / `Write` later fires, the deny-raw-edit
+hook emits a **post-write reminder** as `additionalContext` (Claude
+Code) or as appended tool-result text (opencode). This
+`write_allowed` reminder is intentionally minimal: only the lines that
+carry information the agent did NOT already see at declaration time —
+`phaseLine` (anchor: which declaration this write resolved),
+`scopeReviewLine` (the kind/file scope-drift check), `executionStateLine`
+when non-`normal`, `provenanceLine` only for the `inference` /
+`speculation` repair branches (those tell the agent how to fix
+landed prose that lost its hedging), and `auditWarningsLine` when
+present. The kind-specific cue, the per-kind-target obligations text,
+and the target-followup TDD reminder fire only on the declaration-time
+reminder; repeating them on `write_allowed` dilutes the post-write-
+unique signals (v0.9.2 trim, derived from session dogfood — the
+declaration-time reminder is the primary surface, and the post-write
+reminder is a scope-drift gate, not a second copy of the obligations).
+
 > **v0.2.2 fix.** Earlier (v0.2.0 / v0.2.1) revisions of this spec asked the agent to surface the token by passing it as `_meta_edit_token` on the native Edit / Write / MultiEdit call. Claude Code's native edit tools have strict input schemas that reject extra fields, so the framework strips `_meta_edit_token` before the hook ever sees it — making the end-to-end flow unusable. v0.2.2 moves the binding-presence check server-side: the hook scans `.meta-edit/state/grants/` on disk, finds the most-recently-issued unconsumed binding matching the call's canonical `file_path`, and consumes it. The agent never thinks about tokens.
 
 > **v0.2.1 thinning.** Earlier (v0.2.0) revisions of this spec required the agent to supply `before_sha256` and `after_sha256` per binding. Both fields were dropped: under Article 3 (non-adversarial threat model) and Article 4 (descriptions read as a comfortable tool, not a hashing chore), the client-supplied digests added friction without proportional protective value. The server reads disk itself; the hook re-reads disk to detect staleness only.

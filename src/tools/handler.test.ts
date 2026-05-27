@@ -100,7 +100,11 @@ describe("makeIssuingHandler — successful declaration", () => {
     expect(typeof result.next_action).toBe("string");
     expect(result.next_action!.length).toBeGreaterThan(0);
     expect(result.next_action).not.toContain("_meta_edit_token");
-    expect(result.next_action).toContain(result.expires_at);
+    // expires_at is exposed as a structured field on the result but no
+    // longer interpolated into next_action prose: the single-use binding
+    // is the integrity guarantee, TTL is GC-only (SPEC §3.3), and the
+    // timestamp string in prose never drove agent action.
+    expect(result.next_action).not.toContain(result.expires_at);
     expect(result.next_action).toContain("meta-edit reminder:");
     expect(result.next_action).toContain(
       "I declared this as edit_boundary_condition",
