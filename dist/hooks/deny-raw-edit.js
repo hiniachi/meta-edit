@@ -111,19 +111,20 @@ import * as path7 from "node:path";
 
 // src/reminders/context.ts
 function buildReminderContext(input) {
+  const isWriteAllowed = input.phase === "write_allowed";
   const lines = [
     phaseLine(input),
     scopeReviewLine(input.phase),
-    kindCueLine(input.kind),
-    kindObligationsLine(input),
+    ...isWriteAllowed ? [] : [kindCueLine(input.kind), kindObligationsLine(input)],
     provenanceLine(input.provenance, input.phase),
     executionStateLine(input),
-    targetFollowupLine(input),
+    ...isWriteAllowed ? [] : [targetFollowupLine(input)],
     auditWarningsLine(input.auditWarnings, input.phase)
-  ].filter((line) => line !== undefined && line.length > 0);
+  ];
+  const kept = lines.filter((line) => line !== undefined && line.length > 0);
   return `meta-edit reminder:
 
-${lines.join(`
+${kept.join(`
 
 `)}`;
 }
@@ -201,7 +202,7 @@ function phaseLine(input) {
   const target = targetPhrase(input.target, input.phase);
   const file = input.targetFile ? ` for ${sanitize(input.targetFile)}` : "";
   if (input.phase === "write_allowed") {
-    return `This native write matched my ${kind}${target} declaration${file}. The tool result tells me whether the bytes actually landed.`;
+    return `This native write matched my ${kind}${target} declaration${file}.`;
   }
   return `I declared this as ${kind}${target}${file}. The next native Edit / Write / MultiEdit should stay inside that declaration.`;
 }
@@ -304,10 +305,16 @@ function executionStateLine(input) {
 function provenanceLine(provenance, phase) {
   switch (provenance) {
     case "user_confirmed":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is user-confirmed, the prose should stay inside the confirmed user intent.";
     case "accepted_artifact":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is accepted artifact, the prose should keep the accepted artifact or citation visible.";
     case "direct_observation":
+      if (phase === "write_allowed")
+        return;
       return "Because the provenance is direct observation, the prose should keep the observation source visible.";
     case "inference":
       if (phase === "write_allowed") {
@@ -7118,4 +7125,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=1C83FEF03A86E57F64756E2164756E21
+//# debugId=537D15702EC1083264756E2164756E21
