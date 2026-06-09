@@ -106,7 +106,7 @@ jobs:
       # validates against.
       - name: Debug — dump OIDC claims (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const token = await core.getIDToken('npm:registry.npmjs.org');
