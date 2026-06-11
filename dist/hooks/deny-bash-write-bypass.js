@@ -1229,7 +1229,7 @@ function* iterRedirectTargets(s, opts = {}) {
     i = j;
   }
 }
-var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 function evaluateShellHostedPayload(rawSegment, opts) {
   const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
   if (cMatch !== null && typeof cMatch.index === "number") {
@@ -1492,17 +1492,24 @@ var NODE_WRITE_RE = /writeFile|writeFileSync/;
 var PERL_WRITE_RE = /\bopen\b[^;]*?["']>{1,2}["']|\bsyswrite\b|->\s*spew(?:_raw|_utf8)?\b|IO::File->new\b[^;]*?["']>{1,2}/;
 var RUBY_WRITE_RE = /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write\b\s*\(\s*['"]/;
 var PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
-var PERL_INVOCATION_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b/;
-var PERL_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b\s*/;
-var RUBY_INVOCATION_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b/;
-var RUBY_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b\s*/;
+var INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
+var INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
+var PYTHON_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+-c\\b");
+var PYTHON_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+-c\\s+");
+var PERL_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b");
+var PERL_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b\\s*");
+var PERL_INPLACE_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+(?:-[A-Za-z]*\\s+)*-[a-z]*i");
+var RUBY_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*e[A-Za-z]*\\b");
+var RUBY_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*e[A-Za-z]*\\b\\s*");
+var AWK_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:g|m|n)?awk" + INTERP_VERSION_SUFFIX + "\\b");
+var AWK_INSCRIPT_REDIRECT_RE = /\bprintf?\b[^;}\n]*?(>>?)\s*["']([^"']+)["']/g;
 var PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 var PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 var NODE_INVOCATION_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)/;
 var NODE_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)\s*/;
 function matchesPythonNodeWrite(normalized, raw) {
-  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(normalized)) {
-    const rawHit = raw.match(/(?:^|[\s;&|(])python3?\s+-c\s+/);
+  if (PYTHON_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PYTHON_INVOCATION_HEAD_RE);
     if (rawHit !== null && typeof rawHit.index === "number") {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
@@ -1534,6 +1541,8 @@ function matchesPythonNodeWrite(normalized, raw) {
       return true;
     }
   }
+  if (PERL_INPLACE_RE.test(normalized))
+    return true;
   if (RUBY_INVOCATION_RE.test(normalized)) {
     const rawHit = raw.match(RUBY_INVOCATION_HEAD_RE);
     if (rawHit !== null && typeof rawHit.index === "number") {
@@ -1545,6 +1554,13 @@ function matchesPythonNodeWrite(normalized, raw) {
         return true;
     } else if (RUBY_WRITE_RE.test(normalized)) {
       return true;
+    }
+  }
+  if (AWK_INVOCATION_RE.test(normalized)) {
+    for (const m of normalized.matchAll(AWK_INSCRIPT_REDIRECT_RE)) {
+      const target = m[2];
+      if (target !== undefined && isInRepoWriteTarget(target))
+        return true;
     }
   }
   if (PHP_INVOCATION_RE.test(normalized)) {
@@ -1785,4 +1801,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=C93BDD9A7E2046BA64756E2164756E21
+//# debugId=F5A4F32B8FF3058E64756E2164756E21

@@ -1857,7 +1857,7 @@ function* iterRedirectTargets(
 // Recursing through evaluateBashCommand fixes that uniformly without
 // the rescan having to mirror every per-segment check.
 const SHELL_HOSTING_C_RE =
-  /(?:^|[\s;&|(])(?:bash|sh|dash|zsh|ksh|ash)\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+  /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 
 function evaluateShellHostedPayload(
   rawSegment: string,
@@ -2321,10 +2321,95 @@ const RUBY_WRITE_RE =
   /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write\b\s*\(\s*['"]/;
 // PHP: `file_put_contents`, `fwrite`, `fputs`, `fputcsv`.
 const PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
-const PERL_INVOCATION_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b/;
-const PERL_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])perl\s+-[A-Za-z]*[eE][A-Za-z]*\b\s*/;
-const RUBY_INVOCATION_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b/;
-const RUBY_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])ruby\s+-[A-Za-z]*e[A-Za-z]*\b\s*/;
+// SEC-BASH: interpreter invocations appear under version-suffixed
+// (`python3.11`, `perl5.36`, `ruby3.2`), alternate-implementation
+// (`pypy3`), and absolute/relative-path (`/usr/bin/python3`) spellings
+// that all run the SAME inline-eval / in-place / in-script-redirect
+// write. Each NAME gate keys on a basename family + an optional version
+// suffix + an optional path prefix (basename match) so the equivalent
+// spellings reach the same handler. The inline-eval/write SEMANTICS (the
+// -c / -e / -pi flag plus the write predicate) stay literal, so an
+// interpreter running an ordinary script (`python3 script.py`) or a bare
+// name in argument text (`echo bash5`) stays allowed.
+const INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
+const INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
+const PYTHON_INVOCATION_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "(?:python|pypy)" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-c\\b",
+);
+const PYTHON_INVOCATION_HEAD_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "(?:python|pypy)" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-c\\s+",
+);
+const PERL_INVOCATION_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "perl" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b",
+);
+const PERL_INVOCATION_HEAD_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "perl" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b\\s*",
+);
+// perl `-i` / `-pi` / `-ni` in-place edit IS the write — mirrors the
+// literal `perl -pi` / `perl -i` DENY_SUBSTRINGS, generalized to
+// version-suffixed / path-prefixed binaries. The flag bundle just has to
+// contain `i`; intervening flags (`-p`, `-n`, `-l`) are skipped. A
+// non-in-place flag like `-e` has no `i` and does not match.
+const PERL_INPLACE_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "perl" +
+    INTERP_VERSION_SUFFIX +
+    // Lowercase-only flag cluster before the `i`: a leading `-I<path>` /
+    // `-M<module>` (uppercase option letter, lowercase argument like "lib" /
+    // "strict") is consumed by the skip group and never mistaken for `-i`.
+    "\\s+(?:-[A-Za-z]*\\s+)*-[a-z]*i",
+);
+const RUBY_INVOCATION_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "ruby" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-[A-Za-z]*e[A-Za-z]*\\b",
+);
+const RUBY_INVOCATION_HEAD_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "ruby" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+-[A-Za-z]*e[A-Za-z]*\\b\\s*",
+);
+// awk / gawk / mawk / nawk in-script redirect: the program is a quoted
+// argument that can redirect `print`/`printf` output to a file with
+// `> "path"` / `>> "path"` from INSIDE the program text — the `>` lives
+// inside the single-quoted program, so iterRedirectTargets never sees it
+// (READ_ONLY_VERBS comment notes the gap). The redirect target is a
+// quoted string; numeric comparisons (`if ($1 > 5)`) carry no quote and
+// are skipped.
+const AWK_INVOCATION_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "(?:g|m|n)?awk" +
+    INTERP_VERSION_SUFFIX +
+    "\\b",
+);
+// Anchored on a `print` / `printf` statement so an awk string COMPARISON
+// (`$1 > "m"`) is not mistaken for a redirect; `[^;}\n]` keeps the match
+// inside one statement. Capture group 1 is the redirect operator, group 2
+// the quoted target path.
+const AWK_INSCRIPT_REDIRECT_RE =
+  /\bprintf?\b[^;}\n]*?(>>?)\s*["']([^"']+)["']/g;
 const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 // Use a single-char class `[e]val` so this source file does not contain
@@ -2349,8 +2434,8 @@ const NODE_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)\s*/;
 // remain visible because the operator sits OUTSIDE the inner literals.
 function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
   // python -c / python3 -c (long form `--command` does not exist).
-  if (/(?:^|[\s;&|(])python3?\s+-c\b/.test(normalized)) {
-    const rawHit = raw.match(/(?:^|[\s;&|(])python3?\s+-c\s+/);
+  if (PYTHON_INVOCATION_RE.test(normalized)) {
+    const rawHit = raw.match(PYTHON_INVOCATION_HEAD_RE);
     if (rawHit !== null && typeof rawHit.index === "number") {
       const argStart = rawHit.index + rawHit[0].length;
       const arg = readShellArg(raw, argStart);
@@ -2390,6 +2475,11 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
       return true;
     }
   }
+  // perl `-i` / `-pi` in-place edit: the flag itself performs the write,
+  // so (unlike `-e`) there is no separate payload predicate. Mirrors the
+  // literal `perl -pi` / `perl -i` DENY_SUBSTRINGS for version-suffixed /
+  // path-prefixed binaries (`perl5.36 -pi ...`).
+  if (PERL_INPLACE_RE.test(normalized)) return true;
   // ruby -e: detect File.write / File.open(..., "w") / IO.write.
   if (RUBY_INVOCATION_RE.test(normalized)) {
     const rawHit = raw.match(RUBY_INVOCATION_HEAD_RE);
@@ -2400,6 +2490,23 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
       if (arg === null && RUBY_WRITE_RE.test(normalized)) return true;
     } else if (RUBY_WRITE_RE.test(normalized)) {
       return true;
+    }
+  }
+  // awk / gawk / mawk / nawk in-script redirect: recover the quoted
+  // program, then deny when an in-script `> "path"` / `>> "path"` target
+  // is an in-repo write target (isInRepoWriteTarget — the same predicate
+  // the structural redirect check uses; safe sinks like /dev/null and
+  // /tmp/ stay allowed). The `>` lives inside the single-quoted program,
+  // so the top-level iterRedirectTargets scan never sees it.
+  if (AWK_INVOCATION_RE.test(normalized)) {
+    // Scan the whole command (gated on an awk invocation): the print/printf
+    // redirect can sit after awk options (`-F,`, `-v x=1`) that single-arg
+    // program extraction would mistake for the program. The print/printf
+    // anchor in AWK_INSCRIPT_REDIRECT_RE keeps this from matching shell
+    // redirects or awk string comparisons; group 2 is the quoted target.
+    for (const m of normalized.matchAll(AWK_INSCRIPT_REDIRECT_RE)) {
+      const target = m[2];
+      if (target !== undefined && isInRepoWriteTarget(target)) return true;
     }
   }
   // php -r / php -R / php -B: detect file_put_contents / fwrite / fputs.

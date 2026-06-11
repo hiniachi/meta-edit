@@ -686,6 +686,19 @@ export function validateRequest(
         `test_files must be non-empty for ${toolName} with target "prod"`,
       );
     }
+  } else if (toolName === "edit_cosmetic") {
+    // SPEC §3 (~line 573): test_files must be empty for edit_cosmetic
+    // REGARDLESS of target. The target === "test" path is already
+    // covered by the first branch; this branch covers target === "prod"
+    // (and undefined), so a cosmetic edit can never forward-declare a
+    // test obligation it does not carry — cosmetic edits pin no
+    // behavior and have no tests to bind.
+    if (request.test_files.length > 0) {
+      warnings.push(
+        `test_files must be empty for ${toolName} (cosmetic edits carry ` +
+          `no test obligation — Required tests: NONE regardless of target)`,
+      );
+    }
   } else if (WORKFLOW_TOOLS.includes(toolName)) {
     if (request.test_files.length > 0) {
       warnings.push(
@@ -868,7 +881,43 @@ export function checkPathSafety(
       error: `path "${p}" could not be canonicalized via realpath; failing closed`,
     };
   }
-  if (isProtectedPath(res.canonical)) {
+  // Leaf-symlink protected-path guard. canonicalizeRepoRelative re-attaches
+  // the leaf basename lexically (it never realpaths the final component), so a
+  // benign-named leaf symlink whose link target points into a protected
+  // directory is NOT caught by res.canonical alone. Two routes close this:
+  //   (1) when the symlink resolves to an EXISTING file, the {repoRoot}-aware
+  //       branch of isProtectedPath realpaths through the leaf below; but
+  //   (2) when the link DANGLES (target not yet created), realpath bottoms out
+  //       at the parent and re-attaches the leaf lexically, so we additionally
+  //       inspect the link target directly here (GAP-1). The canonicalizer is
+  //       existence-independent (SPEC §6), so the dangling leaf must reject too.
+  // Confined to the protected-prefix question per SPEC Article 7 — out-of-repo
+  // symlink escape is explicitly out of scope.
+  const absInput = path.resolve(repoRoot, p);
+  try {
+    const lst = fs.lstatSync(absInput);
+    if (lst.isSymbolicLink()) {
+      const linkTarget = fs.readlinkSync(absInput);
+      const resolvedTarget = path.resolve(path.dirname(absInput), linkTarget);
+      const targetRel = path.relative(repoRoot, resolvedTarget);
+      // {repoRoot}-aware so an intermediate in-repo symlink in the link target
+      // (e.g. alias -> .meta-edit/state, then notes -> alias/new.jsonl) is
+      // resolved through its existing hops before the protected-prefix test;
+      // a purely lexical check would miss the multi-hop dangling case.
+      if (isProtectedPath(targetRel, { repoRoot })) {
+        return {
+          ok: false,
+          error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`,
+        };
+      }
+    }
+  } catch (e) {
+    // ENOENT: a plain not-yet-created target (no symlink) — fall through to the
+    // existence-independent checks below. Other errors (EACCES/ELOOP/...) also
+    // fall through; the {repoRoot}-aware isProtectedPath below fails closed.
+    void e;
+  }
+  if (isProtectedPath(res.canonical, { repoRoot })) {
     return {
       ok: false,
       error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`,

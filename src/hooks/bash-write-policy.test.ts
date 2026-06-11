@@ -2748,3 +2748,221 @@ describe("evaluateBashCommand — reminder-style scoped to soft warns (RFC §6)"
   });
 });
 
+// ---------------------------------------------------------------------------
+// SEC-BASH-1/2/3/4 — interpreter/shell NAME gate is too literal.
+//
+// deny-bash-write-bypass matches interpreter / shell-host names by exact
+// spelling (`bash`, `python`, `python3`, `perl`, `ruby`, `node`, `awk`,
+// ...). Real systems expose the same interpreters under version-suffixed
+// names (`python3.11`, `perl5.36`, `ruby3.2`), aliases (`rbash`, `mksh`,
+// `pypy3`), and absolute paths (`/usr/bin/bash`). Each invokes the SAME
+// interpreter with the SAME `-c` / `-e` / inline-write semantics, so each
+// is an equivalent bypass that the literal name gate misses.
+//
+// SPEC §5.2 lists these as "Inline interpreter writes" (denied) and is
+// explicit that ALL protected-path writes "remain `deny` regardless of
+// verb". The version-suffixed / aliased / abs-path forms that target a
+// protected path MUST therefore be denied; the source-file forms SHOULD
+// be denied as inline-interpreter writes.
+//
+// These cases pin the DESIRED contract: they fail today because the gate
+// only recognizes the canonical spellings, so the version/alias/abs-path
+// forms currently return "allow".
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — SEC-BASH version/alias/abs-path interpreter gate", () => {
+  // SEC-BASH-1: shell-host `-c` recursion via aliases / version suffixes /
+  // absolute path. Plain `bash -c '...'` is already denied (anchor below);
+  // these equivalent shell hosts running the SAME recursive command must
+  // be denied too — and because each targets a protected path, SPEC §5.2's
+  // "regardless of verb" rule makes the deny mandatory.
+  const shellHostDenyCases: Array<[string, string]> = [
+    [
+      "bash5 -c 'printf x > .meta-edit/state/edits.jsonl'",
+      "bash5 (version-suffixed shell host)",
+    ],
+    [
+      "/usr/bin/bash -c 'printf x > .meta-edit/state/edits.jsonl'",
+      "/usr/bin/bash (absolute-path shell host)",
+    ],
+    [
+      "rbash -c 'printf x > .meta-edit/state/edits.jsonl'",
+      "rbash (restricted-bash alias)",
+    ],
+    [
+      "mksh -c 'printf x > .meta-edit/state/edits.jsonl'",
+      "mksh (mirbsd ksh alias)",
+    ],
+  ];
+  for (const [command, label] of shellHostDenyCases) {
+    it(`denies ${label}: "${command}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toBeDefined();
+    });
+  }
+
+  // SEC-BASH-2: versioned / aliased Python inline writes. `python -c` and
+  // `python3 -c` are already denied (anchors below); the version/impl
+  // variants run identical inline-write code and must be denied too.
+  const pythonInlineDenyCases: Array<[string, string]> = [
+    [
+      "python3.11 -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      "python3.11 (version-suffixed)",
+    ],
+    [
+      "python2 -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      "python2 (legacy major)",
+    ],
+    [
+      "pypy3 -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      "pypy3 (alternate implementation)",
+    ],
+  ];
+  for (const [command, label] of pythonInlineDenyCases) {
+    it(`denies ${label} inline write: "${command}"`, () => {
+      const r = evaluateBashCommand(command);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toBeDefined();
+    });
+  }
+
+  // SEC-BASH-3: versioned perl / ruby inline writes. The a1-05 suite
+  // already denies plain `perl -e` / `ruby -e`; the version-suffixed
+  // binaries run the same code and must be denied too.
+  it("denies perl5.36 -pi in-place edit of a source file", () => {
+    const r = evaluateBashCommand("perl5.36 -pi -e 's/a/b/' src/foo.ts");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toBeDefined();
+  });
+
+  it("denies ruby3.2 -e File.write of a source file", () => {
+    const r = evaluateBashCommand(
+      "ruby3.2 -e 'File.write(\"src/foo.ts\",\"x\")'",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toBeDefined();
+  });
+
+  // SEC-BASH-4: awk / gawk in-script redirect. awk redirects to a file
+  // from inside its program text (`print ... > "path"`), which is an
+  // interpreter write that bypasses the typed surface. The gawk case
+  // targets a protected path, so SPEC §5.2's "regardless of verb" rule
+  // makes the deny mandatory.
+  it("denies awk BEGIN in-script redirect to a source file", () => {
+    const r = evaluateBashCommand("awk 'BEGIN{print 1 > \"src/foo.ts\"}'");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toBeDefined();
+  });
+
+  it("denies gawk BEGIN in-script append redirect to a protected path", () => {
+    const r = evaluateBashCommand(
+      "gawk 'BEGIN{printf \"y\" >> \".meta-edit/state/edits.jsonl\"}'",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // CONTROL cases — these MUST ALREADY PASS. They guard the later fix
+  // against over-generalization (e.g. denying every command whose first
+  // token merely starts with "python" / "bash", or treating any mention of
+  // an interpreter name as a write). All controls are equivalent to
+  // existing allow-cases elsewhere in this file.
+  // -------------------------------------------------------------------------
+
+  // Canonical inline-write spellings are the literal-gate anchors: they are
+  // already denied today and must STAY denied after the fix.
+  it("control: python3 -c inline write stays denied (literal-gate anchor)", () => {
+    const r = evaluateBashCommand(
+      "python3 -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  it("control: bash -c protected-path write stays denied (literal-gate anchor)", () => {
+    const r = evaluateBashCommand(
+      "bash -c 'printf x > .meta-edit/state/edits.jsonl'",
+    );
+    expect(r.decision).toBe("deny");
+  });
+
+  // A versioned interpreter running an ordinary SCRIPT (no -c / no inline
+  // write) is normal dev work and must stay allowed — the fix must key on
+  // the inline-eval flag + write, not on the binary name alone.
+  it("control: python3 running a script file stays allow (no -c)", () => {
+    expect(evaluateBashCommand("python3 script.py").decision).toBe("allow");
+  });
+
+  // An interpreter name appearing only as ARGUMENT TEXT (echo / commit
+  // message) is not an invocation and must stay allowed.
+  it("control: echo of the literal string 'bash5' stays allow", () => {
+    expect(evaluateBashCommand("echo bash5").decision).toBe("allow");
+  });
+
+  it("control: commit message merely mentioning 'python3.11 -c' stays allow", () => {
+    const r = evaluateBashCommand(
+      "git commit -m 'fix: block python3.11 -c inline-write bypass'",
+    );
+    expect(r.decision).toBe("allow");
+  });
+
+  // A plain read with no redirect stays allowed (parity with the existing
+  // "still allows grep with no redirect" case).
+  it("control: grep -r foo src/ stays allow", () => {
+    expect(evaluateBashCommand("grep -r foo src/").decision).toBe("allow");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review hardening (codex + claude review of the SEC-BASH generalization).
+// The generalized gates introduced three precision issues, each pinned below:
+//  - F1: the perl in-place gate fired on a lowercase `i` inside an option
+//    ARGUMENT (`-Ilib`, `-Mstrict`) — those are read-only invocations.
+//  - F2: the awk redirect gate fired on a string COMPARISON (`$1 > "m"`),
+//    not only on a `print`/`printf` redirect.
+//  - F3: awk options before the program (`gawk -F, '...'` / `awk -v x=1 ...`)
+//    let an in-script protected/in-repo redirect slip through unscanned.
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — SEC-BASH review hardening", () => {
+  // F1: `-I<path>` / `-M<module>` carry a lowercase `i` inside the option
+  // argument, not an in-place `-i` flag. Ordinary read-only perl runs.
+  it("control: perl -Ilib -e (include path, not in-place) stays allow", () => {
+    expect(evaluateBashCommand("perl -Ilib -e 'print 1'").decision).toBe(
+      "allow",
+    );
+  });
+  it("control: perl -Mstrict -e (module, not in-place) stays allow", () => {
+    expect(evaluateBashCommand("perl -Mstrict -e 'print 1'").decision).toBe(
+      "allow",
+    );
+  });
+  // The real in-place form must still deny (versioned binary) after the fix.
+  it("perl5.36 -pi in-place still denies after the -Ilib/-Mstrict fix", () => {
+    expect(
+      evaluateBashCommand("perl5.36 -pi -e 's/a/b/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+
+  // F2: `$1 > "m"` is an awk string comparison, not a redirect — stays allow.
+  it('control: awk string comparison ($1 > "m") is not a redirect, stays allow', () => {
+    expect(
+      evaluateBashCommand("awk '$1 > \"m\" {print}' data.txt").decision,
+    ).toBe("allow");
+  });
+
+  // F3: awk options before the program must not hide an in-script redirect.
+  it("denies gawk -F, with an in-script protected-path redirect (option before program)", () => {
+    expect(
+      evaluateBashCommand(
+        "gawk -F, 'BEGIN{print 1 > \".meta-edit/state/edits.jsonl\"}'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies awk -v with an in-script in-repo redirect (option before program)", () => {
+    expect(
+      evaluateBashCommand("awk -v x=1 'BEGIN{print 1 > \"src/foo.ts\"}'")
+        .decision,
+    ).toBe("deny");
+  });
+});
+

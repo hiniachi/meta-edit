@@ -355,6 +355,111 @@ describe("validateRequest — disk + path-safety", () => {
     }
   });
 
+  // PATH-LEAFSYMLINK-PROTECTED-2: a benign-named LEAF symlink whose realpath
+  // lands inside the protected .meta-edit/state/ tree must be REJECTED by the
+  // issuer-side path-safety check (SPEC §6: "target_file is inside the repo
+  // (after realpath) and NOT in protected paths"; §5.2: protected-path deny
+  // holds regardless). The bash hook already denies the shell-route version of
+  // this (`mv payload .meta-edit/state/x`); the typed-edit issuer side must be
+  // symmetric, otherwise the issued token authorizes a later native write that
+  // follows the symlink and corrupts the append-only audit log / grants store.
+  //
+  // Two sub-cases: an EXISTING protected target (the symlink resolves to a real
+  // file under state/) and a DANGLING protected target (the symlink points into
+  // state/ but the target file is not yet created — GAP-1). The canonicalizer is
+  // existence-independent (SPEC §6), so the dangling leaf must be rejected too,
+  // not silently accepted because realpath can't follow the final component.
+  function permissionReq(
+    overrides: Partial<EditToolRequest> = {},
+  ): EditToolRequest {
+    return {
+      target_file: "real.ts",
+      rationale: "tighten role deny path (see docs/SPEC.md §6)",
+      risk_level: "high",
+      target: "prod",
+      provenance: "accepted_artifact",
+      execution_state: "normal",
+      test_files: ["src/foo.test.ts"],
+      ...overrides,
+    };
+  }
+
+  it("rejects a leaf symlink target_file pointing at an EXISTING protected file (PATH-LEAFSYMLINK-PROTECTED-2)", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    // Create the real protected target first (existing-target sub-case).
+    writeFile(".meta-edit/state/edits.jsonl", "{}\n");
+    fs.symlinkSync(
+      path.join(tmpRoot, ".meta-edit", "state", "edits.jsonl"),
+      path.join(tmpRoot, "notes.md"),
+    );
+    const r = validateRequest(
+      "edit_permission_logic",
+      permissionReq({ target_file: "notes.md" }),
+      ctx(),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
+    }
+  });
+
+  it("rejects a leaf symlink target_file pointing at a DANGLING protected path (PATH-LEAFSYMLINK-PROTECTED-2, GAP-1)", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    // Do NOT create the target — the symlink dangles into state/.
+    fs.symlinkSync(
+      path.join(tmpRoot, ".meta-edit", "state", "new.jsonl"),
+      path.join(tmpRoot, "dangling.md"),
+    );
+    const r = validateRequest(
+      "edit_permission_logic",
+      permissionReq({ target_file: "dangling.md" }),
+      ctx(),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
+    }
+  });
+
+  it("control: a plain regular-file target (no symlink) is still ACCEPTED with no protected-path warning", () => {
+    // Guards the leaf-symlink fix against over-generalization: a normal in-repo
+    // regular file must keep passing path safety.
+    writeFile("real.ts", "x\n");
+    const r = validateRequest(
+      "edit_permission_logic",
+      permissionReq({ target_file: "real.ts" }),
+      ctx(),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.primaryBinding.canonical).toBe("real.ts");
+    }
+  });
+
+  it("rejects a leaf symlink dangling THROUGH an intermediate in-repo symlink into protected state (PATH-LEAFSYMLINK-PROTECTED-2, multi-hop)", () => {
+    // Review hardening (codex): alias -> .meta-edit/state (dir symlink), then
+    // notes2.md -> alias/new.jsonl (dangling leaf via the intermediate
+    // symlink). The lexical readlink target "alias/new.jsonl" is NOT protected
+    // by spelling; the protected prefix only appears after resolving `alias`.
+    // The guard must resolve the link target through existing components
+    // (repoRoot-aware), per docs/SPEC.md §6, not just lexically.
+    fs.mkdirSync(path.join(tmpRoot, ".meta-edit", "state"), { recursive: true });
+    fs.symlinkSync(
+      path.join(tmpRoot, ".meta-edit", "state"),
+      path.join(tmpRoot, "alias"),
+    );
+    fs.symlinkSync("alias/new.jsonl", path.join(tmpRoot, "notes2.md"));
+    const r = validateRequest(
+      "edit_permission_logic",
+      permissionReq({ target_file: "notes2.md" }),
+      ctx(),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("protected"))).toBe(true);
+    }
+  });
+
   it("accepts a declaration against a non-existent target_file, binding before_sha256 = sha256(\"\")", () => {
     const r = validateRequest("edit_boundary_condition",
       modifyReq({ target_file: "src/missing.ts" }), ctx());
@@ -547,6 +652,65 @@ describe("validateRequest — disk + path-safety", () => {
     const r = validateRequest("edit_cosmetic", {
       target_file: "src/foo.ts",
       rationale: "reformat trailing whitespace",
+      risk_level: "low",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      target: "prod",
+      test_files: [],
+    }, ctx());
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects edit_cosmetic with target=prod and non-empty test_files (CORR-VAL-1, SPEC §3 line 573 'regardless')", () => {
+    // SPEC §3 (~line 573): test_files must be "empty for edit_cosmetic
+    // and the 6 workflow-axis kinds REGARDLESS" of target. The code
+    // enforces this for target:"test" but not target:"prod" — an
+    // intra-tool asymmetry that lets a cosmetic edit pollute the audit
+    // log + agent reminders with fake test obligations. A cosmetic edit
+    // never carries a test obligation, so the declaration must be
+    // rejected, not silently accepted.
+    writeFile("src/foo.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/foo.ts",
+      rationale: "reformat trailing whitespace",
+      risk_level: "low",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      target: "prod",
+      test_files: ["src/foo.test.ts"],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
+    }
+  });
+
+  it("CONTROL: edit_cosmetic with target=test and non-empty test_files is already rejected (symmetric branch holds)", () => {
+    // The existing target:"test" branch must keep rejecting after the
+    // CORR-VAL-1 fix — guards against the fix collapsing one branch.
+    writeFile("src/foo.test.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/foo.test.ts",
+      rationale: "fix indentation",
+      risk_level: "low",
+      provenance: "direct_observation",
+      execution_state: "normal",
+      target: "test",
+      test_files: ["src/foo.test.ts"],
+    }, ctx());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.warnings.some((w) => w.includes("test_files"))).toBe(true);
+    }
+  });
+
+  it("CONTROL: edit_cosmetic with target=prod and empty test_files stays accepted after the fix", () => {
+    // Guards against over-generalization: the fix must reject ONLY the
+    // non-empty test_files case, not all target:"prod" cosmetic edits.
+    writeFile("src/baz.ts", "x\n");
+    const r = validateRequest("edit_cosmetic", {
+      target_file: "src/baz.ts",
+      rationale: "strip trailing whitespace",
       risk_level: "low",
       provenance: "direct_observation",
       execution_state: "normal",

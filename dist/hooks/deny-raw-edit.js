@@ -5985,6 +5985,10 @@ function validateRequest(toolName, request, ctx) {
     if (request.test_files.length === 0) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
+  } else if (toolName === "edit_cosmetic") {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty for ${toolName} (cosmetic edits carry ` + `no test obligation — Required tests: NONE regardless of target)`);
+    }
   } else if (WORKFLOW_TOOLS.includes(toolName)) {
     if (request.test_files.length > 0) {
       warnings.push(`test_files must be empty for ${toolName} (workflow-axis kinds ` + `carry no executable behavior — Required tests: NONE per the ` + `tool description)`);
@@ -6088,7 +6092,22 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" could not be canonicalized via realpath; failing closed`
     };
   }
-  if (isProtectedPath(res.canonical)) {
+  const absInput = path5.resolve(repoRoot, p);
+  try {
+    const lst = fs5.lstatSync(absInput);
+    if (lst.isSymbolicLink()) {
+      const linkTarget = fs5.readlinkSync(absInput);
+      const resolvedTarget = path5.resolve(path5.dirname(absInput), linkTarget);
+      const targetRel = path5.relative(repoRoot, resolvedTarget);
+      if (isProtectedPath(targetRel, { repoRoot })) {
+        return {
+          ok: false,
+          error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`
+        };
+      }
+    }
+  } catch (e) {}
+  if (isProtectedPath(res.canonical, { repoRoot })) {
     return {
       ok: false,
       error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`
@@ -6732,8 +6751,8 @@ var SHARED_MUTEX_TAILS = new Map;
 async function withSharedLock(key, fn) {
   const prev = SHARED_MUTEX_TAILS.get(key) ?? Promise.resolve();
   let release;
-  const next = new Promise((resolve5) => {
-    release = resolve5;
+  const next = new Promise((resolve6) => {
+    release = resolve6;
   });
   const myTurn = prev.then(() => {
     return;
@@ -7125,4 +7144,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=537D15702EC1083264756E2164756E21
+//# debugId=B6ED875C22BD278564756E2164756E21
