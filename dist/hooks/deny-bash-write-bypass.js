@@ -1494,15 +1494,18 @@ var RUBY_WRITE_RE = /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write
 var PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
 var INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
 var INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
-var PYTHON_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+-c\\b");
-var PYTHON_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+-c\\s+");
+var PYTHON_OPTION_SKIP = "(?:-[A-Za-z][A-Za-z0-9]*\\s+)*";
+var PYTHON_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+" + PYTHON_OPTION_SKIP + "-c\\b");
+var PYTHON_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+" + PYTHON_OPTION_SKIP + "-c\\s+");
 var PERL_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b");
 var PERL_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b\\s*");
-var PERL_INPLACE_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+(?:-[A-Za-z]*\\s+)*-[a-z]*i");
+var PERL_INPLACE_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+(?:-[A-Za-z0-9]*\\s+)*-[a-z0-9]*i");
 var RUBY_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*e[A-Za-z]*\\b");
 var RUBY_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+-[A-Za-z]*e[A-Za-z]*\\b\\s*");
 var AWK_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:g|m|n)?awk" + INTERP_VERSION_SUFFIX + "\\b");
-var AWK_INSCRIPT_REDIRECT_RE = /\bprintf?\b[^;}\n]*?(>>?)\s*["']([^"']+)["']/g;
+var AWK_PRINT_STMT_RE = /\bprintf?\b[^;}\n]*/g;
+var AWK_STMT_REDIRECT_RE = /(>>?)\s*["']([^"']+)["']/g;
+var AWK_QUOTED_LITERAL_RE = /"[^"]*"|'[^']*'/g;
 var PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 var PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 var NODE_INVOCATION_RE = /(?:^|[\s;&|(])node\s+(?:-e\b|--[e]val\b=?)/;
@@ -1557,10 +1560,24 @@ function matchesPythonNodeWrite(normalized, raw) {
     }
   }
   if (AWK_INVOCATION_RE.test(normalized)) {
-    for (const m of normalized.matchAll(AWK_INSCRIPT_REDIRECT_RE)) {
-      const target = m[2];
-      if (target !== undefined && isInRepoWriteTarget(target))
-        return true;
+    for (const stmt of normalized.matchAll(AWK_PRINT_STMT_RE)) {
+      for (const m of stmt[0].matchAll(AWK_STMT_REDIRECT_RE)) {
+        const target = m[2];
+        if (target === undefined)
+          continue;
+        const prefix = stmt[0].slice(0, m.index).replace(AWK_QUOTED_LITERAL_RE, "");
+        let depth = 0;
+        for (const ch of prefix) {
+          if (ch === "(")
+            depth += 1;
+          else if (ch === ")")
+            depth -= 1;
+        }
+        if (depth > 0)
+          continue;
+        if (isInRepoWriteTarget(target))
+          return true;
+      }
     }
   }
   if (PHP_INVOCATION_RE.test(normalized)) {
@@ -1801,4 +1818,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(2);
 });
 
-//# debugId=F5A4F32B8FF3058E64756E2164756E21
+//# debugId=522A47C41AD9EF2264756E2164756E21
