@@ -3055,3 +3055,135 @@ describe("evaluateBashCommand — SEC-BASH review hardening round 2", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Review hardening round 3 (Codex review of PR #106 after 80d6149, six P2
+// findings — r3400804545 / .551 / .555 / .558 / .561 / .562):
+//  - G1: python arg-taking options (`-W ignore`, `-X dev`) before `-c`
+//    fell outside the single-token skip and the inline writer was allowed.
+//  - G2: the awk in-script scan ran over the WHOLE command, so a non-awk
+//    command mentioning awk in a quoted argument (commit message) was
+//    falsely denied.
+//  - G3: shell hosts with options before `-c` (`bash5 -l -c ...`) skipped
+//    the recursive payload evaluation.
+//  - G4/G5: perl / ruby interpreter options before `-e` (`-Ilib`, `-w`)
+//    kept the invocation gate closed, allowing the inline writer.
+//  - G6: a parenthesized awk redirect target (`> ("src/foo.ts")`) was not
+//    recognized as a redirect.
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — SEC-BASH review hardening round 3", () => {
+  // G1: python options that take a separate operand before -c.
+  it("denies python3.11 -W ignore -c with an inline write", () => {
+    expect(
+      evaluateBashCommand(
+        "python3.11 -W ignore -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies python3 -X dev -c with an inline write", () => {
+    expect(
+      evaluateBashCommand(
+        "python3 -X dev -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("control: python -W ignore script.py stays allow", () => {
+    expect(
+      evaluateBashCommand("python -W ignore script.py").decision,
+    ).toBe("allow");
+  });
+  it("control: python -m pytest -c cfg.ini still stays allow", () => {
+    expect(
+      evaluateBashCommand("python -m pytest -c cfg.ini").decision,
+    ).toBe("allow");
+  });
+
+  // G2: awk mentioned inside another command's quoted argument is prose,
+  // not a program — the scan must be limited to the awk program argument.
+  it("control: commit message containing an awk redirect snippet stays allow", () => {
+    expect(
+      evaluateBashCommand(
+        "git commit -m 'document awk {print 1 > \"src/foo.ts\"}'",
+      ).decision,
+    ).toBe("allow");
+  });
+  // The real program-argument scans must survive the restriction.
+  it("awk BEGIN redirect to a source file still denies after program-scoped scan", () => {
+    expect(
+      evaluateBashCommand("awk 'BEGIN{print 1 > \"src/foo.ts\"}'").decision,
+    ).toBe("deny");
+  });
+  it("gawk -F, in-script protected-path redirect still denies", () => {
+    expect(
+      evaluateBashCommand(
+        "gawk -F, 'BEGIN{print 1 > \".meta-edit/state/edits.jsonl\"}'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("awk -v x=1 in-script in-repo redirect still denies", () => {
+    expect(
+      evaluateBashCommand("awk -v x=1 'BEGIN{print 1 > \"src/foo.ts\"}'")
+        .decision,
+    ).toBe("deny");
+  });
+
+  // G3: shell options between the host and `-c` must not skip recursion.
+  it("denies bash5 -l -c hosting a protected-path write", () => {
+    expect(
+      evaluateBashCommand(
+        "bash5 -l -c 'printf x > .meta-edit/state/edits.jsonl'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies /usr/bin/bash --norc -c hosting a protected-path write", () => {
+    expect(
+      evaluateBashCommand(
+        "/usr/bin/bash --norc -c 'printf x > .meta-edit/state/edits.jsonl'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies bash -o pipefail -c hosting a protected-path write", () => {
+    expect(
+      evaluateBashCommand(
+        "bash -o pipefail -c 'printf x > .meta-edit/state/edits.jsonl'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  // G4: perl interpreter options before -e still run the inline writer.
+  it("denies perl5.36 -Ilib -e with an inline open-for-write", () => {
+    expect(
+      evaluateBashCommand(
+        "perl5.36 -Ilib -e 'open(my $fh, \">\", \"src/foo.ts\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("control: perl -Ilib -e without a writer still stays allow", () => {
+    expect(evaluateBashCommand("perl -Ilib -e 'print 1'").decision).toBe(
+      "allow",
+    );
+  });
+
+  // G5: ruby interpreter options before -e still run the inline writer.
+  it("denies ruby3.2 -w -e with an inline File.write", () => {
+    expect(
+      evaluateBashCommand("ruby3.2 -w -e 'File.write(\"src/foo.ts\",\"x\")'")
+        .decision,
+    ).toBe("deny");
+  });
+  it("control: ruby -w script.rb stays allow", () => {
+    expect(evaluateBashCommand("ruby -w script.rb").decision).toBe("allow");
+  });
+
+  // G6: a parenthesized redirect target is still a redirect.
+  it("denies awk redirect to a parenthesized in-repo target", () => {
+    expect(
+      evaluateBashCommand("awk 'BEGIN{print 1 > (\"src/foo.ts\")}'").decision,
+    ).toBe("deny");
+  });
+  it('control: parenthesized comparison (print ($1 > ("m"))) stays allow', () => {
+    expect(
+      evaluateBashCommand("awk '{print ($1 > (\"m\"))}' data.txt").decision,
+    ).toBe("allow");
+  });
+});
+

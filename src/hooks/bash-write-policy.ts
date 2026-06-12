@@ -1856,8 +1856,14 @@ function* iterRedirectTargets(
 // protected-path detector lives in evaluateSegment, not in the rescan.
 // Recursing through evaluateBashCommand fixes that uniformly without
 // the rescan having to mirror every per-segment check.
+// PR #106 Codex review round 3 (r3400804555): invocation options may sit
+// between the shell name and `-c` (`bash5 -l -c ...`, `bash --norc -c`,
+// `bash -o pipefail -c`). Skip single-token short/long options plus the
+// `-o <opt>` pair; every skipped token starts with `-` (or follows a bare
+// `-o`), so a script path (`bash deploy.sh -c blue`) keeps the gate
+// closed — `-c` there belongs to the script.
 const SHELL_HOSTING_C_RE =
-  /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+  /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-o\s+[^\s-]\S*\s+|--?[A-Za-z][^\s]*\s+)*(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 
 function evaluateShellHostedPayload(
   rawSegment: string,
@@ -2333,12 +2339,21 @@ const PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
 // name in argument text (`echo bash5`) stays allowed.
 const INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
 const INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
-// PR #106 Codex review (r3397371553): interpreter options can sit
-// between the binary and `-c` (`python3.11 -B -c ...`). Each skipped
-// token must START with `-` so a script path (`python script.py -c`)
-// or a bare module name (`python -m pytest -c cfg`) keeps the gate
-// closed — `-c` there belongs to the script/module, not to python.
-const PYTHON_OPTION_SKIP = "(?:-[A-Za-z][A-Za-z0-9]*\\s+)*";
+// PR #106 Codex review (r3397371553, round 3 r3400804545): interpreter
+// options can sit between the binary and `-c` (`python3.11 -B -c ...`,
+// `python -W ignore -c ...`, `python -X dev -c ...`). Each skipped token
+// must START with `-` — except the operand of an arg-taking `-W` / `-X`
+// pair — so a script path (`python script.py -c`) or a bare module name
+// (`python -m pytest -c cfg`) keeps the gate closed: `-c` there belongs
+// to the script/module, not to python (`-m`'s operand ends python's own
+// option parsing, so it is deliberately NOT an arg-taking pair here).
+const PYTHON_OPTION_SKIP =
+  "(?:-[WX]\\s+[^\\s-]\\S*\\s+|-[A-Za-z][A-Za-z0-9]*\\s+)*";
+// Round 3 (r3400804558 / r3400804561): perl and ruby likewise accept
+// ordinary interpreter options before the `-e` bundle (`perl -Ilib -e`,
+// `ruby -w -e`). Same rule — every skipped token starts with `-`, so a
+// script argument never opens the gate.
+const INTERP_OPTION_SKIP = "(?:-[A-Za-z0-9][^\\s]*\\s+)*";
 const PYTHON_INVOCATION_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
@@ -2362,14 +2377,18 @@ const PERL_INVOCATION_RE = new RegExp(
     INTERP_PATH_PREFIX +
     "perl" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b",
+    "\\s+" +
+    INTERP_OPTION_SKIP +
+    "-[A-Za-z]*[eE][A-Za-z]*\\b",
 );
 const PERL_INVOCATION_HEAD_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
     "perl" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-[A-Za-z]*[eE][A-Za-z]*\\b\\s*",
+    "\\s+" +
+    INTERP_OPTION_SKIP +
+    "-[A-Za-z]*[eE][A-Za-z]*\\b\\s*",
 );
 // perl `-i` / `-pi` / `-ni` in-place edit IS the write — mirrors the
 // literal `perl -pi` / `perl -i` DENY_SUBSTRINGS, generalized to
@@ -2394,14 +2413,18 @@ const RUBY_INVOCATION_RE = new RegExp(
     INTERP_PATH_PREFIX +
     "ruby" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-[A-Za-z]*e[A-Za-z]*\\b",
+    "\\s+" +
+    INTERP_OPTION_SKIP +
+    "-[A-Za-z]*e[A-Za-z]*\\b",
 );
 const RUBY_INVOCATION_HEAD_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
     "ruby" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-[A-Za-z]*e[A-Za-z]*\\b\\s*",
+    "\\s+" +
+    INTERP_OPTION_SKIP +
+    "-[A-Za-z]*e[A-Za-z]*\\b\\s*",
 );
 // awk / gawk / mawk / nawk in-script redirect: the program is a quoted
 // argument that can redirect `print`/`printf` output to a file with
@@ -2417,6 +2440,18 @@ const AWK_INVOCATION_RE = new RegExp(
     INTERP_VERSION_SUFFIX +
     "\\b",
 );
+// HEAD form for program-argument extraction (PR #106 round 3
+// r3400804551): the redirect scan runs over the awk PROGRAM argument,
+// not the whole command, so a non-awk command that merely mentions awk
+// in a quoted argument (`git commit -m 'document awk {print ...}'`) is
+// not scanned as a program.
+const AWK_INVOCATION_HEAD_RE = new RegExp(
+  "(?:^|[\\s;&|(])" +
+    INTERP_PATH_PREFIX +
+    "(?:g|m|n)?awk" +
+    INTERP_VERSION_SUFFIX +
+    "\\s+",
+);
 // Anchored on a `print` / `printf` statement so an awk string COMPARISON
 // before the print (`$1 > "m" {print}`) is never scanned; `[^;}\n]` keeps
 // the match inside one statement. Within a statement, a `>` to a quoted
@@ -2424,8 +2459,13 @@ const AWK_INVOCATION_RE = new RegExp(
 // comparison, `print ($1 > "m") > "f"` redirects via the outer `>`
 // (PR #106 Codex review r3397371545). The handler computes the depth
 // with quoted literals masked so `print "(" > "f"` cannot inflate it.
+// The target may be wrapped in parens (`> ("src/foo.ts")` performs the
+// same write — round 3 r3400804562), so optional `(` runs are consumed
+// before the quote; a parenthesized COMPARISON (`($1 > ("m"))`) is still
+// skipped by the depth rule, which counts only the prefix BEFORE the
+// operator.
 const AWK_PRINT_STMT_RE = /\bprintf?\b[^;}\n]*/g;
-const AWK_STMT_REDIRECT_RE = /(>>?)\s*["']([^"']+)["']/g;
+const AWK_STMT_REDIRECT_RE = /(>>?)\s*\(*\s*["']([^"']+)["']/g;
 const AWK_QUOTED_LITERAL_RE = /"[^"]*"|'[^']*'/g;
 const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
@@ -2516,16 +2556,51 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
   // /tmp/ stay allowed). The `>` lives inside the single-quoted program,
   // so the top-level iterRedirectTargets scan never sees it.
   if (AWK_INVOCATION_RE.test(normalized)) {
-    // Scan the whole command (gated on an awk invocation): the print/printf
-    // redirect can sit after awk options (`-F,`, `-v x=1`) that single-arg
-    // program extraction would mistake for the program. The print/printf
-    // anchor in AWK_PRINT_STMT_RE keeps this from matching shell redirects
-    // or pattern-position comparisons (`$1 > "m" {print}`). Within a
-    // statement, only a depth-0 `>` is a redirect: the prefix up to the
-    // operator is quote-masked (so a printed `"("` cannot inflate the
-    // depth), and an operator inside open parens (`print ($1 > "m")`) is
-    // a string comparison, not a write (PR #106 Codex r3397371545).
-    for (const stmt of normalized.matchAll(AWK_PRINT_STMT_RE)) {
+    // Scan the awk PROGRAM argument, not the whole command (PR #106
+    // round 3 r3400804551): a non-awk command that merely mentions awk
+    // inside a quoted argument (`git commit -m 'document awk {print
+    // ...}'`) must not be scanned as a program. Locate the invocation in
+    // raw (quote structure intact), skip option words — every option
+    // starts with `-`; a bare `-v` / `-F` / `-f` also consumes its
+    // operand — and read the first non-option word as the program. If
+    // extraction fails (unclosed quote, no argument), fall back to the
+    // whole normalized command: conservative, the pre-round-3 behavior.
+    // Within the program, the print/printf anchor in AWK_PRINT_STMT_RE
+    // keeps the scan off pattern-position comparisons (`$1 > "m"
+    // {print}`), and only a depth-0 `>` is a redirect: the prefix up to
+    // the operator is quote-masked (so a printed `"("` cannot inflate
+    // the depth), and an operator inside open parens (`print ($1 >
+    // "m")`) is a string comparison, not a write (r3397371545).
+    let awkScanText = normalized;
+    const awkHit = raw.match(AWK_INVOCATION_HEAD_RE);
+    if (awkHit !== null && typeof awkHit.index === "number") {
+      const isWordBreak = (ch: string): boolean =>
+        ch === " " ||
+        ch === "\t" ||
+        ch === "\n" ||
+        ch === ";" ||
+        ch === "|" ||
+        ch === "&" ||
+        ch === ">" ||
+        ch === "<";
+      const skipWord = (k: number): number => {
+        while (k < raw.length && !isWordBreak(raw[k]!)) k++;
+        while (k < raw.length && (raw[k] === " " || raw[k] === "\t")) k++;
+        return k;
+      };
+      let i = awkHit.index + awkHit[0].length;
+      while (i < raw.length && raw[i] === "-") {
+        const wordStart = i;
+        i = skipWord(i);
+        const opt = raw.slice(wordStart, i).trimEnd();
+        // Bare arg-taking options carry their operand in the NEXT word;
+        // attached forms (`-F,`, `-vx=1`) are already one word.
+        if (opt === "-v" || opt === "-F" || opt === "-f") i = skipWord(i);
+      }
+      const program = readShellArg(raw, i);
+      if (program !== null && program.length > 0) awkScanText = program;
+    }
+    for (const stmt of awkScanText.matchAll(AWK_PRINT_STMT_RE)) {
       for (const m of stmt[0].matchAll(AWK_STMT_REDIRECT_RE)) {
         const target = m[2];
         if (target === undefined) continue;

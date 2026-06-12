@@ -1943,3 +1943,33 @@ audit warn.)
   green; `tsc --noEmit` clean.
 - Dogfood: declarations `edit_20260612_0004`..`0010`, every byte via
   the typed surface (`edit_permission_logic` ×6, `edit_progress` ×1).
+
+## v0.9.3 follow-up round 3: PR #106 Codex re-review (six P2 precision fixes)
+
+- Trigger: Codex bot re-review after `80d6149` landed, six new P2
+  findings (r3400804545 / .551 / .555 / .558 / .561 / .562). All six
+  reproduced locally before fixing.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - G1 `PYTHON_OPTION_SKIP`: arg-taking `-W <arg>` / `-X <arg>` pairs
+    are skippable before `-c`; `-m` deliberately stays single-token so
+    `python -m pytest -c cfg.ini` remains allowed.
+  - G2 awk scan scope: the redirect scan now runs over the extracted
+    awk PROGRAM argument (AWK_INVOCATION_HEAD_RE on raw + option-word
+    skipping where bare `-v`/`-F`/`-f` consume their operand +
+    readShellArg), not the whole normalized command — a commit message
+    mentioning an awk snippet no longer false-denies. Fallback to the
+    whole-command scan when extraction fails (conservative).
+  - G3 `SHELL_HOSTING_C_RE`: single-token short/long options and the
+    `-o <opt>` pair may sit between the shell name and `-c`
+    (`bash5 -l -c`, `bash --norc -c`, `bash -o pipefail -c`).
+  - G4/G5 `INTERP_OPTION_SKIP`: perl/ruby invocation gates skip
+    interpreter options before the `-e` bundle (`perl5.36 -Ilib -e`,
+    `ruby3.2 -w -e`); read-only forms stay allowed.
+  - G6 `AWK_STMT_REDIRECT_RE`: optional `(` runs before the quoted
+    redirect target (`> ("src/foo.ts")`); parenthesized comparisons
+    are still skipped by the depth rule.
+- Tests added: 17 in a "review hardening round 3" describe block
+  (deny + allow controls per finding, incl. round-2 survivors).
+  Suite: 1026/1026 green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0011`..`0018`
+  (`edit_permission_logic` ×7, `edit_progress` ×1).
