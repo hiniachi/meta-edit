@@ -18181,6 +18181,10 @@ function validateRequest(toolName, request, ctx) {
     if (request.test_files.length === 0) {
       warnings.push(`test_files must be non-empty for ${toolName} with target "prod"`);
     }
+  } else if (toolName === "edit_cosmetic") {
+    if (request.test_files.length > 0) {
+      warnings.push(`test_files must be empty for ${toolName} (cosmetic edits carry ` + `no test obligation — Required tests: NONE regardless of target)`);
+    }
   } else if (WORKFLOW_TOOLS.includes(toolName)) {
     if (request.test_files.length > 0) {
       warnings.push(`test_files must be empty for ${toolName} (workflow-axis kinds ` + `carry no executable behavior — Required tests: NONE per the ` + `tool description)`);
@@ -18284,7 +18288,22 @@ function checkPathSafety(p, repoRoot) {
       error: `path "${p}" could not be canonicalized via realpath; failing closed`
     };
   }
-  if (isProtectedPath(res.canonical)) {
+  const absInput = path5.resolve(repoRoot, p);
+  try {
+    const lst = fs5.lstatSync(absInput);
+    if (lst.isSymbolicLink()) {
+      const linkTarget = fs5.readlinkSync(absInput);
+      const resolvedTarget = path5.resolve(path5.dirname(absInput), linkTarget);
+      const targetRel = path5.relative(repoRoot, resolvedTarget);
+      if (isProtectedPath(targetRel, { repoRoot })) {
+        return {
+          ok: false,
+          error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`
+        };
+      }
+    }
+  } catch (e) {}
+  if (isProtectedPath(res.canonical, { repoRoot })) {
     return {
       ok: false,
       error: `path "${p}" resolves into a protected directory (.meta-edit/state/ or .meta-edit/tmp/)`
@@ -19296,8 +19315,8 @@ var SHARED_MUTEX_TAILS = new Map;
 async function withSharedLock(key, fn) {
   const prev = SHARED_MUTEX_TAILS.get(key) ?? Promise.resolve();
   let release;
-  const next = new Promise((resolve5) => {
-    release = resolve5;
+  const next = new Promise((resolve6) => {
+    release = resolve6;
   });
   const myTurn = prev.then(() => {
     return;
@@ -19647,7 +19666,7 @@ function createGrantsStore(repoRoot) {
 // package.json
 var package_default = {
   name: "@hiniachi/meta-edit",
-  version: "0.9.2",
+  version: "0.9.3",
   description: "MCP server with twenty-one kind-specific edit tools (14 SQLite-derived + edit_cosmetic + 6 workflow-axis kinds) that encode test obligations in tool descriptions; impl tools carry a required prod/test target flag, and every declaration carries a required provenance field",
   license: "MIT",
   author: "nia <nia@yukinofurumachi.com>",
@@ -19750,11 +19769,11 @@ async function runStdioServer(options = {}) {
     transport.close().catch(() => {});
   });
   await server.connect(transport);
-  await new Promise((resolve5) => {
+  await new Promise((resolve6) => {
     const previousOnClose = transport.onclose;
     transport.onclose = () => {
       previousOnClose?.call(transport);
-      resolve5();
+      resolve6();
     };
   });
 }
@@ -19763,4 +19782,4 @@ export {
   createServer
 };
 
-//# debugId=1FE90D510D5FA71F64756E2164756E21
+//# debugId=B57A7D07F5B07DC664756E2164756E21

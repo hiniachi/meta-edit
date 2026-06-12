@@ -1840,3 +1840,164 @@ audit warn.)
   change, splitting the work into two commits per logical concern,
   and asking the user before applying (the policy_change fallback
   obligation) is the load-bearing mitigation per CLAUDE.md §9.
+
+## v0.9.3: review-driven hook hardening (SEC-BASH gate generalization + leaf-symlink protected-path guard + edit_cosmetic test_files cardinality)
+
+- Completed: 2026-06-12
+- Context: a multi-agent whole-repo review (8 dimensions × adversarial
+  verification) surfaced three findings; they were fixed via a
+  read-separated TDD pipeline (test-author subagents that never read
+  the impl, then impl-author subagents that never touched the tests),
+  with the main thread landing every byte through the `edit_*` typed
+  surface. A follow-up codex + claude review of the deliverable found
+  four precision/security issues, all reproduced independently and
+  fixed in a second TDD round.
+- What works (production changes):
+  - `src/hooks/bash-write-policy.ts` (deny-bash-write-bypass): the
+    interpreter / shell-host NAME gates were literal-only. Generalized
+    `SHELL_HOSTING_C_RE` and the python / perl / ruby invocation gates
+    to accept an optional path prefix (basename match, e.g.
+    `/usr/bin/bash`), an optional version suffix (`bash5`,
+    `python3.11`, `perl5.36`, `ruby3.2`), and aliases (`rbash`,
+    `mksh`, `pypy`). Added `PERL_INPLACE_RE` (perl `-i`/`-pi` in-place,
+    generalizing the literal `perl -pi`/`perl -i` DENY_SUBSTRINGS) and
+    an awk/gawk/mawk/nawk in-script-redirect handler. The inline-eval/
+    write SEMANTICS gates are unchanged — matching keys on
+    (name family) AND (inline-eval flag / in-script redirect) AND
+    (write), so `python3 script.py`, `echo bash5`, and read-only
+    interpreter runs still allow. Reuses `readShellArg` /
+    `isInRepoWriteTarget`; no detection layer added.
+  - `src/tools/common.ts` `checkPathSafety`: passed `{ repoRoot }` to
+    `isProtectedPath` (activates the symlink-aware realpath branch for
+    existing-target leaf symlinks) and added an lstat/readlink guard
+    that rejects a dangling leaf symlink whose target resolves into a
+    protected prefix — including the multi-hop case where an
+    intermediate in-repo dir symlink only reveals the protected prefix
+    after resolution (the readlink-target check is `{ repoRoot }`-aware).
+    Out-of-repo symlink escape stays out of scope (SPEC Article 7).
+  - `src/tools/common.ts` `validateRequest` §2b: added a guard branch
+    so `edit_cosmetic` with non-empty `test_files` is rejected
+    regardless of target (SPEC §3:573 "empty for edit_cosmetic ...
+    regardless"); the `target:"test"` path was already covered, the
+    `target:"prod"`/undefined path was not. No SPEC / descriptions
+    change — §3:573 is the binding authority and the description's
+    permissive "may be empty" is not contradictory.
+- Review-round-2 fixes (codex + claude, all reproduced first):
+  - Perl in-place gate restricted to a lowercase flag cluster
+    (`-[a-z]*i`) so a lowercase `i` inside an option argument
+    (`perl -Ilib`, `perl -Mstrict`) no longer false-positives.
+  - awk redirect anchored on a `print`/`printf` statement so a string
+    comparison (`awk '$1 > "m"'`) is not treated as a redirect.
+  - awk handler scans the whole command (gated on an awk invocation)
+    so options before the program (`gawk -F,`, `awk -v x=1`) no longer
+    hide an in-script protected/in-repo redirect.
+- Known issues / accepted scope: `perl -pi`/`perl -i` mentioned in
+  commit-message prose still denies (same class as the pre-existing
+  python/ruby prose denial; a verb-window gate would be more invasive
+  — left for a follow-up). `node`/`deno`/`bun -e` gates remain
+  un-generalized (outside SEC-BASH scope). awk dynamic/piped redirect
+  targets and out-of-repo symlink escape are deliberately not covered
+  (would require a classification layer — forbidden by SPEC Article 7
+  / CLAUDE.md §7).
+- Tests added: 24 in round 1 (18 SEC-BASH deny+control, 3 leaf-symlink
+  path-safety, 3 edit_cosmetic cardinality) + 7 in round 2 (perl
+  `-Ilib`/`-Mstrict` allow, in-place still-deny guard, awk comparison
+  allow, two awk-option deny, multi-hop symlink reject). Suite: 998/998
+  green; `tsc --noEmit` clean.
+- Spec deviations: none. All edits are strengthenings of existing
+  matching / guard logic; no detection / classification subsystem was
+  added.
+- Dogfood: implemented in a local session WITH the meta-edit MCP
+  server registered. Every byte landed through the `edit_*` typed
+  surface (declarations `edit_20260611_0001`..`0016` for the fixes,
+  `edit_20260612_0001`..`0003` for the version bump + this log), with
+  the deny-raw-edit hook resolving each native write — the
+  self-application invariant held end to end.
+
+## v0.9.3 follow-up: PR #106 Codex review round 2 (three P2 precision fixes)
+
+- Trigger: Codex bot inline review on PR #106 (commit `dddb9bf`),
+  three P2 findings against the SEC-BASH gates added in v0.9.3
+  (r3397371538 / r3397371545 / r3397371553). All three reproduced
+  locally before fixing.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - F1 `PERL_INPLACE_RE`: flag clusters now admit digits
+    (`-[a-z0-9]*i`, skip group `-[A-Za-z0-9]*`), so `perl5.36 -0pi`
+    and `perl -0777 -pi` deny; `-Ilib` / `-Mstrict` controls still
+    allow.
+  - F2 awk in-script redirect: replaced the single
+    `AWK_INSCRIPT_REDIRECT_RE` with a per-print-statement scan
+    (`AWK_PRINT_STMT_RE` + `AWK_STMT_REDIRECT_RE`); a `>` counts as a
+    redirect only at paren depth 0, computed over a quote-masked
+    prefix. `print ($1 > "m")` (comparison) now allows;
+    `print ($1 > "m") > "src/foo.ts"` and `print "(" > "src/foo.ts"`
+    still deny.
+  - F3 `PYTHON_INVOCATION_RE` / `_HEAD_RE`: single-token option
+    clusters may sit before `-c` (`PYTHON_OPTION_SKIP`), so
+    `python3.11 -B -c '<writer>'` denies; each skipped token must
+    start with `-`, keeping `python -m pytest -c cfg.ini` and
+    `python3 script.py` allowed.
+- Tests added: 11 in a "review hardening round 2" describe block
+  (2 perl deny + 1 control, 4 awk deny/allow incl. depth and
+  quoted-paren cases, 2 python deny + 2 controls). Suite: 1009/1009
+  green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0004`..`0010`, every byte via
+  the typed surface (`edit_permission_logic` ×6, `edit_progress` ×1).
+
+## v0.9.3 follow-up round 3: PR #106 Codex re-review (six P2 precision fixes)
+
+- Trigger: Codex bot re-review after `80d6149` landed, six new P2
+  findings (r3400804545 / .551 / .555 / .558 / .561 / .562). All six
+  reproduced locally before fixing.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - G1 `PYTHON_OPTION_SKIP`: arg-taking `-W <arg>` / `-X <arg>` pairs
+    are skippable before `-c`; `-m` deliberately stays single-token so
+    `python -m pytest -c cfg.ini` remains allowed.
+  - G2 awk scan scope: the redirect scan now runs over the extracted
+    awk PROGRAM argument (AWK_INVOCATION_HEAD_RE on raw + option-word
+    skipping where bare `-v`/`-F`/`-f` consume their operand +
+    readShellArg), not the whole normalized command — a commit message
+    mentioning an awk snippet no longer false-denies. Fallback to the
+    whole-command scan when extraction fails (conservative).
+  - G3 `SHELL_HOSTING_C_RE`: single-token short/long options and the
+    `-o <opt>` pair may sit between the shell name and `-c`
+    (`bash5 -l -c`, `bash --norc -c`, `bash -o pipefail -c`).
+  - G4/G5 `INTERP_OPTION_SKIP`: perl/ruby invocation gates skip
+    interpreter options before the `-e` bundle (`perl5.36 -Ilib -e`,
+    `ruby3.2 -w -e`); read-only forms stay allowed.
+  - G6 `AWK_STMT_REDIRECT_RE`: optional `(` runs before the quoted
+    redirect target (`> ("src/foo.ts")`); parenthesized comparisons
+    are still skipped by the depth rule.
+- Tests added: 17 in a "review hardening round 3" describe block
+  (deny + allow controls per finding, incl. round-2 survivors).
+  Suite: 1026/1026 green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0011`..`0018`
+  (`edit_permission_logic` ×7, `edit_progress` ×1).
+
+## v0.9.3 follow-up round 4: PR #106 Codex re-review (six P2, final before merge)
+
+- Trigger: Codex bot re-review after `e75e765`, six new P2 findings
+  (r3400912116 / .118 / .122 / .123 / .124 / .127), all reproduced
+  locally. User instructed: fix lightly and merge.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - H1 python: whitelist the operand pair
+    `--check-hash-based-pycs <mode>` before `-c`.
+  - H2 shell hosts: whitelist `--init-file <f>` / `--rcfile <f>`
+    operand pairs before `-c` (generic long-option pairs would
+    false-deny `bash --norc script.sh -c blue`).
+  - H3 awk anchor: invocation sites are iterated (HEAD regex now /g)
+    and only a site at shell quote depth 0 anchors the program scan;
+    prose mentions inside quoted arguments no longer deny.
+  - H4 perl/ruby: whitelist `-I` / `-M` / `-r` next-word operand pairs
+    before the `-e` bundle.
+  - H5 awk options: `--field-separator` / `--assign` / `--file`
+    consume their separate operand like `-F` / `-v` / `-f`.
+  - H6 awk variable targets: a bare-identifier redirect target is
+    resolved against a literal `f="path"` assignment in the program;
+    computed targets (concat / sprintf / ENVIRON) stay unresolved →
+    allowed, deliberately — tracking them is the classification layer
+    SPEC Article 7 forbids.
+- Tests added: 11 in a "review hardening round 4" describe block.
+  Suite: 1037/1037 green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0019`..`0025`
+  (`edit_permission_logic` ×6, `edit_progress` ×1).
