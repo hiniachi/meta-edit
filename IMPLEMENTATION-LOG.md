@@ -1913,3 +1913,33 @@ audit warn.)
   `edit_20260612_0001`..`0003` for the version bump + this log), with
   the deny-raw-edit hook resolving each native write — the
   self-application invariant held end to end.
+
+## v0.9.3 follow-up: PR #106 Codex review round 2 (three P2 precision fixes)
+
+- Trigger: Codex bot inline review on PR #106 (commit `dddb9bf`),
+  three P2 findings against the SEC-BASH gates added in v0.9.3
+  (r3397371538 / r3397371545 / r3397371553). All three reproduced
+  locally before fixing.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - F1 `PERL_INPLACE_RE`: flag clusters now admit digits
+    (`-[a-z0-9]*i`, skip group `-[A-Za-z0-9]*`), so `perl5.36 -0pi`
+    and `perl -0777 -pi` deny; `-Ilib` / `-Mstrict` controls still
+    allow.
+  - F2 awk in-script redirect: replaced the single
+    `AWK_INSCRIPT_REDIRECT_RE` with a per-print-statement scan
+    (`AWK_PRINT_STMT_RE` + `AWK_STMT_REDIRECT_RE`); a `>` counts as a
+    redirect only at paren depth 0, computed over a quote-masked
+    prefix. `print ($1 > "m")` (comparison) now allows;
+    `print ($1 > "m") > "src/foo.ts"` and `print "(" > "src/foo.ts"`
+    still deny.
+  - F3 `PYTHON_INVOCATION_RE` / `_HEAD_RE`: single-token option
+    clusters may sit before `-c` (`PYTHON_OPTION_SKIP`), so
+    `python3.11 -B -c '<writer>'` denies; each skipped token must
+    start with `-`, keeping `python -m pytest -c cfg.ini` and
+    `python3 script.py` allowed.
+- Tests added: 11 in a "review hardening round 2" describe block
+  (2 perl deny + 1 control, 4 awk deny/allow incl. depth and
+  quoted-paren cases, 2 python deny + 2 controls). Suite: 1009/1009
+  green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0004`..`0010`, every byte via
+  the typed surface (`edit_permission_logic` ×6, `edit_progress` ×1).

@@ -2966,3 +2966,92 @@ describe("evaluateBashCommand — SEC-BASH review hardening", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Review hardening round 2 (Codex review of PR #106, three P2 findings —
+// r3397371538 / r3397371545 / r3397371553):
+//  - F1: perl flag bundles carrying DIGITS (`-0pi`) were outside the
+//    `[a-z]*i` in-place cluster, so `perl5.36 -0pi -e ...` was allowed
+//    even though perl still edits the file in place.
+//  - F2: a parenthesized string comparison INSIDE print
+//    (`print ($1 > "m")`) was mistaken for an in-script redirect and
+//    denied, blocking read-only awk analysis one-liners.
+//  - F3: python options before the inline flag (`python3.11 -B -c ...`)
+//    fell outside the `\s+-c` gate, so the inline writer was allowed.
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — SEC-BASH review hardening round 2", () => {
+  // F1: digit-bearing flag bundles still perform the in-place write.
+  it("denies perl5.36 -0pi (digit option bundled with -i) in-place edit", () => {
+    expect(
+      evaluateBashCommand("perl5.36 -0pi -e 's/a/b/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+  it("denies perl -0777 -pi (separate digit flag before -pi) in-place edit", () => {
+    expect(
+      evaluateBashCommand("perl -0777 -pi -e 's/a/b/' src/foo.ts").decision,
+    ).toBe("deny");
+  });
+  // The round-1 controls must survive: lowercase `i` inside an option
+  // ARGUMENT is still not an in-place flag.
+  it("control: perl -Ilib -e stays allow after the digit-bundle fix", () => {
+    expect(evaluateBashCommand("perl -Ilib -e 'print 1'").decision).toBe(
+      "allow",
+    );
+  });
+
+  // F2: a comparison inside print's parens is not a redirect.
+  it('control: awk print with parenthesized comparison (print ($1 > "m")) stays allow', () => {
+    expect(
+      evaluateBashCommand("awk '{print ($1 > \"m\")}' data.txt").decision,
+    ).toBe("allow");
+  });
+  // A real redirect AFTER a parenthesized comparison must still deny —
+  // the depth-0 `>` is the write.
+  it("denies awk redirect following a parenthesized comparison", () => {
+    expect(
+      evaluateBashCommand(
+        "awk '{print ($1 > \"m\") > \"src/foo.ts\"}' data.txt",
+      ).decision,
+    ).toBe("deny");
+  });
+  // A quoted `(` before the redirect must not inflate the paren depth
+  // and hide the write.
+  it("denies awk redirect whose printed string contains an open paren", () => {
+    expect(
+      evaluateBashCommand("awk 'BEGIN{print \"(\" > \"src/foo.ts\"}'").decision,
+    ).toBe("deny");
+  });
+  // Round-1 deny cases must survive the depth-based rewrite.
+  it("awk BEGIN in-script redirect to a source file still denies", () => {
+    expect(
+      evaluateBashCommand("awk 'BEGIN{print 1 > \"src/foo.ts\"}'").decision,
+    ).toBe("deny");
+  });
+
+  // F3: interpreter options before `-c` still run the inline writer.
+  it("denies python3.11 -B -c with an inline write", () => {
+    expect(
+      evaluateBashCommand(
+        "python3.11 -B -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies /usr/bin/python3 -I -B -c with an inline write", () => {
+    expect(
+      evaluateBashCommand(
+        '/usr/bin/python3 -I -B -c \'open("src/foo.ts","w").write("x")\'',
+      ).decision,
+    ).toBe("deny");
+  });
+  // `python -m pytest -c <cfg>` is pytest's config flag, not python's
+  // inline-code flag: the bare module name between `-m` and `-c` must
+  // keep the gate closed.
+  it("control: python -m pytest -c cfg.ini stays allow", () => {
+    expect(
+      evaluateBashCommand("python -m pytest -c cfg.ini").decision,
+    ).toBe("allow");
+  });
+  it("control: python3 script.py stays allow", () => {
+    expect(evaluateBashCommand("python3 script.py").decision).toBe("allow");
+  });
+});
+

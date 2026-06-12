@@ -2333,19 +2333,29 @@ const PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
 // name in argument text (`echo bash5`) stays allowed.
 const INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
 const INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
+// PR #106 Codex review (r3397371553): interpreter options can sit
+// between the binary and `-c` (`python3.11 -B -c ...`). Each skipped
+// token must START with `-` so a script path (`python script.py -c`)
+// or a bare module name (`python -m pytest -c cfg`) keeps the gate
+// closed — `-c` there belongs to the script/module, not to python.
+const PYTHON_OPTION_SKIP = "(?:-[A-Za-z][A-Za-z0-9]*\\s+)*";
 const PYTHON_INVOCATION_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
     "(?:python|pypy)" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-c\\b",
+    "\\s+" +
+    PYTHON_OPTION_SKIP +
+    "-c\\b",
 );
 const PYTHON_INVOCATION_HEAD_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
     "(?:python|pypy)" +
     INTERP_VERSION_SUFFIX +
-    "\\s+-c\\s+",
+    "\\s+" +
+    PYTHON_OPTION_SKIP +
+    "-c\\s+",
 );
 const PERL_INVOCATION_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
@@ -2371,10 +2381,13 @@ const PERL_INPLACE_RE = new RegExp(
     INTERP_PATH_PREFIX +
     "perl" +
     INTERP_VERSION_SUFFIX +
-    // Lowercase-only flag cluster before the `i`: a leading `-I<path>` /
+    // Lowercase/digit flag cluster before the `i`: a leading `-I<path>` /
     // `-M<module>` (uppercase option letter, lowercase argument like "lib" /
     // "strict") is consumed by the skip group and never mistaken for `-i`.
-    "\\s+(?:-[A-Za-z]*\\s+)*-[a-z]*i",
+    // Digits are part of perl flag bundles (`-0pi`, separate `-0777`
+    // before `-pi`) and the bundle still performs the in-place write
+    // (PR #106 Codex review r3397371538).
+    "\\s+(?:-[A-Za-z0-9]*\\s+)*-[a-z0-9]*i",
 );
 const RUBY_INVOCATION_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
@@ -2405,11 +2418,15 @@ const AWK_INVOCATION_RE = new RegExp(
     "\\b",
 );
 // Anchored on a `print` / `printf` statement so an awk string COMPARISON
-// (`$1 > "m"`) is not mistaken for a redirect; `[^;}\n]` keeps the match
-// inside one statement. Capture group 1 is the redirect operator, group 2
-// the quoted target path.
-const AWK_INSCRIPT_REDIRECT_RE =
-  /\bprintf?\b[^;}\n]*?(>>?)\s*["']([^"']+)["']/g;
+// before the print (`$1 > "m" {print}`) is never scanned; `[^;}\n]` keeps
+// the match inside one statement. Within a statement, a `>` to a quoted
+// string is a redirect ONLY at paren depth 0 — `print ($1 > "m")` is a
+// comparison, `print ($1 > "m") > "f"` redirects via the outer `>`
+// (PR #106 Codex review r3397371545). The handler computes the depth
+// with quoted literals masked so `print "(" > "f"` cannot inflate it.
+const AWK_PRINT_STMT_RE = /\bprintf?\b[^;}\n]*/g;
+const AWK_STMT_REDIRECT_RE = /(>>?)\s*["']([^"']+)["']/g;
+const AWK_QUOTED_LITERAL_RE = /"[^"]*"|'[^']*'/g;
 const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
 // Use a single-char class `[e]val` so this source file does not contain
@@ -2502,11 +2519,27 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
     // Scan the whole command (gated on an awk invocation): the print/printf
     // redirect can sit after awk options (`-F,`, `-v x=1`) that single-arg
     // program extraction would mistake for the program. The print/printf
-    // anchor in AWK_INSCRIPT_REDIRECT_RE keeps this from matching shell
-    // redirects or awk string comparisons; group 2 is the quoted target.
-    for (const m of normalized.matchAll(AWK_INSCRIPT_REDIRECT_RE)) {
-      const target = m[2];
-      if (target !== undefined && isInRepoWriteTarget(target)) return true;
+    // anchor in AWK_PRINT_STMT_RE keeps this from matching shell redirects
+    // or pattern-position comparisons (`$1 > "m" {print}`). Within a
+    // statement, only a depth-0 `>` is a redirect: the prefix up to the
+    // operator is quote-masked (so a printed `"("` cannot inflate the
+    // depth), and an operator inside open parens (`print ($1 > "m")`) is
+    // a string comparison, not a write (PR #106 Codex r3397371545).
+    for (const stmt of normalized.matchAll(AWK_PRINT_STMT_RE)) {
+      for (const m of stmt[0].matchAll(AWK_STMT_REDIRECT_RE)) {
+        const target = m[2];
+        if (target === undefined) continue;
+        const prefix = stmt[0]
+          .slice(0, m.index)
+          .replace(AWK_QUOTED_LITERAL_RE, "");
+        let depth = 0;
+        for (const ch of prefix) {
+          if (ch === "(") depth += 1;
+          else if (ch === ")") depth -= 1;
+        }
+        if (depth > 0) continue;
+        if (isInRepoWriteTarget(target)) return true;
+      }
     }
   }
   // php -r / php -R / php -B: detect file_put_contents / fwrite / fputs.
