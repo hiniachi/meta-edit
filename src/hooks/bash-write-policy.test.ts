@@ -3187,3 +3187,96 @@ describe("evaluateBashCommand — SEC-BASH review hardening round 3", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Review hardening round 4 (Codex review of PR #106 after e75e765, six P2
+// findings — r3400912116 / .118 / .122 / .123 / .124 / .127): options that
+// take a SEPARATE operand before -c / -e / the awk program, plus two awk
+// scan-precision gaps.
+// ---------------------------------------------------------------------------
+describe("evaluateBashCommand — SEC-BASH review hardening round 4", () => {
+  // H1: python's documented operand-taking long option before -c.
+  it("denies python3 --check-hash-based-pycs default -c with an inline write", () => {
+    expect(
+      evaluateBashCommand(
+        "python3 --check-hash-based-pycs default -c 'open(\"src/foo.ts\",\"w\").write(\"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  // H2: bash long options with separate operands before -c.
+  it("denies bash --init-file /tmp/rc -c hosting a protected-path write", () => {
+    expect(
+      evaluateBashCommand(
+        "bash --init-file /tmp/rc -c 'printf x > .meta-edit/state/edits.jsonl'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies bash --rcfile /tmp/rc -c hosting a protected-path write", () => {
+    expect(
+      evaluateBashCommand(
+        "bash --rcfile /tmp/rc -c 'printf x > .meta-edit/state/edits.jsonl'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  // H3: an awk snippet fully inside another command's QUOTED argument is
+  // prose — the invocation anchor must sit at shell quote depth 0.
+  it("control: double-quoted commit message embedding a quoted awk program stays allow", () => {
+    expect(
+      evaluateBashCommand(
+        "git commit -m \"document awk 'BEGIN{print 1 > \\\"src/foo.ts\\\"}'\"",
+      ).decision,
+    ).toBe("allow");
+  });
+  it("real awk invocation still denies after the quote-depth anchor", () => {
+    expect(
+      evaluateBashCommand("awk 'BEGIN{print 1 > \"src/foo.ts\"}'").decision,
+    ).toBe("deny");
+  });
+
+  // H4: perl/ruby options whose operand is the next word, before -e.
+  it("denies perl -I /tmp -e with an inline open-for-write", () => {
+    expect(
+      evaluateBashCommand(
+        "perl -I /tmp -e 'open(my $fh, \">\", \"src/foo.ts\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("denies ruby -I /tmp -e with an inline File.write", () => {
+    expect(
+      evaluateBashCommand(
+        "ruby -I /tmp -e 'File.write(\"src/foo.ts\",\"x\")'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  // H5: awk long options with separate operands before the program.
+  it("denies awk --field-separator , with an in-script in-repo redirect", () => {
+    expect(
+      evaluateBashCommand(
+        "awk --field-separator , 'BEGIN{print 1 > \"src/foo.ts\"}'",
+      ).decision,
+    ).toBe("deny");
+  });
+
+  // H6: a redirect target bound to a string literal earlier in the same
+  // program is still a literal target.
+  it("denies awk redirect through a literal-assigned variable", () => {
+    expect(
+      evaluateBashCommand(
+        "awk 'BEGIN{f=\".meta-edit/state/edits.jsonl\"; print 1 > f}'",
+      ).decision,
+    ).toBe("deny");
+  });
+  it("control: variable comparison inside print parens stays allow", () => {
+    expect(
+      evaluateBashCommand("awk '{print ($1 > max)}' data.txt").decision,
+    ).toBe("allow");
+  });
+  it("control: unresolved variable redirect target stays allow", () => {
+    expect(
+      evaluateBashCommand("awk '{print $1 > outfile}' data.txt").decision,
+    ).toBe("allow");
+  });
+});
+

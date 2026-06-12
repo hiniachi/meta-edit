@@ -7595,7 +7595,7 @@ function* iterRedirectTargets(s, opts = {}) {
     i = j;
   }
 }
-var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-o\s+[^\s-]\S*\s+|--?[A-Za-z][^\s]*\s+)*(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+var SHELL_HOSTING_C_RE = /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-o\s+[^\s-]\S*\s+|--(?:init-file|rcfile)\s+[^\s-]\S*\s+|--?[A-Za-z][^\s]*\s+)*(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 function evaluateShellHostedPayload(rawSegment, opts) {
   const cMatch = rawSegment.match(SHELL_HOSTING_C_RE);
   if (cMatch !== null && typeof cMatch.index === "number") {
@@ -7860,8 +7860,8 @@ var RUBY_WRITE_RE = /\bFile\.(?:write|open)\b|\bIO\.(?:write|binwrite)\b|\.write
 var PHP_WRITE_RE = /\bfile_put_contents\b|\bfwrite\b|\bfputs\b|\bfputcsv\b/;
 var INTERP_PATH_PREFIX = "(?:[A-Za-z0-9_./\\-]*/)?";
 var INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
-var PYTHON_OPTION_SKIP = "(?:-[WX]\\s+[^\\s-]\\S*\\s+|-[A-Za-z][A-Za-z0-9]*\\s+)*";
-var INTERP_OPTION_SKIP = "(?:-[A-Za-z0-9][^\\s]*\\s+)*";
+var PYTHON_OPTION_SKIP = "(?:-[WX]\\s+[^\\s-]\\S*\\s+|--check-hash-based-pycs\\s+[^\\s-]\\S*\\s+|-[A-Za-z][A-Za-z0-9]*\\s+)*";
+var INTERP_OPTION_SKIP = "(?:-[IMr]\\s+[^\\s-]\\S*\\s+|-[A-Za-z0-9][^\\s]*\\s+)*";
 var PYTHON_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+" + PYTHON_OPTION_SKIP + "-c\\b");
 var PYTHON_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:python|pypy)" + INTERP_VERSION_SUFFIX + "\\s+" + PYTHON_OPTION_SKIP + "-c\\s+");
 var PERL_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl" + INTERP_VERSION_SUFFIX + "\\s+" + INTERP_OPTION_SKIP + "-[A-Za-z]*[eE][A-Za-z]*\\b");
@@ -7870,9 +7870,9 @@ var PERL_INPLACE_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "perl"
 var RUBY_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+" + INTERP_OPTION_SKIP + "-[A-Za-z]*e[A-Za-z]*\\b");
 var RUBY_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "ruby" + INTERP_VERSION_SUFFIX + "\\s+" + INTERP_OPTION_SKIP + "-[A-Za-z]*e[A-Za-z]*\\b\\s*");
 var AWK_INVOCATION_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:g|m|n)?awk" + INTERP_VERSION_SUFFIX + "\\b");
-var AWK_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:g|m|n)?awk" + INTERP_VERSION_SUFFIX + "\\s+");
+var AWK_INVOCATION_HEAD_RE = new RegExp("(?:^|[\\s;&|(])" + INTERP_PATH_PREFIX + "(?:g|m|n)?awk" + INTERP_VERSION_SUFFIX + "\\s+", "g");
 var AWK_PRINT_STMT_RE = /\bprintf?\b[^;}\n]*/g;
-var AWK_STMT_REDIRECT_RE = /(>>?)\s*\(*\s*["']([^"']+)["']/g;
+var AWK_STMT_REDIRECT_RE = /(>>?)\s*\(*\s*(?:["']([^"']+)["']|([A-Za-z_]\w*))/g;
 var AWK_QUOTED_LITERAL_RE = /"[^"]*"|'[^']*'/g;
 var PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 var PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
@@ -7928,9 +7928,25 @@ function matchesPythonNodeWrite(normalized, raw) {
     }
   }
   if (AWK_INVOCATION_RE.test(normalized)) {
-    let awkScanText = normalized;
-    const awkHit = raw.match(AWK_INVOCATION_HEAD_RE);
-    if (awkHit !== null && typeof awkHit.index === "number") {
+    let awkScanText = null;
+    for (const awkHit of raw.matchAll(AWK_INVOCATION_HEAD_RE)) {
+      if (typeof awkHit.index !== "number")
+        continue;
+      let inSingle = false;
+      let inDouble = false;
+      for (let k = 0;k < awkHit.index; k++) {
+        const qc = raw[k];
+        if (qc === "\\" && !inSingle) {
+          k++;
+          continue;
+        }
+        if (qc === "'" && !inDouble)
+          inSingle = !inSingle;
+        else if (qc === '"' && !inSingle)
+          inDouble = !inDouble;
+      }
+      if (inSingle || inDouble)
+        continue;
       const isWordBreak = (ch) => ch === " " || ch === "\t" || ch === `
 ` || ch === ";" || ch === "|" || ch === "&" || ch === ">" || ch === "<";
       const skipWord = (k) => {
@@ -7945,18 +7961,26 @@ function matchesPythonNodeWrite(normalized, raw) {
         const wordStart = i;
         i = skipWord(i);
         const opt = raw.slice(wordStart, i).trimEnd();
-        if (opt === "-v" || opt === "-F" || opt === "-f")
+        if (opt === "-v" || opt === "-F" || opt === "-f" || opt === "--assign" || opt === "--field-separator" || opt === "--file") {
           i = skipWord(i);
+        }
       }
       const program = readShellArg(raw, i);
-      if (program !== null && program.length > 0)
-        awkScanText = program;
+      awkScanText = program !== null && program.length > 0 ? program : normalized;
+      break;
     }
-    for (const stmt of awkScanText.matchAll(AWK_PRINT_STMT_RE)) {
+    for (const stmt of (awkScanText ?? "").matchAll(AWK_PRINT_STMT_RE)) {
       for (const m of stmt[0].matchAll(AWK_STMT_REDIRECT_RE)) {
-        const target = m[2];
-        if (target === undefined)
-          continue;
+        let target = m[2];
+        if (target === undefined) {
+          const ident = m[3];
+          if (ident === undefined)
+            continue;
+          const assign = (awkScanText ?? "").match(new RegExp("\\b" + ident + `\\s*=\\s*["']([^"']+)["']`));
+          if (assign === null || assign[1] === undefined)
+            continue;
+          target = assign[1];
+        }
         const prefix = stmt[0].slice(0, m.index).replace(AWK_QUOTED_LITERAL_RE, "");
         let depth = 0;
         for (const ch of prefix) {
@@ -8806,4 +8830,4 @@ export {
   FALLBACK_ONBOARDING_POINTER
 };
 
-//# debugId=28512812FF2AA47A64756E2164756E21
+//# debugId=0E456D89B516B2FA64756E2164756E21

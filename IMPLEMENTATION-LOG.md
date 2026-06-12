@@ -1973,3 +1973,31 @@ audit warn.)
   Suite: 1026/1026 green; `tsc --noEmit` clean.
 - Dogfood: declarations `edit_20260612_0011`..`0018`
   (`edit_permission_logic` ×7, `edit_progress` ×1).
+
+## v0.9.3 follow-up round 4: PR #106 Codex re-review (six P2, final before merge)
+
+- Trigger: Codex bot re-review after `e75e765`, six new P2 findings
+  (r3400912116 / .118 / .122 / .123 / .124 / .127), all reproduced
+  locally. User instructed: fix lightly and merge.
+- Fixes (all in `src/hooks/bash-write-policy.ts`, red-first TDD):
+  - H1 python: whitelist the operand pair
+    `--check-hash-based-pycs <mode>` before `-c`.
+  - H2 shell hosts: whitelist `--init-file <f>` / `--rcfile <f>`
+    operand pairs before `-c` (generic long-option pairs would
+    false-deny `bash --norc script.sh -c blue`).
+  - H3 awk anchor: invocation sites are iterated (HEAD regex now /g)
+    and only a site at shell quote depth 0 anchors the program scan;
+    prose mentions inside quoted arguments no longer deny.
+  - H4 perl/ruby: whitelist `-I` / `-M` / `-r` next-word operand pairs
+    before the `-e` bundle.
+  - H5 awk options: `--field-separator` / `--assign` / `--file`
+    consume their separate operand like `-F` / `-v` / `-f`.
+  - H6 awk variable targets: a bare-identifier redirect target is
+    resolved against a literal `f="path"` assignment in the program;
+    computed targets (concat / sprintf / ENVIRON) stay unresolved →
+    allowed, deliberately — tracking them is the classification layer
+    SPEC Article 7 forbids.
+- Tests added: 11 in a "review hardening round 4" describe block.
+  Suite: 1037/1037 green; `tsc --noEmit` clean.
+- Dogfood: declarations `edit_20260612_0019`..`0025`
+  (`edit_permission_logic` ×6, `edit_progress` ×1).

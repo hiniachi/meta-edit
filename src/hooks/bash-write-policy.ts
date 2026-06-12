@@ -1856,14 +1856,18 @@ function* iterRedirectTargets(
 // protected-path detector lives in evaluateSegment, not in the rescan.
 // Recursing through evaluateBashCommand fixes that uniformly without
 // the rescan having to mirror every per-segment check.
-// PR #106 Codex review round 3 (r3400804555): invocation options may sit
-// between the shell name and `-c` (`bash5 -l -c ...`, `bash --norc -c`,
-// `bash -o pipefail -c`). Skip single-token short/long options plus the
-// `-o <opt>` pair; every skipped token starts with `-` (or follows a bare
-// `-o`), so a script path (`bash deploy.sh -c blue`) keeps the gate
-// closed — `-c` there belongs to the script.
+// PR #106 Codex review round 3 (r3400804555) + round 4 (r3400912118):
+// invocation options may sit between the shell name and `-c`
+// (`bash5 -l -c ...`, `bash --norc -c`, `bash -o pipefail -c`,
+// `bash --init-file /tmp/rc -c`). Skip single-token short/long options
+// plus the operand-taking pairs `-o <opt>` / `--init-file <file>` /
+// `--rcfile <file>` — the operand-taking long options are WHITELISTED
+// (a generic `--opt <operand>` pair would consume `--norc script.sh`
+// and false-deny `bash --norc script.sh -c blue`, where `-c` belongs
+// to the script). Every other skipped token starts with `-`, so a
+// script path keeps the gate closed.
 const SHELL_HOSTING_C_RE =
-  /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-o\s+[^\s-]\S*\s+|--?[A-Za-z][^\s]*\s+)*(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
+  /(?:^|[\s;&|(])(?:[A-Za-z0-9_.\/-]*\/)?(?:r?bash|sh|dash|zsh|m?ksh|ash)\d*(?:\.\d+)*\s+(?:-o\s+[^\s-]\S*\s+|--(?:init-file|rcfile)\s+[^\s-]\S*\s+|--?[A-Za-z][^\s]*\s+)*(?:-[A-Za-z]*c[A-Za-z]*)\b\s*/;
 
 function evaluateShellHostedPayload(
   rawSegment: string,
@@ -2347,13 +2351,20 @@ const INTERP_VERSION_SUFFIX = "\\d*(?:\\.\\d+)*";
 // (`python -m pytest -c cfg`) keeps the gate closed: `-c` there belongs
 // to the script/module, not to python (`-m`'s operand ends python's own
 // option parsing, so it is deliberately NOT an arg-taking pair here).
+// Round 4 (r3400912116): `--check-hash-based-pycs <mode>` is python's
+// one documented operand-taking long option; it is whitelisted as a
+// pair rather than generalizing to every `--opt <operand>` shape (which
+// would mis-skip a script argument).
 const PYTHON_OPTION_SKIP =
-  "(?:-[WX]\\s+[^\\s-]\\S*\\s+|-[A-Za-z][A-Za-z0-9]*\\s+)*";
+  "(?:-[WX]\\s+[^\\s-]\\S*\\s+|--check-hash-based-pycs\\s+[^\\s-]\\S*\\s+|-[A-Za-z][A-Za-z0-9]*\\s+)*";
 // Round 3 (r3400804558 / r3400804561): perl and ruby likewise accept
 // ordinary interpreter options before the `-e` bundle (`perl -Ilib -e`,
 // `ruby -w -e`). Same rule — every skipped token starts with `-`, so a
-// script argument never opens the gate.
-const INTERP_OPTION_SKIP = "(?:-[A-Za-z0-9][^\\s]*\\s+)*";
+// script argument never opens the gate. Round 4 (r3400912123): `-I`,
+// `-M`, and `-r` also accept their operand as the NEXT word
+// (`perl -I /tmp -e`, `ruby -r lib -e`); those pairs are whitelisted.
+const INTERP_OPTION_SKIP =
+  "(?:-[IMr]\\s+[^\\s-]\\S*\\s+|-[A-Za-z0-9][^\\s]*\\s+)*";
 const PYTHON_INVOCATION_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
@@ -2445,12 +2456,17 @@ const AWK_INVOCATION_RE = new RegExp(
 // not the whole command, so a non-awk command that merely mentions awk
 // in a quoted argument (`git commit -m 'document awk {print ...}'`) is
 // not scanned as a program.
+// Global flag (round 4 r3400912122): the handler iterates ALL candidate
+// sites and anchors on the first at shell quote depth 0, so an awk
+// snippet living entirely inside another command's quoted argument
+// (`git commit -m "document awk '...'"`) never anchors the scan.
 const AWK_INVOCATION_HEAD_RE = new RegExp(
   "(?:^|[\\s;&|(])" +
     INTERP_PATH_PREFIX +
     "(?:g|m|n)?awk" +
     INTERP_VERSION_SUFFIX +
     "\\s+",
+  "g",
 );
 // Anchored on a `print` / `printf` statement so an awk string COMPARISON
 // before the print (`$1 > "m" {print}`) is never scanned; `[^;}\n]` keeps
@@ -2464,8 +2480,16 @@ const AWK_INVOCATION_HEAD_RE = new RegExp(
 // before the quote; a parenthesized COMPARISON (`($1 > ("m"))`) is still
 // skipped by the depth rule, which counts only the prefix BEFORE the
 // operator.
+// Round 4 (r3400912127): the redirect target may also be a bare
+// identifier (`print 1 > f`). Group 2 is a literal quoted target;
+// group 3 is an identifier, which the handler resolves against a
+// `f="literal"` assignment elsewhere in the program. An identifier
+// with no literal assignment stays unresolved → allowed (resolving
+// computed targets — concatenation, sprintf, ENVIRON — would need the
+// classification layer that SPEC Article 7 forbids).
 const AWK_PRINT_STMT_RE = /\bprintf?\b[^;}\n]*/g;
-const AWK_STMT_REDIRECT_RE = /(>>?)\s*\(*\s*["']([^"']+)["']/g;
+const AWK_STMT_REDIRECT_RE =
+  /(>>?)\s*\(*\s*(?:["']([^"']+)["']|([A-Za-z_]\w*))/g;
 const AWK_QUOTED_LITERAL_RE = /"[^"]*"|'[^']*'/g;
 const PHP_INVOCATION_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b/;
 const PHP_INVOCATION_HEAD_RE = /(?:^|[\s;&|(])php\s+-[A-Za-z]*[rRB][A-Za-z]*\b\s*/;
@@ -2571,9 +2595,25 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
     // the operator is quote-masked (so a printed `"("` cannot inflate
     // the depth), and an operator inside open parens (`print ($1 >
     // "m")`) is a string comparison, not a write (r3397371545).
-    let awkScanText = normalized;
-    const awkHit = raw.match(AWK_INVOCATION_HEAD_RE);
-    if (awkHit !== null && typeof awkHit.index === "number") {
+    // Round 4 r3400912122: only an invocation site at shell QUOTE DEPTH
+    // ZERO anchors the scan — a candidate inside another command's
+    // quoted argument (`git commit -m "document awk '...'"`) is prose.
+    // No unquoted site → nothing to scan at all.
+    let awkScanText: string | null = null;
+    for (const awkHit of raw.matchAll(AWK_INVOCATION_HEAD_RE)) {
+      if (typeof awkHit.index !== "number") continue;
+      let inSingle = false;
+      let inDouble = false;
+      for (let k = 0; k < awkHit.index; k++) {
+        const qc = raw[k];
+        if (qc === "\\" && !inSingle) {
+          k++;
+          continue;
+        }
+        if (qc === "'" && !inDouble) inSingle = !inSingle;
+        else if (qc === '"' && !inSingle) inDouble = !inDouble;
+      }
+      if (inSingle || inDouble) continue;
       const isWordBreak = (ch: string): boolean =>
         ch === " " ||
         ch === "\t" ||
@@ -2594,16 +2634,43 @@ function matchesPythonNodeWrite(normalized: string, raw: string): boolean {
         i = skipWord(i);
         const opt = raw.slice(wordStart, i).trimEnd();
         // Bare arg-taking options carry their operand in the NEXT word;
-        // attached forms (`-F,`, `-vx=1`) are already one word.
-        if (opt === "-v" || opt === "-F" || opt === "-f") i = skipWord(i);
+        // attached forms (`-F,`, `-vx=1`, `--field-separator=,`) are
+        // already one word. The operand-taking long forms mirror the
+        // short whitelist (round 4 r3400912124).
+        if (
+          opt === "-v" ||
+          opt === "-F" ||
+          opt === "-f" ||
+          opt === "--assign" ||
+          opt === "--field-separator" ||
+          opt === "--file"
+        ) {
+          i = skipWord(i);
+        }
       }
       const program = readShellArg(raw, i);
-      if (program !== null && program.length > 0) awkScanText = program;
+      // Extraction failure (unclosed quote, no argument) falls back to
+      // the whole normalized command: conservative, pre-round-3 behavior.
+      awkScanText = program !== null && program.length > 0 ? program : normalized;
+      break;
     }
-    for (const stmt of awkScanText.matchAll(AWK_PRINT_STMT_RE)) {
+    for (const stmt of (awkScanText ?? "").matchAll(AWK_PRINT_STMT_RE)) {
       for (const m of stmt[0].matchAll(AWK_STMT_REDIRECT_RE)) {
-        const target = m[2];
-        if (target === undefined) continue;
+        let target = m[2];
+        if (target === undefined) {
+          // Bare-identifier target (round 4 r3400912127): resolve it
+          // against a literal assignment (`f="path"`) anywhere in the
+          // program. Unresolved (computed) targets stay allowed —
+          // tracking concatenation / sprintf / ENVIRON would be the
+          // classification layer SPEC Article 7 forbids.
+          const ident = m[3];
+          if (ident === undefined) continue;
+          const assign = (awkScanText ?? "").match(
+            new RegExp("\\b" + ident + "\\s*=\\s*[\"']([^\"']+)[\"']"),
+          );
+          if (assign === null || assign[1] === undefined) continue;
+          target = assign[1];
+        }
         const prefix = stmt[0]
           .slice(0, m.index)
           .replace(AWK_QUOTED_LITERAL_RE, "");
