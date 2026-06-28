@@ -155,6 +155,66 @@ describe("handleCodexHookPayload - PreToolUse apply_patch", () => {
     expect(log.readAll().filter((entry) => entry.phase === "consumed")).toHaveLength(1);
   });
 
+  it("allows classified apply_patch payloads carried in Codex command fields", async () => {
+    const { handleCodexHookPayload } = await loadCodexHookEntrypoint();
+    const grants = createGrantsStore(tmpRoot);
+    const log = new EditLog(tmpRoot);
+    const cases = [
+      {
+        key: "command",
+        file: "src/freeform-command.ts",
+        editId: "edit_20260617_0007",
+      },
+      {
+        key: "cmd",
+        file: "src/freeform-cmd.ts",
+        editId: "edit_20260617_0008",
+      },
+    ] as const;
+
+    for (const { key, file, editId } of cases) {
+      writeFileIn(tmpRoot, file, "before\n");
+      const grant = await grants.issue({
+        edit_id: editId,
+        binding: [
+          {
+            file,
+            before_sha256: sha256Hex("before\n"),
+          },
+        ],
+        declaration: {
+          kind: "edit_permission_logic",
+          target: "prod",
+          provenance: "direct_observation",
+          execution_state: "normal",
+          target_file: file,
+          test_files: ["src/codex/hook-entrypoint.test.ts"],
+        },
+      });
+
+      const toolInput: Record<string, unknown> = { [key]: updatePatch(file) };
+      const response = await handleCodexHookPayload(
+        {
+          hook_event_name: "PreToolUse",
+          cwd: tmpRoot,
+          tool_name: "apply_patch",
+          tool_input: toolInput,
+        },
+        { now: () => new Date("2026-06-17T01:02:03.000Z") },
+      );
+
+      expect(response).toEqual({
+        additional_context: expect.stringContaining("meta-edit reminder:"),
+      });
+      expect(response).not.toHaveProperty("decision");
+      expect(response).not.toHaveProperty("hookSpecificOutput");
+      expect(await grants.lookup(grant.token_id)).toBeNull();
+    }
+    expect(log.readAll().filter((entry) => entry.phase === "consumed")).toHaveLength(
+      cases.length,
+    );
+  });
+
   it("allows classified apply_patch fileChanges targets and consumes their grants", async () => {
     const { handleCodexHookPayload } = await loadCodexHookEntrypoint();
     writeFileIn(tmpRoot, "tests/file-changes-existing.test.ts", "before\n");

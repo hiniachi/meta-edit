@@ -182,7 +182,7 @@ Claude Code path.
 | CI sample (run `meta-edit summary` on PR) | [`examples/.github/workflows/meta-edit-summary.yml`](./examples/.github/workflows/meta-edit-summary.yml) |
 | CLI reference | `meta-edit --help` |
 
-Status: `0.9.4` pre-release. Node 20 LTS+, POSIX shell. Bun is dev-only.
+Status: `0.9.5` pre-release. Node 20 LTS+, POSIX shell. Bun is dev-only.
 
 ## Support
 
