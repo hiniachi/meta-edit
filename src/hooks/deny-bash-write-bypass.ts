@@ -23,6 +23,7 @@ import {
   replyDeny,
 } from "./hook-runtime.js";
 import { evaluateBashCommand } from "./bash-write-policy.js";
+import { resolveRepoRoot } from "../utils/repo-paths.js";
 
 async function main(): Promise<number> {
   const event = await readStdin();
@@ -32,12 +33,13 @@ async function main(): Promise<number> {
   }
   const input = (event["tool_input"] as { command?: unknown } | undefined) ?? {};
   const command = typeof input.command === "string" ? input.command : "";
-  // Codex round-1 a4-01: thread the agent's cwd into the policy so it can
-  // resolve symlinks in redirect targets ("cat foo > link/state/x" where
-  // link -> .meta-edit). Claude Code provides the working directory in the
-  // hook event payload as `cwd`. Fall back to omitting if not present.
+  // Thread both the agent's cwd and discovered repo root into the policy so
+  // subdirectory launches still resolve symlinked protected paths correctly.
   const cwd = typeof event["cwd"] === "string" ? event["cwd"] : undefined;
-  const decision = evaluateBashCommand(command, cwd ? { cwd } : {});
+  const decision = evaluateBashCommand(
+    command,
+    cwd === undefined ? {} : { cwd, repoRoot: resolveRepoRoot(cwd) },
+  );
   if (decision.decision === "deny") {
     return replyDeny(decision.reason ?? "denied by deny-bash-write-bypass");
   }

@@ -8,7 +8,9 @@
   "bin": {
     "meta-edit": "dist/cli.js",
     "meta-edit-deny-raw-edit": "dist/hooks/deny-raw-edit.js",
-    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js"
+    "meta-edit-deny-bash-write-bypass": "dist/hooks/deny-bash-write-bypass.js",
+    "meta-edit-codex-deny-raw-edit": "dist/codex/deny-raw-edit.js",
+    "meta-edit-codex-session-onboarding": "dist/codex/session-onboarding.js"
   },
   "main": "./dist/server.js",
   "exports": {
@@ -19,17 +21,24 @@
     "dist/",
     "docs/SPEC.md",
     ".claude-plugin/",
+    ".codex-plugin/",
+    ".agents/",
+    "plugins/meta-edit/",
+    ".mcp.json",
+    "codex/",
     "hooks/",
     "skills/",
+    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts src/opencode/plugin.ts --target node --outdir dist --root src --sourcemap=external",
+    "build": "bun build src/cli.ts src/server.ts src/hooks/deny-raw-edit.ts src/hooks/deny-bash-write-bypass.ts src/hooks/session-onboarding.ts src/codex/deny-raw-edit.ts src/codex/session-onboarding.ts src/opencode/plugin.ts --target node --outdir dist --root src --sourcemap=external && node scripts/sync-codex-plugin.mjs",
     "test": "bun test",
     "test:node": "node --test --experimental-strip-types --no-warnings",
     "typecheck": "tsc --noEmit",
-    "start": "bun run src/cli.ts"
+    "start": "bun run src/cli.ts",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=20"

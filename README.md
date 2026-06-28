@@ -9,7 +9,7 @@
 
 > An MCP server that replaces a coding agent's single `Edit` tool with
 > **twenty-one kind-specific edit tools**. Each tool carries — in its own
-> description — the testing obligations for that kind of change. The 16
+> description — the testing obligations for that kind of change. The 15
 > impl tools additionally carry a required `target: "prod" | "test"`
 > flag so test edits are visible inside their kind's audit surface. Every
 > declaration also carries a required `provenance` field (the epistemic
@@ -65,10 +65,10 @@ edit_explanation
 ```
 
 Each description specifies: when to use it, when *not* to use it, which
-tests must accompany the edit, and when to stop and ask the user. The 16
-impl tools (everything except the 5 workflow-axis kinds) carry a required
-`target: "prod" | "test"` flag — prod/test pairs land as two
-declarations of the same tool, both in the same commit.
+tests must accompany the edit, and when to stop and ask the user. The 15
+impl tools (everything except the 6 workflow-axis kinds) carry a required
+`target: "prod" | "test"` flag — prod/test pairs land as two declarations
+of the same tool, both in the same commit.
 
 > **v0.5.0**: the previous `edit_test_only_change` and
 > `edit_refactor_only` slots are gone. Test edits flow through the
@@ -84,7 +84,9 @@ When no kind cleanly fits a requested change, the agent **stops and asks**
 instead of forcing the change through the nearest tool. We have observed
 this at ~80% context utilisation — exactly the regime where `CLAUDE.md`
 normally loses its grip. The transcript that led to the workflow tool
-The 5 workflow-axis kinds (`edit_progress` / `edit_observation` / `edit_proposal` / `edit_decision` / `edit_explanation`) are on the
+The 6 workflow-axis kinds (`edit_progress` / `edit_observation` /
+`edit_proposal` / `edit_decision` / `edit_explanation` /
+`edit_policy_change`) are on the
 [project page](https://hiniachi.github.io/meta-edit/#proof).
 
 ## Install
@@ -129,6 +131,34 @@ Then register the server in your MCP configuration:
 }
 ```
 
+### Codex
+
+Codex plugin marketplace:
+
+```sh
+codex plugin marketplace add hiniachi/meta-edit
+codex plugin add meta-edit@meta-edit
+```
+
+npm/global config install:
+
+```sh
+npm install -g @hiniachi/meta-edit
+meta-edit install-codex --scope user
+```
+
+This writes Codex MCP + hook configuration into `$CODEX_HOME/config.toml`
+when `CODEX_HOME` is set, otherwise `~/.codex/config.toml`.
+Project-local installs use:
+
+```sh
+meta-edit install-codex --scope project
+```
+
+The Codex hook checks `apply_patch` and `Bash`. A typed `edit_*` declaration
+must cover every `apply_patch` target before the patch is allowed; otherwise
+the hook denies the patch with a reminder to declare first.
+
 ### opencode
 
 ```sh
@@ -152,7 +182,7 @@ Claude Code path.
 | CI sample (run `meta-edit summary` on PR) | [`examples/.github/workflows/meta-edit-summary.yml`](./examples/.github/workflows/meta-edit-summary.yml) |
 | CLI reference | `meta-edit --help` |
 
-Status: `0.3.1` pre-release. Node 20 LTS+, POSIX shell. Bun is dev-only.
+Status: `0.9.3` pre-release. Node 20 LTS+, POSIX shell. Bun is dev-only.
 
 ## Support
 

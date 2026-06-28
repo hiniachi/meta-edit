@@ -15,6 +15,11 @@ import {
   runInstallOpencode,
   runUninstallOpencode,
 } from "./cli/opencode-cmd.js";
+import {
+  parseCodexArgs,
+  runInstallCodex,
+  runUninstallCodex,
+} from "./cli/codex-cmd.js";
 import { renderHelp } from "./cli/help-cmd.js";
 import { VERSION } from "./version.js";
 
@@ -124,6 +129,24 @@ export async function main(argv: string[]): Promise<number> {
         return 64;
       }
       return runUninstallOpencode({ scope: parsed.scope, out, err });
+    }
+
+    case "install-codex": {
+      const parsed = parseCodexArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit install-codex: ${parsed.error}\n`);
+        return 64;
+      }
+      return runInstallCodex({ scope: parsed.scope, out, err });
+    }
+
+    case "uninstall-codex": {
+      const parsed = parseCodexArgs(rest);
+      if (!parsed.ok) {
+        err.write(`meta-edit uninstall-codex: ${parsed.error}\n`);
+        return 64;
+      }
+      return runUninstallCodex({ scope: parsed.scope, out, err });
     }
 
     default: {

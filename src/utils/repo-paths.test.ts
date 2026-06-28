@@ -57,6 +57,19 @@ describe("discoverRepoRoot — upward .git/.jj discovery", () => {
     expect(found).toBe(fs.realpathSync(root));
   });
 
+  it("returns the real repo root when the start path is under a symlinked cwd", () => {
+    const realRepo = path.join(root, "real-repo");
+    fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(realRepo, "src"), { recursive: true });
+    const linkedRepo = path.join(root, "linked-repo");
+    fs.symlinkSync(realRepo, linkedRepo);
+
+    const found = discoverRepoRoot(path.join(linkedRepo, "src"));
+
+    expect(found).toBe(fs.realpathSync(realRepo));
+    expect(found).not.toBe(path.join(linkedRepo, "src"));
+  });
+
   it("finds the workspace root from a sub-directory (.jj only)", () => {
     fs.mkdirSync(path.join(root, ".jj"));
     fs.mkdirSync(path.join(root, "deep/nested"), { recursive: true });

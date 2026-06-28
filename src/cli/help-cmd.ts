@@ -80,6 +80,10 @@ Usage:
                                            Install opencode mcp + plugin into opencode.json.
   meta-edit uninstall-opencode --scope user|project
                                            Remove opencode mcp + plugin from opencode.json.
+  meta-edit install-codex --scope user|project
+                                           Install Codex MCP + hooks into config.toml.
+  meta-edit uninstall-codex --scope user|project
+                                           Remove Codex MCP + hooks from config.toml.
   meta-edit help [TOOL]                    Show this help, or the verbatim
                                            description for one typed_edit tool.
   meta-edit --version                      Show version.

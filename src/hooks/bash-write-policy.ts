@@ -47,6 +47,7 @@ export type { HookDecision };
 // behavior used prior to a4-01.
 export type EvaluateBashOptions = {
   cwd?: string;
+  repoRoot?: string;
 };
 
 export const ALLOWLIST_PATTERNS: readonly string[] = [
@@ -1657,22 +1658,19 @@ function redirectsToProtected(
       }
     }
     // Codex round-1 a4-01: if a cwd was supplied, run the target through
-    // the symlink-aware guard. This catches redirects whose lexical form
-    // does not match a protected needle but whose realpath resolves into
-    // a protected directory (e.g. via "link/state/" where link is a
-    // symlink to .meta-edit). Absolute targets are checked directly;
-    // relative targets are resolved against cwd before the check.
+    // the symlink-aware guard. Relative targets are resolved against the
+    // actual command cwd, while protected-path matching is anchored to the
+    // repository root when the caller can provide it.
     if (opts.cwd && target.length > 0) {
       const absolute = path.isAbsolute(target)
         ? target
         : path.resolve(opts.cwd, target);
-      // isProtectedPath needs a repo-relative-shaped argument when given
-      // repoRoot; pass the relative form so the lexical fallback also
-      // works. For absolute targets that resolve outside the cwd, the
-      // realpath-and-prefix check inside isProtectedPath returns false,
-      // which is the correct (non-protected) decision.
-      const rel = path.relative(opts.cwd, absolute);
-      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: opts.cwd })) {
+      const protectedRoot = opts.repoRoot ?? opts.cwd;
+      const rel = path.relative(protectedRoot, absolute);
+      if (
+        rel.length > 0 &&
+        isProtectedPath(rel, { repoRoot: protectedRoot })
+      ) {
         return true;
       }
     }
@@ -1728,14 +1726,18 @@ function commandOperandResolvesProtected(
 ): boolean {
   const cwd = opts.cwd;
   if (!cwd) return false;
+  const protectedRoot = opts.repoRoot ?? cwd;
   for (const token of tokenizeSegment(normalized)) {
     for (const candidate of operandPathCandidates(token)) {
       if (candidate.length === 0) continue;
       const absolute = path.isAbsolute(candidate)
         ? candidate
         : path.resolve(cwd, candidate);
-      const rel = path.relative(cwd, absolute);
-      if (rel.length > 0 && isProtectedPath(rel, { repoRoot: cwd })) {
+      const rel = path.relative(protectedRoot, absolute);
+      if (
+        rel.length > 0 &&
+        isProtectedPath(rel, { repoRoot: protectedRoot })
+      ) {
         return true;
       }
     }

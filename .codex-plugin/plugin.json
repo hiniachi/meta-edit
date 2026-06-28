@@ -1,0 +1,34 @@
+{
+  "name": "meta-edit",
+  "version": "0.9.3",
+  "description": "Typed edit declarations for Codex: twenty-one kind-specific edit_* MCP tools, grant-aware apply_patch hooks, Bash write bypass checks, and onboarding reminders.",
+  "author": {
+    "name": "nia",
+    "email": "nia@yukinofurumachi.com",
+    "url": "https://github.com/hiniachi"
+  },
+  "homepage": "https://github.com/hiniachi/meta-edit",
+  "repository": "https://github.com/hiniachi/meta-edit",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "codex",
+    "ai-coding",
+    "edit-tools",
+    "test-obligations"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Meta Edit",
+    "shortDescription": "Typed edit declarations and apply_patch enforcement for Codex.",
+    "longDescription": "Meta Edit replaces generic file edits with twenty-one intent-specific edit_* declarations, then lets Codex apply patches only when a matching active declaration covers every target file.",
+    "developerName": "nia",
+    "category": "Productivity",
+    "capabilities": ["MCP", "Hooks", "Write"],
+    "websiteURL": "https://github.com/hiniachi/meta-edit",
+    "defaultPrompt": [
+      "Use meta-edit declarations before editing this repository."
+    ]
+  }
+}

@@ -1,4 +1,8 @@
 import { describe, it, expect } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import {
   evaluateBashCommand,
   ALLOWLIST_PATTERNS,
@@ -6,6 +10,30 @@ import {
   DENY_PREFIX_PATTERNS,
   WARN_PREFIX_PATTERNS,
 } from "./bash-write-policy.js";
+
+const DENY_BASH_WRITE_BYPASS_SOURCE = path.join(
+  import.meta.dir,
+  "deny-bash-write-bypass.ts",
+);
+
+function runDenyBashWriteBypass(event: Record<string, unknown>): {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const result = Bun.spawnSync({
+    cmd: ["bun", DENY_BASH_WRITE_BYPASS_SOURCE],
+    cwd: import.meta.dir,
+    stdin: new TextEncoder().encode(JSON.stringify(event)),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    code: result.exitCode,
+    stdout: new TextDecoder().decode(result.stdout),
+    stderr: new TextDecoder().decode(result.stderr),
+  };
+}
 
 describe("evaluateBashCommand — deny patterns", () => {
   const denyCases: Array<[string, string]> = [
@@ -784,6 +812,46 @@ describe("evaluateBashCommand - symlink-aware redirect target (a4-01)", () => {
       cwd: "/tmp",
     });
     expect(r.decision).toBe("allow");
+  });
+});
+
+describe("deny-bash-write-bypass entrypoint", () => {
+  it("denies symlinked protected-path redirects from a subdirectory cwd", () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "meta-edit-bash-hook-"),
+    );
+    try {
+      fs.mkdirSync(path.join(tmpDir, ".git"));
+      fs.mkdirSync(path.join(tmpDir, ".meta-edit", "state"), {
+        recursive: true,
+      });
+      const subdir = path.join(tmpDir, "pkg");
+      fs.mkdirSync(subdir, { recursive: true });
+      fs.symlinkSync("../.meta-edit", path.join(subdir, "meta"));
+
+      const result = runDenyBashWriteBypass({
+        tool_name: "Bash",
+        cwd: subdir,
+        tool_input: {
+          command: "printf '%s' hi > meta/state/edits.jsonl",
+        },
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      const response = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(response).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringMatching(
+            /protected|meta-edit|symlink/i,
+          ),
+        },
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -3279,4 +3347,3 @@ describe("evaluateBashCommand — SEC-BASH review hardening round 4", () => {
     ).toBe("allow");
   });
 });
-
