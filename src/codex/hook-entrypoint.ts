@@ -115,7 +115,7 @@ function handleSessionStart(
 function extractPatchText(
   input: Record<string, unknown>,
 ): { ok: true; patch: string } | { ok: false; error: string } {
-  for (const key of ["patch", "input", "content", "text"]) {
+  for (const key of ["patch", "input", "content", "text", "command", "cmd"]) {
     const value = input[key];
     if (typeof value === "string" && value.length > 0) {
       return { ok: true, patch: value };

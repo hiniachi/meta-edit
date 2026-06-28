@@ -603,6 +603,13 @@ describe("evaluateBashCommand — read-only access to protected paths is allowed
     );
   });
 
+  it("allows find -printf inspection of a protected directory", () => {
+    const r = evaluateBashCommand(
+      "find .meta-edit/state/grants -maxdepth 1 -type f -printf '%f\\n'",
+    );
+    expect(r.decision).toBe("allow");
+  });
+
   it("allows tail piped into wc when both verbs are read-only", () => {
     expect(
       evaluateBashCommand("tail .meta-edit/state/edits.jsonl | wc -l").decision,
@@ -697,6 +704,22 @@ describe("evaluateBashCommand — writes to protected paths still denied", () =>
 
   it("denies find -delete on a protected directory", () => {
     const r = evaluateBashCommand("find .meta-edit/state -name '*.jsonl' -delete");
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies find -fprint on a protected directory", () => {
+    const r = evaluateBashCommand(
+      "find .meta-edit/state -maxdepth 1 -type f -fprint /tmp/meta-edit-list",
+    );
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("protected");
+  });
+
+  it("denies find -exec on a protected directory", () => {
+    const r = evaluateBashCommand(
+      "find .meta-edit/state -type f -exec ls -la {} \\;",
+    );
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("protected");
   });

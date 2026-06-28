@@ -334,7 +334,8 @@ function evaluateSegment(
   // bypass.
   if (touchesProtectedPathTokenized(rawSegment)) {
     const verb = extractCommandVerb(normalized.trimStart());
-    const isReadOnly = verb !== null && READ_ONLY_VERBS.has(verb);
+    const isReadOnly = verb !== null &&
+      (READ_ONLY_VERBS.has(verb) || isReadOnlyFindInspection(normalized));
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
     if (!isReadOnly || writeTargetsProtected) {
       return {
@@ -1232,6 +1233,27 @@ const FIND_VERBS: ReadonlySet<string> = new Set([
   "fd",
   "gfind",
 ]);
+
+const FIND_WRITE_PRIMARIES: ReadonlySet<string> = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls",
+]);
+
+function isReadOnlyFindInspection(normalizedSegment: string): boolean {
+  const verb = extractCommandVerb(normalizedSegment.trimStart());
+  if (verb === null || !FIND_VERBS.has(verb)) return false;
+  for (const token of tokenizeSegment(normalizedSegment)) {
+    if (FIND_WRITE_PRIMARIES.has(token)) return false;
+  }
+  return true;
+}
 
 // Wrapper verbs whose remaining tokens are themselves the command we
 // actually care about. After encountering one of these as the first

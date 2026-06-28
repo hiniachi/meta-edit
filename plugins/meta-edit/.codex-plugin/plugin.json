@@ -1,6 +1,6 @@
 {
   "name": "meta-edit",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Typed edit declarations for Codex: twenty-one kind-specific edit_* MCP tools, grant-aware apply_patch hooks, Bash write bypass checks, and onboarding reminders.",
   "author": {
     "name": "nia",

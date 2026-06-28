@@ -298,7 +298,7 @@ function evaluateSegment(rawSegment, opts = {}) {
   const scanText = stripQuotedContent(normalized);
   if (touchesProtectedPathTokenized(rawSegment)) {
     const verb2 = extractCommandVerb(normalized.trimStart());
-    const isReadOnly = verb2 !== null && READ_ONLY_VERBS.has(verb2);
+    const isReadOnly = verb2 !== null && (READ_ONLY_VERBS.has(verb2) || isReadOnlyFindInspection(normalized));
     const writeTargetsProtected = redirectsToProtected(normalized, opts);
     if (!isReadOnly || writeTargetsProtected) {
       return {
@@ -822,6 +822,27 @@ var FIND_VERBS = new Set([
   "fd",
   "gfind"
 ]);
+var FIND_WRITE_PRIMARIES = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls"
+]);
+function isReadOnlyFindInspection(normalizedSegment) {
+  const verb = extractCommandVerb(normalizedSegment.trimStart());
+  if (verb === null || !FIND_VERBS.has(verb))
+    return false;
+  for (const token of tokenizeSegment(normalizedSegment)) {
+    if (FIND_WRITE_PRIMARIES.has(token))
+      return false;
+  }
+  return true;
+}
 var WRAPPER_VERBS = new Set([
   "sudo",
   "doas",
@@ -8840,7 +8861,7 @@ function handleSessionStart(payload, repoRoot) {
   };
 }
 function extractPatchText(input) {
-  for (const key of ["patch", "input", "content", "text"]) {
+  for (const key of ["patch", "input", "content", "text", "command", "cmd"]) {
     const value = input[key];
     if (typeof value === "string" && value.length > 0) {
       return { ok: true, patch: value };
@@ -8960,4 +8981,4 @@ main().then((code) => process.exit(code), (err) => {
   process.exit(0);
 });
 
-//# debugId=0091327A12B3335D64756E2164756E21
+//# debugId=1DCA18197C6B40CF64756E2164756E21
