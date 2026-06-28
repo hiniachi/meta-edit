@@ -41,6 +41,30 @@ describe("renderHelp — general (no tool argument)", () => {
     expect(result.output).toContain("not loaded in your AI agent's tool");
   });
 
+  it("lists every install/uninstall command for supported agent integrations", () => {
+    const result = renderHelp();
+    if (!result.ok) throw new Error("expected ok=true");
+
+    expect(result.output).toContain(
+      "meta-edit install-hooks --scope user|project",
+    );
+    expect(result.output).toContain(
+      "meta-edit uninstall-hooks --scope user|project",
+    );
+    expect(result.output).toContain(
+      "meta-edit install-codex --scope user|project",
+    );
+    expect(result.output).toContain(
+      "meta-edit uninstall-codex --scope user|project",
+    );
+    expect(result.output).toContain(
+      "meta-edit install-opencode --scope user|project",
+    );
+    expect(result.output).toContain(
+      "meta-edit uninstall-opencode --scope user|project",
+    );
+  });
+
   it("includes a one-line summary for each tool (locks A5 catalog format)", () => {
     const result = renderHelp();
     if (!result.ok) throw new Error("expected ok=true");

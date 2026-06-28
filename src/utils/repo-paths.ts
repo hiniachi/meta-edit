@@ -10,6 +10,7 @@
 // are now structural: there is exactly one implementation here.
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -31,15 +32,16 @@ import { normalizeRepoRelative } from "../state/protected-paths.js";
  * workspace root on BOTH the server and hook sides identically.
  */
 export function discoverRepoRoot(start: string): string {
-  let dir = path.resolve(start);
+  const resolvedStart = path.resolve(start);
+  const realStart = realpathOfDeepestExisting(resolvedStart) ?? resolvedStart;
+  const realTmp =
+    realpathOfDeepestExisting(os.tmpdir()) ?? path.resolve(os.tmpdir());
+  let dir = resolvedStart;
   let found: string | null = null;
   // Bounded by filesystem depth; the parent === dir check terminates at
   // the fs root.
   for (;;) {
-    if (
-      fs.existsSync(path.join(dir, ".git")) ||
-      fs.existsSync(path.join(dir, ".jj"))
-    ) {
+    if (hasRepoMarker(dir, realStart, realTmp)) {
       found = dir;
       break;
     }
@@ -47,8 +49,39 @@ export function discoverRepoRoot(start: string): string {
     if (parent === dir) break;
     dir = parent;
   }
-  const base = found ?? path.resolve(start);
+  const base = found ?? resolvedStart;
   return realpathOfDeepestExisting(base) ?? path.resolve(base);
+}
+
+function hasRepoMarker(
+  dir: string,
+  realStart: string,
+  realTmp: string,
+): boolean {
+  const markers = [path.join(dir, ".git"), path.join(dir, ".jj")];
+  if (!markers.some((marker) => fs.existsSync(marker))) {
+    return false;
+  }
+
+  // Some CI/sandbox environments mount an empty /tmp/.git as an ambient
+  // artifact. Treating that as the repo root makes every isolated temp
+  // directory look like a repository. A real git-init'd /tmp has content,
+  // and an explicit launch from /tmp should still be honored.
+  const realDir = realpathOfDeepestExisting(dir) ?? path.resolve(dir);
+  if (realDir === realTmp && realStart !== realTmp) {
+    const onlyEmptyTempMarkers = markers.every((marker) => {
+      if (!fs.existsSync(marker)) return true;
+      try {
+        const stat = fs.statSync(marker);
+        return stat.isDirectory() && fs.readdirSync(marker).length === 0;
+      } catch {
+        return false;
+      }
+    });
+    if (onlyEmptyTempMarkers) return false;
+  }
+
+  return true;
 }
 
 /**

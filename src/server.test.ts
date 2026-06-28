@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 import { Readable, PassThrough } from "node:stream";
 import { createServer, runStdioServer } from "./server.js";
 import { makeTmpRoot, cleanTmpRoot, captureStderr } from "./test-helpers.js";
@@ -200,10 +199,9 @@ describe("createServer repoRoot resolution precedence", () => {
 // ---------------------------------------------------------------------------
 // runStdioServer — subprocess integration test
 //
-// Spawns `bun src/server.ts` (which invokes runStdioServer via the module-
-// level guard in cli.ts), sends an MCP JSON-RPC `initialize` request on
-// stdin, asserts a valid response, then closes stdin so the stdin 'end'
-// handler fires transport.close() and the process exits cleanly.
+// Spawns the built CLI entry point, sends an MCP JSON-RPC `initialize`
+// request on stdin, asserts a valid response, then closes stdin so the
+// stdin 'end' handler fires transport.close() and the process exits cleanly.
 // This covers lines 54-71 of server.ts that are unreachable from in-process
 // unit tests because StdioServerTransport grabs the real stdin/stdout.
 // ---------------------------------------------------------------------------
@@ -212,11 +210,16 @@ describe("runStdioServer — stdio integration", () => {
   it("responds to MCP initialize and exits cleanly on stdin EOF", async () => {
     const repoDir = mkGitRepo();
     try {
-      const child = spawn("bun", ["run", "src/cli.ts", "serve"], {
-        cwd: path.resolve(import.meta.dir, ".."),
-        env: { ...process.env, META_EDIT_REPO_ROOT: repoDir },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const distCli = path.resolve(import.meta.dir, "..", "dist", "cli.js");
+      if (!fs.existsSync(distCli)) {
+        throw new Error(
+          [
+            `dist/cli.js not found at ${distCli}; run 'bun run build'`,
+            "before 'bun test' so the stdio integration test can exercise",
+            "the published entry point.",
+          ].join(" "),
+        );
+      }
 
       const initializeRequest = JSON.stringify({
         jsonrpc: "2.0",
@@ -229,26 +232,20 @@ describe("runStdioServer — stdio integration", () => {
         },
       });
 
-      const stdout = await new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          child.kill();
-          reject(new Error("timeout waiting for MCP initialize response"));
-        }, 10_000);
-
-        let buf = "";
-        child.stdout!.on("data", (chunk: Buffer) => {
-          buf += chunk.toString("utf8");
-          if (buf.includes("\n")) {
-            clearTimeout(timer);
-            resolve(buf);
-          }
-        });
-
-        child.stderr!.on("data", () => {});
-
-        child.stdin!.write(initializeRequest + "\n");
+      const result = Bun.spawnSync({
+        cmd: ["node", distCli, "serve"],
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, META_EDIT_REPO_ROOT: repoDir },
+        stdin: new TextEncoder().encode(`${initializeRequest}\n`),
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10_000,
       });
 
+      expect(result.signalCode ?? null).toBeNull();
+      expect(result.exitCode).toBe(0);
+
+      const stdout = new TextDecoder().decode(result.stdout);
       const lines = stdout.split("\n").filter((l) => l.trim().length > 0);
       expect(lines.length).toBeGreaterThanOrEqual(1);
       const response = JSON.parse(lines[0]!);
@@ -256,21 +253,6 @@ describe("runStdioServer — stdio integration", () => {
       expect(response.id).toBe(1);
       expect(response.result).toBeDefined();
       expect(response.result.serverInfo.name).toBe("meta-edit");
-
-      // Close stdin to trigger the shutdown path (L58-62).
-      child.stdin!.end();
-
-      const exitCode = await new Promise<number | null>((resolve) => {
-        const timer = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve(null);
-        }, 5_000);
-        child.on("close", (code) => {
-          clearTimeout(timer);
-          resolve(code);
-        });
-      });
-      expect(exitCode).toBe(0);
     } finally {
       cleanTmpRoot(repoDir);
     }

@@ -3,7 +3,6 @@ import { main } from "../cli.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { makeTmpRoot, cleanTmpRoot } from "../test-helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -209,6 +208,67 @@ describe("cli uninstall-opencode dispatch", () => {
   });
 });
 
+describe("cli install-codex dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["install-codex"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit install-codex:");
+  });
+
+  it("installs Codex config with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-codex-install");
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["install-codex", "--scope", "project"]);
+      expect(code).toBe(0);
+      expect(fs.existsSync(path.join(tmpDir, ".codex", "config.toml"))).toBe(true);
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
+describe("cli uninstall-codex dispatch", () => {
+  it("returns 64 when --scope is missing", async () => {
+    const { code, stderr } = await runMain(["uninstall-codex"]);
+    expect(code).toBe(64);
+    expect(stderr).toContain("meta-edit uninstall-codex:");
+  });
+
+  it("uninstalls Codex config with --scope project", async () => {
+    const tmpDir = makeTmpRoot("cli-codex-uninstall");
+    const codexDir = path.join(tmpDir, ".codex");
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(codexDir, "config.toml"),
+      [
+        'model = "gpt-5.5"',
+        "",
+        "# meta-edit managed Codex hooks",
+        'command = "meta-edit-codex-deny-raw-edit"',
+        'command = "meta-edit-codex-session-onboarding"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const origCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code } = await runMain(["uninstall-codex", "--scope", "project"]);
+      expect(code).toBe(0);
+      const text = fs.readFileSync(path.join(codexDir, "config.toml"), "utf8");
+      expect(text).toContain('model = "gpt-5.5"');
+      expect(text).not.toContain("meta-edit-codex-deny-raw-edit");
+      expect(text).not.toContain("meta-edit-codex-session-onboarding");
+    } finally {
+      process.chdir(origCwd);
+      cleanTmpRoot(tmpDir);
+    }
+  });
+});
+
 describe("cli help with tool argument", () => {
   it("renders full description for a valid tool name", async () => {
     const { code, stdout } = await runMain(["help", "edit_boundary_condition"]);
@@ -247,7 +307,11 @@ describe("cli main-module detection via symlinked bin", () => {
     const distCli = path.join(repoRoot, "dist", "cli.js");
     if (!fs.existsSync(distCli)) {
       throw new Error(
-        `dist/cli.js not found at ${distCli}; run 'bun run build' before 'bun test' so the symlink-bin regression test can exercise the published entry point.`,
+        [
+          `dist/cli.js not found at ${distCli}; run 'bun run build'`,
+          "before 'bun test' so the symlink-bin regression test can",
+          "exercise the published entry point.",
+        ].join(" "),
       );
     }
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-edit-bin-"));
@@ -258,9 +322,14 @@ describe("cli main-module detection via symlinked bin", () => {
       // symlink before computing `import.meta.url`. This is precisely
       // the production install scenario; bun happens to canonicalize
       // process.argv[1] differently and would mask the regression.
-      const stdout = execFileSync("node", [symlinkPath, "--version"], {
-        encoding: "utf8",
+      const result = Bun.spawnSync({
+        cmd: ["node", symlinkPath, "--version"],
+        stdout: "pipe",
+        stderr: "pipe",
       });
+      expect(result.exitCode).toBe(0);
+      expect(new TextDecoder().decode(result.stderr)).toBe("");
+      const stdout = new TextDecoder().decode(result.stdout);
       expect(stdout).toMatch(/^meta-edit \S+/);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
